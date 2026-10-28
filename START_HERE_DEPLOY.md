@@ -1,92 +1,54 @@
-# FabTrace: put the real website online (Render)
+# Deploy or update FabTrace Cloud on Render
 
-This folder includes the **FabTrace Cloud Phone QR Fix** project plus an
-updated `render.yaml` to create a web service and PostgreSQL database in
-one Render Blueprint.
+## Update the existing FabTrace service first
 
-## Costs and production readiness
+**Use the existing web service and its existing PostgreSQL database.** Adding project, spool, and individual-weld tracking does not require creating a second service, a second database, or a new Blueprint.
 
-The Blueprint chooses paid starter-tier services by default so the database
-does **not** expire after 30 days like Render Free PostgreSQL does. Review
-Render's pricing in your own dashboard before you approve creation.
-This is a PILOT/REFERENCE BUILD, NOT YET validated for production-quality
-or safety-critical weld-release records. Quality criteria, access controls,
-backups, electronic approvals and disaster recovery need validation.
+1. Identify the current service's connected repository/branch and keep its existing `DATABASE_URL`, `JWT_SECRET`, public URL, and employee accounts. Make the normal database recovery point for the rollout.
+2. Update the service with the complete reviewed source. Include `main.py`, **`tracking.py`**, `init_db.py`, `requirements.txt`, **`static/index.html`**, **`static/tracking.js`**, **`static/tracking.css`**, and the existing static assets. The root `index.html` is a distribution copy; the application serves `static/index.html`.
+3. Confirm the service's initialization step is **`python init_db.py`**. The supplied `render.yaml` sets this as `preDeployCommand`, but uploading a YAML file alone does not change an independently configured existing service.
+4. Run initialization before the new version accepts requests. Use the configured pre-deploy command, or a controlled manual step running the new `init_db.py` with the existing database settings. Keep the previous application serving until initialization succeeds, or use the service's maintenance procedure. Do not start the new app against an uninitialized schema.
+5. Deploy with the existing start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+6. Check `/healthz`. It must return `status: "ok"`, the tracking application version, and the deployment commit when Render supplies it. Health checks now confirm the tracking plan table is available as well as the database connection.
+7. Sign in with an existing employee account. Confirm existing item, QR, custody, and inspection records are still available. The navigation should include **Projects & welds**.
+8. Follow [TRACKING_GUIDE.md](TRACKING_GUIDE.md) to create a project and explicitly enroll an intended spool. New projects and accepted welds are not seeded by deployment.
 
-## Shortest setup steps
+### What initialization changes
 
-1. Create or log into a GitHub account: https://github.com/
-2. Create a **private** GitHub repository named `fabtrace-cloud`.
-3. Upload the **contents** of this extracted deployment folder (including
-   `render.yaml`, `main.py`, `static/index.html`, `init_db.py`,
-   `requirements.txt`) to the root of the repository. Do not upload the ZIP
-   itself, and never upload a `.env` file or credentials.
-4. Create or log into Render: https://dashboard.render.com/
-5. Choose **New > Blueprint**; connect GitHub and select the private repo.
-6. Review the paid web+database services and charges. When prompted for
-   environment variables, enter:
-     BOOTSTRAP_BADGE = a unique admin badge ID, e.g. ADMIN-001
-     BOOTSTRAP_PIN = a private random PIN/passphrase at least 12 characters.
-   DO NOT SHARE THE PIN IN CHAT, QR CODES, OR YOUR GIT REPOSITORY.
-7. Approve deployment. Render provisions a Postgres database, installs
-   dependencies, initializes the schema in `preDeployCommand`, and starts
-   FastAPI. A first deployment may fail if you enter a PIN shorter than
-   12 characters; correct it in Render Environment and redeploy.
-8. Render displays a live URL like `https://fabtrace-cloud-xxxx.onrender.com`.
-   This is an EXAMPLE, not your URL. Open **your actual URL** from both
-   computer and phone; visit `/healthz`, then log in with the bootstrap badge
-   and PIN you created.
-9. In FabTrace, add individual employee accounts, then parts/assemblies and
-   Google part numbers. Generate an item QR and an employee badge QR. Scan
-   them with your phone's regular camera and verify the destination.
-10. Test one custody handoff from two separate devices. Inspect the item
-    audit history. Only after validation, print labels for real production.
+`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on six history tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool enrollment occurs.
 
-## QR code details
+`create_all()` does not add columns to tables that already exist. Future column changes require an explicit migration. If upgrading a substantially older installation, compare its actual schema with the source before deployment; the earlier Google part-number migration is separate from this tracking addition.
 
-Part QR: `<YOUR_REAL_HTTPS_URL>/?item=FAB-00001`
-Employee badge QR: `<YOUR_REAL_HTTPS_URL>/?badge=EMP-1042`
+### If the update does not start
 
-The application automatically uses Render's `RENDER_EXTERNAL_URL` if
-`PUBLIC_BASE_URL` is unset. To use your own custom domain later, set
-`PUBLIC_BASE_URL=https://your-domain.example` as a secret/environment
-variable and redeploy, then replace any already printed QR labels if the
-old hostname will stop working.
+- Inspect the deployment's build, initialization, and application logs separately.
+- A missing tracking-table error means initialization did not complete against the database the web service uses.
+- An initialization lock timeout should be investigated for an overlapping deploy or database lock before retrying.
+- Preserve the operational database and secrets while correcting the application. Do not create an empty replacement database to clear an error.
+- Do not remove the new history tables as an application rollback step. Once spools are enrolled, rolling back to code that ignores their individual requirements can restore unsafe aggregate shortcuts; use a controlled forward fix or a reviewed rollback that preserves the tracking gates.
 
-The QR never contains the employee PIN or confidential part data.
-Employee badge scan identifies the recipient; actual account authentication
-and signed acceptance are separate.
+## First deployment only
 
-## Data from local desktop prototype
+For a genuinely new installation, the supplied `render.yaml` describes a Python web service and a PostgreSQL database. Review the proposed resources and costs in Render before creating them.
 
-Local-browser storage is NOT automatically migrated to PostgreSQL.
-Register employees and parts in the cloud or use the CSV bulk importer for
-Google part numbers. A JSON backup from the HTML demo is NOT a direct
-database restore format.
+1. Put the source in a private repository without `.env`, credentials, or database exports.
+2. Connect that repository to Render using your chosen deployment workflow. If using the supplied Blueprint, it provides the database connection and generated JWT secret, runs `python init_db.py`, and starts FastAPI.
+3. Supply a unique `BOOTSTRAP_BADGE` and a private `BOOTSTRAP_PIN` of at least 12 characters. Keep the PIN out of QR labels, source control, and shared documents.
+4. After deployment, open the actual service URL, check `/healthz`, sign in, and create individual employee accounts.
+5. Register an item, print a sample item QR and employee badge QR, and check them on the phone/browser used in the shop before printing a batch.
 
-## What to do if deployment fails
+For environment setup outside a Blueprint, see [README.md](README.md). The included example is named `env.example`.
 
-- Check Render **Events** and **Logs** on the web service.
-- `DATABASE_URL` comes from the Blueprint's linked Postgres database.
-- `JWT_SECRET` is generated automatically; do not overwrite with a weak value.
-- `BOOTSTRAP_PIN` must be at least 12 characters for first initialization.
-- The web service needs a paid plan for `preDeployCommand`. Do not switch
-  it to Free without also changing the initialization workflow.
-- Verify `GET /healthz` returns a successful status.
-- QR `/api/qr/status` should report `ready:true` after signing in; this
-  checks URL configuration, not that the site is accessible from your phone.
+## QR URLs and existing labels
 
-## Required security and quality follow-up
+Item labels encode `https://YOUR-SERVICE/?item=ITEM-ID`; employee badges encode `https://YOUR-SERVICE/?badge=BADGE-ID`. These are patterns, not actual service addresses. QR codes identify a record or employee; they never contain the private PIN and do not authenticate the employee.
 
-Before using real customer's fabrication acceptance records: verify employer
-access policies, backup/restore exercises, independent QC approvals,
-approved dimensional tolerances and weld procedures, report attachments,
-per-weld traceability, multifactor QC sign-off, incident response, offsite
-audit archive, and retest of all release gates. App currently has simple
-badge/PIN sessions and audit inserts, not a certified quality system.
+The application uses `PUBLIC_BASE_URL`, or Render's `RENDER_EXTERNAL_URL` when unset. Public QR generation requires a valid HTTPS origin. `/api/qr/status` checks the configured URL shape, not phone connectivity or record accessibility.
 
-Official hosting references:
-- https://render.com/docs/blueprint-spec
-- https://render.com/docs/deploy-fastapi
-- https://render.com/docs/environment-variables
-- https://render.com/docs/free
+Keeping the same service origin and item IDs preserves existing item links. An employee must still sign in to see or change a record. Changing the public hostname requires a plan for already printed labels.
+
+## Local prototypes and scope
+
+Browser-local prototype data is not automatically copied into PostgreSQL. Use the cloud item/employee workflows and supported CSV import; a prototype JSON backup is not a database restore.
+
+This release stores evidence references/URLs, not uploaded reports. Qualification applicability and job-specific acceptance criteria remain reviewed decisions. Assembly links organize records; shipment, pressure-test packages, and collective release of linked children are separate future features. Use the workflow and developer guides to configure and extend those boundaries deliberately.

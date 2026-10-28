@@ -1,0 +1,99 @@
+/* Project, spool and individual weld tracking; scoped to the tracking workspace. */
+#trackingPage{--ft-ink:#183247;--ft-muted:#617283;--ft-line:#dce5ed;--ft-accent:#1261a0;--ft-soft:#eff6fc;color:var(--ft-ink)}
+#trackingPage .ft-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:0 0 18px;flex-wrap:wrap}
+#trackingPage .ft-top h1{margin-bottom:4px}
+#trackingPage .ft-top p{margin:0;color:var(--ft-muted);max-width:740px}
+#trackingPage .ft-toolbar{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:16px}
+#trackingPage .ft-toolbar .field{margin:0;flex:1;min-width:170px;max-width:270px}
+#trackingPage .ft-toolbar .ft-search{flex:2;max-width:380px}
+#trackingPage .ft-tabs{display:flex;gap:4px;border-bottom:1px solid var(--ft-line);margin:0 0 18px;overflow:auto}
+#trackingPage .ft-tabs button{border:none;border-radius:7px 7px 0 0;padding:11px 16px;background:transparent;color:var(--ft-muted);white-space:nowrap}
+#trackingPage .ft-tabs button[aria-selected="true"]{background:#e8f1f9;color:#0e588e;box-shadow:inset 0 -3px #1261a0}
+#trackingPage .ft-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 18px}
+#trackingPage .ft-metric{padding:16px;background:white;border:1px solid var(--ft-line);border-radius:12px;min-width:0}
+#trackingPage .ft-metric-label{font-size:12px;font-weight:700;color:var(--ft-muted);display:block;margin-bottom:8px}
+#trackingPage .ft-metric strong{font-size:27px;line-height:1.15;display:block;font-variant-numeric:tabular-nums}
+#trackingPage .ft-metric small{display:block;font-size:12px;color:var(--ft-muted);margin-top:7px;line-height:1.4}
+#trackingPage .ft-meter{height:5px;background:#e7edf3;border-radius:8px;margin-top:12px;overflow:hidden}
+#trackingPage .ft-meter span{height:100%;display:block;background:#2475ae;border-radius:8px}
+#trackingPage .ft-section-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+#trackingPage .ft-section-heading h2{margin:0}
+#trackingPage .ft-empty{text-align:center;padding:32px 18px;border:1px dashed #bdcddd;border-radius:11px;background:#f8fbfd;color:var(--ft-muted)}
+#trackingPage .ft-empty strong{display:block;color:var(--ft-ink);margin-bottom:6px;font-size:17px}
+#trackingPage .ft-empty p{margin:0 auto 14px;max-width:650px}
+#trackingPage .ft-state{padding:22px;border:1px solid var(--ft-line);border-radius:11px;background:white}
+#trackingPage .ft-error{background:#fff1ec;border-color:#f0c5ba;color:#923423}
+#trackingPage .ft-error p{overflow-wrap:anywhere}
+#trackingPage .ft-crumbs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ft-muted);margin-bottom:12px}
+#trackingPage .ft-link{border:0;background:none;padding:0;color:var(--ft-accent);font-weight:650;text-align:left;cursor:pointer;white-space:normal}
+#trackingPage .ft-link:hover{text-decoration:underline;filter:none}
+#trackingPage .ft-spool-id{font-weight:700;white-space:nowrap}
+#trackingPage .ft-secondary{font-size:12px;color:var(--ft-muted);display:block;margin-top:4px;overflow-wrap:anywhere}
+#trackingPage .ft-table td{vertical-align:middle}
+#trackingPage .ft-table th{white-space:nowrap}
+#trackingPage .ft-table .ft-num{white-space:nowrap;font-variant-numeric:tabular-nums}
+#trackingPage .ft-tag{display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:3px 7px;font-size:11px;font-weight:700;white-space:nowrap;background:#edf1f5;color:#526574;line-height:1.6}
+#trackingPage .ft-tag.good{background:#e4f5e8;color:#18693e}
+#trackingPage .ft-tag.pending{background:#eaf2fa;color:#1e6597}
+#trackingPage .ft-tag.hold{background:#fff0da;color:#8b5706}
+#trackingPage .ft-tag.bad{background:#fde9e6;color:#a03527}
+#trackingPage .ft-tag.na{background:#f0f1f3;color:#647482}
+#trackingPage .ft-inline-list{display:flex;gap:6px;flex-wrap:wrap}
+#trackingPage .ft-meta-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 20px;margin:14px 0}
+#trackingPage .ft-meta-grid dl{margin:0;min-width:0}
+#trackingPage .ft-meta-grid dt{font-size:11px;font-weight:700;color:var(--ft-muted);text-transform:uppercase;margin-bottom:3px}
+#trackingPage .ft-meta-grid dd{margin:0;overflow-wrap:anywhere;font-size:14px}
+#trackingPage .ft-matrix{min-width:750px}
+#trackingPage .ft-matrix th:first-child,#trackingPage .ft-matrix td:first-child{position:sticky;left:0;z-index:1;background:white;box-shadow:1px 0 var(--ft-line)}
+#trackingPage .ft-matrix th:first-child{background:#f6f8fb}
+#trackingPage .ft-matrix th{max-width:150px;min-width:110px;white-space:normal}
+#trackingPage .ft-matrix td{padding:10px 9px}
+#trackingPage .ft-matrix .ft-cell{font:inherit;border:none;background:transparent;padding:3px;text-align:left;min-width:70px}
+#trackingPage .ft-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--ft-muted);margin-top:12px}
+#trackingPage .ft-two-col{display:grid;grid-template-columns:1.2fr 1fr;gap:14px;align-items:start}
+#trackingPage .ft-requirement{border-bottom:1px solid var(--ft-line);padding:14px 0}
+#trackingPage .ft-requirement:first-child{padding-top:0}
+#trackingPage .ft-requirement:last-child{border-bottom:0;padding-bottom:0}
+#trackingPage .ft-requirement h3{font-size:15px;margin:0;display:inline}
+#trackingPage .ft-requirement p{font-size:13px;margin:6px 0;overflow-wrap:anywhere}
+#trackingPage .ft-requirement .actions{margin-top:9px}
+#trackingPage .ft-requirement .actions button{font-size:12px;padding:6px 10px}
+#trackingPage .ft-history{border-left:2px solid #c7d9e7;margin-left:3px;padding:0 0 17px 13px}
+#trackingPage .ft-history:last-child{padding-bottom:0}
+#trackingPage .ft-history strong{font-size:13px}
+#trackingPage .ft-history p{font-size:13px;margin:5px 0;overflow-wrap:anywhere}
+#trackingPage .ft-history small{display:block;font-size:12px;color:var(--ft-muted)}
+#trackingPage .ft-detail-summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+#trackingPage details.ft-fold{margin-top:12px;border-top:1px solid var(--ft-line);padding-top:10px}
+#trackingPage details.ft-fold summary{cursor:pointer;color:var(--ft-accent);font-size:13px;font-weight:650}
+#trackingPage .ft-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}
+#trackingPage .ft-template-grid .card{margin:0}
+#trackingPage .ft-template-grid h3{margin:0 0 6px;font-size:16px}
+#trackingPage .ft-template-grid ol{padding-left:20px;font-size:13px;color:var(--ft-muted)}
+#trackingPage .ft-filter-note{font-size:12px;color:var(--ft-muted);margin:0 0 12px}
+#trackingPage .ft-readonly{font-size:12px;color:var(--ft-muted);padding:9px 11px;background:#f4f7fa;border-radius:7px;margin-top:10px}
+#trackingPage .ft-pagination{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
+#trackingPage .ft-footer-note{font-size:12px;color:var(--ft-muted);margin-top:10px}
+#trackingDialog{border:1px solid #cddbe6;border-radius:14px;padding:22px;max-width:min(780px,95vw);width:100%;max-height:92vh;overflow:auto;color:#183247;box-shadow:0 20px 70px #102a4033}
+#trackingDialog::backdrop{background:#102a4060}
+#trackingDialog h2{margin:0;font-size:20px}
+#trackingDialog .ft-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+#trackingDialog .ft-dialog-head button{background:transparent;border:0;font-size:22px;padding:2px 8px}
+#trackingDialog .ft-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}
+#trackingDialog .ft-form-grid .ft-span{grid-column:1 / -1}
+#trackingDialog .ft-form-grid h3{grid-column:1 / -1;font-size:14px;margin:13px 0 10px;border-bottom:1px solid #dde6ee;padding-bottom:7px}
+#trackingDialog .field label{color:#536575}
+#trackingDialog .ft-help{display:block;font-size:12px;color:#617283;margin:4px 0 10px}
+#trackingDialog .ft-dialog-error{border:1px solid #f0c5ba;background:#fff1ec;color:#923423;padding:10px 12px;border-radius:8px;margin:0 0 12px;overflow-wrap:anywhere}
+#trackingDialog .ft-check{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#183247;margin:8px 0 13px}
+#trackingDialog .ft-check input{width:auto;flex:0 0 auto;margin:3px 0 0}
+#trackingDialog .ft-check label{font-size:13px;color:inherit;font-weight:400;margin:0}
+#trackingDialog .ft-template-row{padding:12px;border:1px solid #dce5ed;border-radius:9px;margin-bottom:12px;background:#f9fbfd}
+#trackingDialog .ft-template-row .row{margin-bottom:10px}
+#trackingDialog .ft-template-row h3{margin:0;font-size:14px;border:0;padding:0}
+#trackingDialog .ft-template-row button{font-size:12px;padding:5px 9px}
+#trackingDialog .ft-dialog-footer{position:sticky;bottom:-22px;padding:14px 0 5px;background:white;margin-top:10px;border-top:1px solid #dce5ed}
+#trackingDialog .ft-required-note{font-size:12px;color:#617283;margin:0 0 12px}
+@media(max-width:900px){#trackingPage .ft-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#trackingPage .ft-two-col{grid-template-columns:1fr}#trackingPage .ft-meta-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:580px){#trackingPage .ft-toolbar .field{max-width:none;min-width:140px}#trackingPage .ft-top .actions{width:100%}#trackingPage .ft-top .actions button{flex:1}#trackingPage .ft-tabs button{padding:10px 12px}#trackingPage .ft-metric{padding:13px}#trackingPage .ft-metric strong{font-size:23px}#trackingPage .ft-meta-grid{grid-template-columns:1fr 1fr;gap:12px}#trackingDialog{padding:17px}#trackingDialog .ft-form-grid{grid-template-columns:1fr}#trackingPage .ft-template-grid{grid-template-columns:1fr}#trackingPage .ft-table{min-width:720px}#trackingPage .ft-matrix{min-width:750px}#trackingDialog .ft-dialog-footer{bottom:-17px}}
+@media print{#trackingPage .ft-toolbar,#trackingPage .ft-tabs,#trackingPage button,#trackingPage .ft-crumbs{display:none!important}#trackingPage .card{break-inside:avoid;box-shadow:none}#trackingPage .tablewrap{overflow:visible}#trackingPage .ft-table,#trackingPage .ft-matrix{min-width:0}}

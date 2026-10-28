@@ -35,6 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
+APP_VERSION='2026.10.28-tracking.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -141,6 +142,8 @@ def item_dict(s,r):
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
     d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
     d['qr_url']=phone_link('item',r.id) if phone_qr_ready() else None
+    d['tracking_enabled']=is_tracked(s,r)
+    d['tracking']=tracking_summary(s,r) if d['tracking_enabled'] else None
     return d
 
 @app.middleware('http')
@@ -224,11 +227,12 @@ def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Se
         q=q.where((Item.id.ilike('%'+search[:100]+'%'))|(Item.description.ilike('%'+search[:100]+'%'))|(Item.project.ilike('%'+search[:100]+'%'))|(Item.google_part_number.ilike('%'+search[:100]+'%')))
     count=s.scalar(select(func.count()).select_from(q.subquery()))
     rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
-    return {'total':count,'items':[asdict(r,ITEM_KEYS) for r in rows]}
+    tracked_ids=set(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.item_id.in_([r.id for r in rows])))) if rows else set()
+    return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids} for r in rows]}
 class ItemIn(BaseModel):
     id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')
     description:str=Field(min_length=2,max_length=300)
-    kind:Literal['Part','Assembly']='Part'
+    kind:Literal['Part','Assembly','Spool']='Part'
     project:str=Field(default='',max_length=120)
     google_part_number:str=Field(default='',max_length=160)
     drawing:str=Field(default='',max_length=160)
@@ -262,7 +266,7 @@ class BulkItemRow(BaseModel):
     id:str=Field(default='',max_length=60)
     google_part_number:str=Field(min_length=1,max_length=160)
     description:str=Field(min_length=2,max_length=300)
-    kind:Literal['Part','Assembly']='Part'
+    kind:Literal['Part','Assembly','Spool']='Part'
     project:str=Field(default='',max_length=120)
     drawing:str=Field(default='',max_length=160)
     location:str=Field(min_length=1,max_length=160)
@@ -354,6 +358,8 @@ class WeldEvent(BaseModel):
 @app.post('/api/items/{item_id}/weld')
 def weld(item_id:str,data:WeldEvent,u:Employee=Depends(auth),s:Session=Depends(db)):
     permit(u,'welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    if is_tracked(s,r):
+        raise HTTPException(409,'This spool uses individual weld tracking. Record work on the specific weld in Projects & welds.')
     if r.welds_done+data.count>r.welds_required:raise HTTPException(409,'Exceeds required weld count; change controlled traveler first')
     r.welds_done+=data.count;r.last_work_at=utcnow();r.dimensional='Not started';r.weld='Not started';r.reinspection_due=True
     audit(s,r.id,u.badge,'WELDS_COMPLETED',data.model_dump());s.commit();return item_dict(s,r)
@@ -365,6 +371,8 @@ class InspectionIn(BaseModel):
 @app.post('/api/items/{item_id}/inspect')
 def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Depends(db)):
     permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
+    if is_tracked(s,r) and data.kind=='Weld':
+        raise HTTPException(409,'Review each weld requirement in Projects & welds. Aggregate weld inspection cannot accept individual welds.')
     t=utcnow();s.add(Inspection(item_id=r.id,kind=data.kind,result=data.result,inspector=u.badge,report=data.report,measurements=data.measurements,at=t))
     if data.kind=='Dimensional':r.dimensional=data.result;r.dimension_at=t
     else:r.weld=data.result;r.weld_at=t
@@ -384,6 +392,8 @@ def open_rework(item_id:str,data:ReworkIn,u:Employee=Depends(auth),s:Session=Dep
     if not s.get(Employee,data.assigned):raise HTTPException(422,'Unknown employee badge')
     r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.last_work_at=utcnow()
     s.add(Rework(item_id=r.id,**data.model_dump()))
+    if is_tracked(s,r):
+        reopen_tracked(s,r,u.badge,'Item rework opened: '+data.reason)
     audit(s,r.id,u.badge,'REWORK_OPENED',data.model_dump());s.commit();return item_dict(s,r)
 class CloseRework(BaseModel):
     notes:str=Field(min_length=4,max_length=3000)
@@ -395,20 +405,25 @@ def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(a
     if x.closed_at:raise HTTPException(409,'Rework already closed')
     x.closed_at=utcnow();x.closed_by=u.badge;x.close_notes=data.notes
     r.last_work_at=x.closed_at;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started'
+    if is_tracked(s,r):
+        reopen_tracked(s,r,u.badge,'Item rework completed; current requirements need review: '+data.notes)
     audit(s,r.id,u.badge,'REWORK_CLOSED',{'rework_id':rework_id,'notes':data.notes});s.commit();return item_dict(s,r)
 class ReleaseIn(BaseModel):
     reference:str=Field(min_length=3,max_length=250)
 @app.post('/api/items/{item_id}/release')
 def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depends(db)):
     permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
-    reasons=[]
-    if r.on_hold:reasons.append('Item is on hold')
-    if r.welds_done!=r.welds_required:reasons.append('Required welds not completed')
-    if r.dimensional!='Pass' or r.weld!='Pass':reasons.append('Both inspections must pass')
-    if r.reinspection_due:reasons.append('Reinspection still due')
-    if not r.dimension_at or not r.weld_at:reasons.append('Inspection timestamps missing')
-    if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
-    if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
+    if is_tracked(s,r):
+        reasons=tracking_release_errors(s,r)
+    else:
+        reasons=[]
+        if r.on_hold:reasons.append('Item is on hold')
+        if r.welds_done!=r.welds_required:reasons.append('Required welds not completed')
+        if r.dimensional!='Pass' or r.weld!='Pass':reasons.append('Both inspections must pass')
+        if r.reinspection_due:reasons.append('Reinspection still due')
+        if not r.dimension_at or not r.weld_at:reasons.append('Inspection timestamps missing')
+        if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
+        if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
     if reasons:raise HTTPException(409,{'release_blockers':reasons})
     r.released=True;r.released_at=utcnow();r.released_by=u.badge
     audit(s,r.id,u.badge,'FINAL_RELEASE',{'reference':data.reference});s.commit();return item_dict(s,r)
@@ -417,6 +432,8 @@ def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     permit(u,'admin');r=lock_item(s,item_id)
     if not r.released:raise HTTPException(409,'Not released')
     r.released=False;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.released_at=None;r.released_by=None
+    if is_tracked(s,r):
+        reopen_tracked(s,r,u.badge,'Administrative reopen; new requirement reviews required')
     audit(s,r.id,u.badge,'REOPENED',{'reason':'Administrative reopen; new inspections required'});s.commit();return item_dict(s,r)
 @app.get('/api/items/{item_id}/custody')
 def item_custody(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -444,8 +461,17 @@ def qr_status(u:Employee=Depends(auth)):
     return {'ready':phone_qr_ready(), 'public_base_url':PUBLIC_BASE_URL if phone_qr_ready() else None, 'message':'Phone QR labels ready' if phone_qr_ready() else 'Set PUBLIC_BASE_URL to the deployed public HTTPS URL, then redeploy; QR printing is disabled until then.'}
 @app.get('/healthz')
 def health(s:Session=Depends(db)):
-    s.execute(text('select 1'));return {'status':'ok'}
+    s.execute(text('select 1'))
+    # A database connection alone is insufficient if the tracking migration was skipped.
+    s.execute(select(SpoolPlan.item_id).limit(1))
+    return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
     from pathlib import Path
     return HTMLResponse((Path(__file__).parent/'static'/'index.html').read_text(encoding='utf8'))
+
+# Register the extension after the shared models and authentication dependencies
+# are defined. init_db imports this module, so all new tables join Base.metadata.
+from tracking import router as tracking_router, SpoolPlan, is_tracked, tracking_release_errors, tracking_summary, reopen_tracked
+app.include_router(tracking_router)
+
