@@ -2,7 +2,7 @@
 :root{font:15px/1.5 system-ui,sans-serif;color:#1d2b3a;background:#f2f5f8}*{box-sizing:border-box}body{margin:0}header{background:#102a40;color:white;padding:15px max(16px,calc((100vw - 1200px)/2));display:flex;justify-content:space-between;align-items:center;gap:10px}header strong{font-size:20px}header small{display:block;color:#c4d9e8}main{max-width:1200px;margin:auto;padding:20px 16px}.card{background:white;padding:18px;border:1px solid #dce3ea;border-radius:13px;margin:0 0 15px;box-shadow:0 2px 10px #1232}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}h1{font-size:24px;margin:0 0 5px}h2{font-size:17px;margin:0 0 12px}p{margin:6px 0 12px}.muted{color:#617283}.badge{background:#eaf0f7;border-radius:20px;padding:4px 8px;display:inline-block;font-size:12px;font-weight:700}.red{background:#ffe8e7;color:#aa291d}.green{background:#e4f5e8;color:#18693e}.orange{background:#fff2d5;color:#885100}input,select,textarea,button{font:inherit;border:1px solid #bdcbd7;border-radius:8px;padding:10px;max-width:100%}input,select,textarea{width:100%;background:white}textarea{min-height:85px}button{cursor:pointer;background:#fff;font-weight:650}button.primary{background:#1261a0;color:white;border-color:#1261a0}button:disabled{opacity:.55}button:hover{filter:brightness(.97)}label{display:block;font-size:12px;font-weight:700;color:#536575;margin-bottom:4px}.field{margin-bottom:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hidden{display:none!important}.row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.notice{padding:12px;background:#ecf5ff;border:1px solid #d5e8fa;border-radius:9px;margin-bottom:14px}.danger{background:#fff1ec;border-color:#f4bdad;color:#aa3622}.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:11px;border-bottom:1px solid #e3e9ef;font-size:13px;vertical-align:top}th{background:#f6f8fb;color:#657383;font-size:11px;text-transform:uppercase}a{color:#1261a0;cursor:pointer}code{font-size:12px;overflow-wrap:anywhere}.pill{display:inline-flex;border-radius:20px;background:#eef2f6;padding:4px 10px;font-size:12px}.metric{font-size:26px;font-weight:800}.metric small{font-size:12px;font-weight:400;display:block;color:#6b7c89}.event{border-left:2px solid #9dc6e4;padding:0 0 15px 14px;margin-left:4px}.event small{color:#617283}.qr{width:170px;height:170px;object-fit:contain;border:1px solid #e2e8ed;padding:8px;background:white}#message{position:fixed;right:15px;bottom:15px;max-width:360px;background:#1b3044;color:white;padding:14px;border-radius:10px;display:none;z-index:3}#message.show{display:block}.detail{word-break:break-word}#login{max-width:400px;margin:55px auto}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}@media(max-width:580px){h1{font-size:20px}main{padding:14px}header{padding:12px}table{min-width:620px}}
 </style><link rel="stylesheet" href="/static/tracking.css"></head><body><header><div style="display:flex;align-items:center;gap:12px"><img src="/static/fabtrace-logo.png" alt="FabTrace FT dragon logo" style="width:58px;height:58px;object-fit:contain;background:white;border-radius:9px;padding:3px"><div><strong>FabTrace Cloud</strong><small>Welding & fabrication traceability</small></div></div><div id="userTop" class="actions"></div></header><main>
 <section id="login" class="card"><h1>Employee badge login</h1><p class="muted">Enter your assigned employee badge ID and private PIN.</p><form id="loginForm"><div class="field"><label>Badge ID</label><input id="badge" autocomplete="username" required></div><div class="field"><label>Private PIN</label><input id="pin" type="password" autocomplete="current-password" minlength="6" required></div><button class="primary" style="width:100%">Sign in</button></form><p class="muted" style="font-size:12px">QR codes contain links to item or badge lookup pages. You must sign in before viewing or editing their records.</p></section>
-<section id="workspace" class="hidden"><nav><button id="navItems" class="primary">Items</button><button id="navTracking">Projects &amp; welds</button><button id="navHandoff">▣ Scan & Handoff</button><button id="navBulk">Bulk import & QR labels</button><button id="navNew">＋ New item</button><button id="navStaff" class="hidden">Employees</button><button id="navAudit">Audit</button></nav>
+<section id="workspace" class="hidden"><nav><button id="navItems" class="primary">Items</button><button id="navTracking">Projects &amp; welds</button><button id="navHandoff">▣ Scan & Handoff</button><button id="navBulk">Bulk import & QR labels</button><button id="navNew">＋ New item</button><button id="navStaff" class="hidden">Employees</button><button id="navAudit">Audit</button><button id="navExportExcel" class="hidden" type="button">Export Excel</button></nav>
 <section id="itemsPage"><div class="row"><div><h1>Parts, spools & assemblies</h1><p class="muted">Shared shop-floor records · Search by Google part number, tracking ID, description or job</p></div><div class="actions"><input style="width:220px" id="search" placeholder="Search items"><button id="searchBtn">Search</button></div></div><div class="grid"><div class="card"><div class="metric" id="total">0<small>Matching items</small></div></div><div class="card"><div class="metric" id="pageCount">0<small>On this page</small></div></div></div><div class="card"><div class="tablewrap"><table><thead><tr><th>Tracking ID</th><th>Google part #</th><th>Part or assembly</th><th>Location</th><th>Handler</th><th>Welds</th><th>Inspection</th><th>Released</th></tr></thead><tbody id="itemsRows"></tbody></table></div><div class="actions" style="margin-top:14px"><button id="printSearchLabels">Print QR labels for search</button><button id="prev">Previous</button><span id="pages" class="muted"></span><button id="next">Next</button></div></div></section>
 <section id="handoffPage" class="hidden">
 <div class="row"><div><h1>Scan & handoff</h1><p class="muted">Scan the part QR, then the receiving employee QR badge. A logged-in employee records the custody transfer.</p></div><button id="handoffBack">← All items</button></div>
@@ -34,8 +34,48 @@ function clearPending(){localStorage.removeItem('fabtrace_pending_handoff')}
 function notify(s){$('message').textContent=s;$('message').classList.add('show');setTimeout(()=>$('message').classList.remove('show'),3500)}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function api(url,opt={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...opt});if(!r.ok){let e;try{e=await r.json()}catch(e2){e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail||e))}return r.json()}
+// Excel export: use the authenticated download response, not the JSON API helper.
+let excelExportRunning=false;
+function excelDownloadName(disposition){
+ let name='';
+ const encoded=String(disposition||'').match(/filename\*=UTF-8''([^;]+)/i);
+ if(encoded){try{name=decodeURIComponent(encoded[1].trim())}catch(e){}}
+ if(!name){const plain=String(disposition||'').match(/filename="?([^";]+)"?/i);if(plain)name=plain[1].trim()}
+ name=name.replace(/[\\/\x00-\x1f\x7f]/g,'_').slice(0,180);
+ return name&&/\.xlsx$/i.test(name)?name:'fabtrace-export.xlsx';
+}
+async function exportExcel(){
+ if(me?.role!=='admin'){notify('Only an administrator can export the full workbook.');return}
+ if(excelExportRunning)return;
+ const button=$('navExportExcel');
+ excelExportRunning=true;button.disabled=true;button.textContent='Preparing Excel…';button.setAttribute('aria-busy','true');
+ let objectUrl=null,anchor=null;
+ try{
+  const response=await fetch('/api/exports/excel',{credentials:'same-origin',headers:{Accept:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
+  if(!response.ok){
+   let detail='';
+   try{const payload=await response.json();detail=typeof payload.detail==='string'?payload.detail:''}catch(e){}
+   if(response.status===401)throw Error('Your session has expired. Sign in again to export Excel.');
+   if(response.status===403)throw Error('Only an administrator can export the full workbook.');
+   throw Error(detail||'Excel export could not be prepared (HTTP '+response.status+'). Try again or contact your administrator.');
+  }
+  if(!(response.headers.get('content-type')||'').includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'))throw Error('The server did not return an Excel workbook. Refresh the page and try again.');
+  const blob=await response.blob();
+  objectUrl=URL.createObjectURL(blob);
+  anchor=document.createElement('a');anchor.href=objectUrl;anchor.download=excelDownloadName(response.headers.get('content-disposition'));
+  document.body.appendChild(anchor);anchor.click();anchor.remove();anchor=null;
+  const completedUrl=objectUrl;setTimeout(()=>URL.revokeObjectURL(completedUrl),10000);objectUrl=null;
+  notify('Excel download started. Check your browser downloads.');
+ }catch(error){notify(error.message||'Excel export failed. Please try again.')}
+ finally{
+  if(anchor)anchor.remove();if(objectUrl)URL.revokeObjectURL(objectUrl);
+  excelExportRunning=false;button.disabled=false;button.textContent='Export Excel';button.removeAttribute('aria-busy');
+ }
+}
+$('navExportExcel').onclick=exportExcel;
+// End Excel export.
 function show(name){['itemsPage','itemPage','handoffPage','bulkPage','staffPage','auditPage','trackingPage'].forEach(id=>$(id).classList.toggle('hidden',id!==name));$('navItems').classList.toggle('primary',['itemsPage','itemPage'].includes(name));$('navTracking').classList.toggle('primary',name==='trackingPage');if(name!=='trackingPage'&&window.FabTracking)window.FabTracking.cancelPending()}
-async function refreshAuth(){try{me=await api('/api/me');$('login').classList.add('hidden');$('workspace').classList.remove('hidden');$('userTop').innerHTML=`<span>${esc(me.name)} · ${esc(me.role)}</span> <button id="logout">Sign out</button>`;$('logout').onclick=async()=>{await api('/api/logout',{method:'POST'});location.reload()};$('navStaff').classList.toggle('hidden',me.role!=='admin');$('navBulk').classList.toggle('hidden',!['admin','supervisor'].includes(me.role));try{qrStatus=await api('/api/qr/status')}catch(e){}
+async function refreshAuth(){try{me=await api('/api/me');$('login').classList.add('hidden');$('workspace').classList.remove('hidden');$('userTop').innerHTML=`<span>${esc(me.name)} · ${esc(me.role)}</span> <button id="logout">Sign out</button>`;$('logout').onclick=async()=>{await api('/api/logout',{method:'POST'});location.reload()};$('navStaff').classList.toggle('hidden',me.role!=='admin');$('navExportExcel').classList.toggle('hidden',me.role!=='admin');$('navBulk').classList.toggle('hidden',!['admin','supervisor'].includes(me.role));try{qrStatus=await api('/api/qr/status')}catch(e){}
  if(params.has('badge')){
    const id=params.get('badge');
    show('handoffPage');$('handoffReceiver').value=id;

@@ -22,6 +22,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import importlib
 import ipaddress
+import io
 import json
 import os
 from pathlib import Path
@@ -29,8 +30,10 @@ import re
 import sys
 from threading import Barrier
 import uuid
+from xml.etree import ElementTree as ET
+import zipfile
 
-from sqlalchemy import create_engine, event, inspect, select, text
+from sqlalchemy import create_engine, event, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError, DBAPIError
 
@@ -248,6 +251,62 @@ def verify_concurrent_evidence(application, tracking, api, item_id, weld_id):
     return {"response_codes": sorted(row["status"] for row in responses), "new_evidence_rows": 1, "new_audit_rows": 1}
 
 
+def verify_excel_export(application, api):
+    def row_counts():
+        with application.engine.connect() as connection:
+            return {
+                table.name: connection.scalar(select(func.count()).select_from(table))
+                for table in application.Base.metadata.sorted_tables
+            }
+
+    before = row_counts()
+    export_reads = []
+
+    def observe_export_query(connection, cursor, statement, parameters, context, many):
+        if (
+            context.execution_options.get("stream_results")
+            and statement.lstrip().upper().startswith("SELECT")
+            and "count(" not in statement.lower()
+        ):
+            # Use a separate DBAPI cursor to inspect the same transaction;
+            # bypassing SQLAlchemy here avoids recursively invoking this hook.
+            with connection.connection.cursor() as probe:
+                probe.execute("SHOW transaction_read_only")
+                read_only = probe.fetchone()[0]
+                probe.execute("SHOW transaction_isolation")
+                isolation = probe.fetchone()[0]
+                probe.execute("SELECT pg_backend_pid()")
+                backend_pid = probe.fetchone()[0]
+            export_reads.append((read_only, isolation, backend_pid, bool(getattr(cursor, "name", None))))
+
+    event.listen(application.engine, "before_cursor_execute", observe_export_query)
+    try:
+        response = api.get("/api/exports/excel")
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe_export_query)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.testzip() is None
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        sheets = [sheet.attrib["name"] for sheet in workbook.findall("s:sheets/s:sheet", namespace)]
+    assert sheets == [
+        "Export info", "Employees", "Items", "Inspections", "Reworks", "Audit events",
+        "Projects", "Subprojects", "Spool plans", "Weld templates", "Welds", "Requirements",
+        "Evidence", "Reviews", "Weld work", "Weld repairs", "Holds",
+    ]
+    assert len(export_reads) == 16, export_reads
+    assert all(read_only == "on" and isolation == "repeatable read" and server_cursor
+               for read_only, isolation, _, server_cursor in export_reads), export_reads
+    assert len({backend_pid for _, _, backend_pid, _ in export_reads}) == 1
+    assert row_counts() == before, "Excel export changed database row counts"
+    return {
+        "response_code": 200, "business_sheets": 16, "rows_unchanged": True,
+        "isolation": "repeatable read", "read_only": True, "server_side_queries": len(export_reads),
+    }
+
+
 def verify(dsn):
     url = local_test_url(dsn)
     if "main" in sys.modules:
@@ -308,6 +367,7 @@ def verify(dsn):
         }, role="inspector"), 201)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
+        excel_export = verify_excel_export(application, api)
         assert ok(api.get("/healthz", role=None))["status"] == "ok"
         with application.SessionLocal() as session:
             item = session.get(application.Item, "LEGACY-UPGRADE-CHECK")
@@ -320,6 +380,7 @@ def verify(dsn):
             "legacy_rows_preserved": {name: len(rows) for name, rows in legacy.items()},
             "history_protection": history,
             "concurrent_evidence": concurrency,
+            "excel_export": excel_export,
             "health": health["status"],
             "schema_cleanup": "completed",
         }

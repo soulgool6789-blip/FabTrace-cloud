@@ -23,6 +23,12 @@ Enrollment is explicit. It preserves historical records, establishes the planned
 
 See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
 
+## Export everything to Excel
+
+Sign in as an **administrator** and click **Export Excel** in the top navigation. The button shows **Preparing Excel…** while the workbook is generated, then the browser downloads an `.xlsx` file.
+
+The workbook includes the current business records and their histories on separate worksheets, plus export information. It excludes private PINs and PIN hashes. Evidence/report references are included; linked report files are not embedded. This is a snapshot for review and analysis: editing the workbook does not update FabTrace, and the workbook is not a database restore format. Keep database backups separately.
+
 ## Run locally
 
 Use Python 3.12 and an existing local PostgreSQL database/user.
@@ -73,6 +79,7 @@ Use [START_HERE_DEPLOY.md](START_HERE_DEPLOY.md) for the rollout sequence. Keep 
 pip install -r requirements-dev.txt
 python -m pytest tests -q
 node tests/tracking_ui_smoke.cjs
+node tests/export_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.
