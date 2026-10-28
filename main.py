@@ -35,7 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.28-export.1'
+APP_VERSION='2026.10.28-process.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -426,6 +426,7 @@ def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depend
         if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
     if reasons:raise HTTPException(409,{'release_blockers':reasons})
     r.released=True;r.released_at=utcnow();r.released_by=u.badge
+    finish_on_release(s,r,u.badge,r.released_at)
     audit(s,r.id,u.badge,'FINAL_RELEASE',{'reference':data.reference});s.commit();return item_dict(s,r)
 @app.post('/api/items/{item_id}/reopen')
 def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -464,6 +465,7 @@ def health(s:Session=Depends(db)):
     s.execute(text('select 1'))
     # A database connection alone is insufficient if the tracking migration was skipped.
     s.execute(select(SpoolPlan.item_id).limit(1))
+    s.execute(select(SpoolProcessEvent.id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -474,6 +476,9 @@ def ui():
 # are defined. init_db imports this module, so all new tables join Base.metadata.
 from tracking import router as tracking_router, SpoolPlan, is_tracked, tracking_release_errors, tracking_summary, reopen_tracked
 app.include_router(tracking_router)
+
+from production import router as production_router, SpoolProcessEvent, finish_on_release
+app.include_router(production_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)

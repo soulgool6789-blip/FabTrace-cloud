@@ -33,7 +33,7 @@ function pendingItem(){try{const p=JSON.parse(localStorage.getItem('fabtrace_pen
 function clearPending(){localStorage.removeItem('fabtrace_pending_handoff')}
 function notify(s){$('message').textContent=s;$('message').classList.add('show');setTimeout(()=>$('message').classList.remove('show'),3500)}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function api(url,opt={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...opt});if(!r.ok){let e;try{e=await r.json()}catch(e2){e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail||e))}return r.json()}
+async function api(url,opt={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...opt});if(!r.ok){let e;try{e=await r.json()}catch(e2){e={detail:r.statusText}}const error=Error(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail||e));error.status=r.status;throw error}return r.json()}
 // Excel export: use the authenticated download response, not the JSON API helper.
 let excelExportRunning=false;
 function excelDownloadName(disposition){

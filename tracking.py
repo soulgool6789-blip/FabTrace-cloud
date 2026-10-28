@@ -408,6 +408,9 @@ def _read_snapshot(s, item_id):
     if previous and previous['item_id'] == item_id:
         yield previous
         return
+    # Imported lazily because the process extension shares these tracking
+    # definitions. One event preload serves both summary and detail output.
+    from production import process_snapshot
     s.flush()
     welds = s.scalars(select(Weld).where(Weld.item_id == item_id).order_by(Weld.number)).all()
     requirements = s.scalars(select(WeldRequirement).where(
@@ -433,6 +436,7 @@ def _read_snapshot(s, item_id):
         'item_id': item_id, 'welds': welds, 'requirements': requirements, 'holds': holds,
         'evidence': group(evidence, 'requirement_id'), 'reviews': group(reviews, 'requirement_id'),
         'work': group(work, 'weld_id'), 'repairs': group(repairs, 'weld_id'),
+        'production_process': process_snapshot(s, item_id),
         'open_rework': bool(s.scalar(select(Rework.id).where(
             Rework.item_id == item_id, Rework.closed_at.is_(None)).limit(1))),
     }
@@ -749,6 +753,7 @@ def _sync_legacy_counts(s, item):
 
 @_snapshot_response
 def tracking_summary(s, item):
+    from production import compact_process_summary
     plan = s.get(SpoolPlan, item.id)
     if not plan:
         return None
@@ -766,6 +771,7 @@ def tracking_summary(s, item):
         'qa_accepted': sum(_qa_accepted(s, w) for w in welds),
         'ready_to_release': not blockers, 'released': bool(item.released),
         'blockers': blockers, 'due_date': plan.due_date,
+        'production_process': compact_process_summary(_snapshot(s, item.id)['production_process']),
     }
 
 
@@ -810,6 +816,7 @@ def spool_dict(s, item):
         'item': asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
         'summary': tracking_summary(s, item),
+        'production_process': _snapshot(s, item.id)['production_process'],
         'welds': [weld_dict(s, row) for row in _welds(s, item.id)],
         'requirements': [requirement_dict(s, row) for row in _requirements(s, item.id)],
         'holds': [asdict(row, HOLD_KEYS) for row in _holds(s, item.id, all_scopes=True)],

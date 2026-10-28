@@ -86,6 +86,25 @@ Released records are locked against operational changes until an administrator r
 
 Template revisions are immutable and apply when creating new welds. Creating a later revision does not rewrite existing weld requirements. Templates can add project requirements and customize baseline labels, sources and responsible roles; they retain the core controls. Record later obligations on existing welds or spools explicitly.
 
+## 8. Track time in each production process
+
+Open a spool from **Projects & welds → Spool register** and find **Production process**. All active employees can record process timing for an enrolled, unreleased spool. The spool register shows the current process and how long the spool has been there.
+
+1. **Start process:** choose the current stage and start its timer when the spool enters that process. Available stages include material preparation, cutting and beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA and ready for dispatch. Use a custom name for another process.
+2. **Move to process:** when the spool enters another stage, this closes the previous visit and starts the selected stage at the same moment. A return to welding, fit-up or another stage creates a new visit and keeps the earlier one.
+3. **Pause:** record a reason when time in the process should be counted as a delay—for example, waiting for material, an inspection or equipment. **Resume** restarts the running portion. A paused spool remains in that process and its elapsed time continues.
+4. **Finish process:** close the current visit if no new process should begin yet. A later Start begins another visit; the gap between the two is not assigned to a process.
+
+The card separates **elapsed**, **running** and **paused** time. Elapsed is running plus paused time. These are calendar durations for a spool, including overnight and weekends when left running; they do not measure crew labor hours or subtract nonworking shifts. The timer continues even when the browser is closed or staff log out.
+
+Each visit records its process, start/end timestamps, employee badges and durations. Event history records every start, move, pause, resume, finish and automatic final-release closure, including entered notes. Totals combine repeated visits to the same process. If another employee changes the timer while your form is open, refresh and review the latest state before trying again.
+
+Time begins with the first recorded start. Earlier production is not reconstructed from old weld counts or inspection dates. Timing is a separate production record: starting or finishing a process does not record an individual weld operation or accept a requirement. Placing a quality hold does not pause a timer, and pausing a timer does not create a quality hold. Record both when both are intended.
+
+Final release automatically closes any open process visit. An administrator reopening the spool does not restart the timer; select the actual process and start it when work resumes. The ready-for-dispatch stage is a process label and does not create a shipment record.
+
+Administrators can use **Export Excel** to download **Process events**, **Process visits** and **Process totals** with the other business records. Visit and total reports include project, subproject and spool IDs, numeric seconds, decimal hours, and the calculation timestamp. In Excel, sum elapsed, active and paused hours by process or use a PivotTable to compare projects and spools. Open visits are a snapshot at export time; download again for newer totals.
+
 ## Role reference
 
 | Role | Tracking responsibilities |
@@ -96,4 +115,4 @@ Template revisions are immutable and apply when creating new welds. Creating a l
 | Inspector | Review requirements, record dimensional inspections, resolve holds, open repairs and approve final release |
 | Administrator | All tracking capabilities, employee administration and reopening released items |
 
-All active staff can read records and submit evidence. The signed-in actor is recorded; approval authority remains restricted. Applicable codes, NDE selection and extent, qualification limits, pressure-test packages and shipment records rely on approved procedures or separate systems; they are not inferred from checklist completion.
+All active staff can read records, submit evidence and record spool process timing. The signed-in actor is recorded; approval authority remains restricted. Applicable codes, NDE selection and extent, qualification limits, pressure-test packages and shipment records rely on approved procedures or separate systems; they are not inferred from checklist completion.

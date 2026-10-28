@@ -12,6 +12,7 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 - Separate requirement definitions, submitted evidence, inspector reviews, holds, repairs, and audit history.
 - Immutable requirement-template revisions for newly created welds. Core material, procedure/qualification, fit-up, visual, NDE-plan, and final-QA controls remain present.
 - Separate production-complete, weld-QA-accepted, ready-for-release, and final-release counters. Final release is not shipment.
+- Spool process timers with start, move, pause, resume and finish controls; current-process age, visit history, repeat-visit totals, and Excel timing reports.
 
 Existing item registration, bulk CSV import, employee QR badges, item QR labels, and custody handoffs remain available. Item types include **Part**, **Spool**, and **Assembly**.
 
@@ -23,11 +24,21 @@ Enrollment is explicit. It preserves historical records, establishes the planned
 
 See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
 
+## Track time in each production process
+
+Open **Projects & welds**, choose a spool in the **Spool register**, and use its **Production process** card. Select a process and start its timer. **Move to process** closes the current visit and starts the next one at the same time. **Pause** records a delay reason; **Resume** continues running time. **Finish process** closes the visit when no new process should start yet.
+
+Choose material preparation, cutting/beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA, ready for dispatch, or a custom process. Repeated visits remain separate in history and are combined in totals for that process. Any active employee can record timing; the employee badge and server timestamp are retained for every change.
+
+Elapsed time includes both running and paused time. These are calendar durations for a spool, not employee labor hours or shift-adjusted hours. Timers keep counting across logout and overnight. Timing starts when staff record the first start; earlier work and gaps after finishing are not inferred. Quality holds and timer pauses are separate actions. Finishing a process does not complete welds or grant quality approval. Final release automatically closes an open timer; reopening does not restart it.
+
 ## Export everything to Excel
 
 Sign in as an **administrator** and click **Export Excel** in the top navigation. The button shows **Preparing Excel…** while the workbook is generated, then the browser downloads an `.xlsx` file.
 
 The workbook includes the current business records and their histories on separate worksheets, plus export information. It excludes private PINs and PIN hashes. Evidence/report references are included; linked report files are not embedded. This is a snapshot for review and analysis: editing the workbook does not update FabTrace, and the workbook is not a database restore format. Keep database backups separately.
+
+**Process events** contains every timing action. **Process visits** contains each visit's start/end, actor, and elapsed/running/paused time. **Process totals** combines repeated visits by spool and process. Both reports include project and subproject IDs and numeric seconds/decimal hours for Excel analysis. Open visits are calculated as of their report timestamp. Spools without a recorded start have no fabricated timing rows.
 
 ## Run locally
 
@@ -67,7 +78,7 @@ Open `http://localhost:8000`, sign in with the configured bootstrap account, and
 
 Use the current web service and its current PostgreSQL database. This feature update does not require a new service, database, or Blueprint.
 
-Deploy the complete source, including `tracking.py`, `static/tracking.js`, and `static/tracking.css`. Run `python init_db.py` against the existing database before the new application receives traffic. The supplied `render.yaml` uses this as its `preDeployCommand`; an existing service must actually have that command configured, or initialization must run as a controlled manual rollout step.
+Deploy the complete source, including `tracking.py`, `production.py`, `exports.py`, `static/tracking.js`, and `static/tracking.css`. Run `python init_db.py` against the existing database before the new application receives traffic. The supplied `render.yaml` uses this as its `preDeployCommand`; an existing service must actually have that command configured, or initialization must run as a controlled manual rollout step.
 
 Initialization creates missing tables, installs history-protection triggers, and skips account bootstrap when employees already exist. PostgreSQL initialization runs in one transaction under an advisory lock. It does not seed production projects or alter existing item rows. `create_all()` does not add future columns to existing tables; later schema changes need explicit migrations.
 
@@ -80,6 +91,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q
 node tests/tracking_ui_smoke.cjs
 node tests/export_ui_smoke.cjs
+node tests/process_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.
