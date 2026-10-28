@@ -13,6 +13,8 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from decimal import Decimal
+from itertools import groupby
+from types import SimpleNamespace
 from xml.sax.saxutils import escape, quoteattr
 
 from fastapi import APIRouter, Depends
@@ -27,6 +29,7 @@ from tracking import (
     Project, RequirementEvidence, RequirementReview, RequirementTemplate,
     SpoolPlan, Subproject, TrackingHold, Weld, WeldRepair, WeldRequirement, WeldWork,
 )
+from production import SpoolProcessEvent, process_snapshot
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -80,7 +83,19 @@ TABLE_SPECS = (
     _spec(WeldWork, 'Weld work', 'id weld_id cycle operation notes actor at'),
     _spec(WeldRepair, 'Weld repairs', 'id weld_id cycle reason opened_by opened_at'),
     _spec(TrackingHold, 'Holds', 'id item_id weld_id reason opened_by opened_at closed_by closed_at close_notes'),
+    _spec(SpoolProcessEvent, 'Process events', 'id item_id sequence event process_key process_name actor at notes'),
 )
+
+PROCESS_CONTEXT_COLUMNS = ('project_id', 'subproject_id', 'item_id', 'description')
+PROCESS_TIME_COLUMNS = ('elapsed_seconds', 'active_seconds', 'paused_seconds',
+                        'elapsed_hours', 'active_hours', 'paused_hours')
+PROCESS_VISIT_COLUMNS = PROCESS_CONTEXT_COLUMNS + (
+    'visit_id', 'process_key', 'process_name', 'group_key', 'status', 'started_at', 'ended_at',
+    'started_by', 'ended_by', 'end_reason',
+) + PROCESS_TIME_COLUMNS + ('as_of',)
+PROCESS_TOTAL_COLUMNS = PROCESS_CONTEXT_COLUMNS + (
+    'process_key', 'process_name', 'group_key', 'visits',
+) + PROCESS_TIME_COLUMNS + ('as_of',)
 
 OVERFLOW_COLUMNS = (
     'overflow_id', 'source_table', 'source_sheet', 'row_number', 'row_id',
@@ -104,6 +119,8 @@ RELATIONSHIPS = (
     'Requirement evidence and reviews carry their verification cycle. Earlier cycles remain historical; they are not current acceptance.',
     'tracking_weld_work.weld_id / tracking_weld_repairs.weld_id -> tracking_welds.id. Their cycle identifies physical work/repair history.',
     'tracking_holds.item_id -> items.id; optional weld_id -> tracking_welds.id.',
+    'tracking_process_events.item_id -> items.id; actor -> employees.badge. sequence is the immutable per-spool order and concurrency version.',
+    'Process visits and Process totals are calculated reports from Process events, grouped by item_id and process. visit_id is the sequence that started that visit, not a separate database row.',
     'created_by, actor, completed_by, opened_by and closed_by badge fields retain the recorded employee identities.',
     'Audit details, template requirements and required_operations are JSON text. Preserve the JSON when using these records elsewhere.',
 )
@@ -342,7 +359,7 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Export', 'Exporter name', exporter.name)
     add('Export', 'Exporter role', exporter.role)
     add('Export', 'Snapshot method', 'PostgreSQL REPEATABLE READ READ ONLY, separate connection' if database_kind == 'postgresql' else 'SQLite explicit read transaction, separate connection')
-    add('Export', 'Scope', 'All rows from the 16 explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs and closed holds. No screen pagination limits.')
+    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds and production process events. Two additional process reports summarize recorded visits and totals. No screen pagination limits.')
     add('Export', 'Database writes', 'None. This export does not append audit records or alter application data.')
     add('Exclusions', 'Authentication', 'Employee PIN hashes, PINs, passwords, session tokens, JWT secrets, database credentials and environment variables are excluded. Employee roster includes badge, name, role, active and created_at only.')
     add('Exclusions', 'External documents', 'References and URLs are exported as stored. External report/MTR contents and linked files are not fetched or embedded.')
@@ -351,6 +368,10 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Format', 'Date/time', 'Date/time cells are native Excel numeric date/time values normalized to UTC. Naive database timestamps are interpreted as UTC; Excel display uses milliseconds.')
     add('Format', 'JSON', 'JSON data is retained as compact JSON text. Array order and all object keys/values are preserved.')
     add('Format', 'Empty values', 'SQL NULL is an empty cell. Empty strings remain explicit text cells.')
+    add('Process timing', 'Meaning', 'Elapsed time is calendar clock time in a recorded process visit. Active time is time while its timer was running; paused time is time explicitly marked paused. These are spool durations, not labor/person-hours or working-shift hours.')
+    add('Process timing', 'Coverage', 'Timing begins with the first recorded start, with no inferred earlier history. Idle gaps after Finish and before the next Start are not assigned to a process. Repeated visits are kept separately and summed in Process totals. Unstarted spools have no process report rows.')
+    add('Process timing', 'Open visits', 'Open visits are calculated as of the report as_of timestamp, using the same read-only database snapshot as the raw events. Paused time remains part of elapsed time. Final release closes an open visit. Finished visits do not keep accumulating time.')
+    add('Process timing', 'Analysis', 'Process visits has one row per recorded visit; Process totals has one row per spool/process. Seconds and decimal hours are numeric and may be summed or used in Excel PivotTables by project_id, subproject_id, item_id and process_name. Do not add report totals to raw business-row counts.')
     add('Format', 'Continuation sheets', f'Each sheet holds at most {EXCEL_MAX_ROWS:,} rows including its repeated header. Additional data continues on sheets named with a numeric suffix.')
     add('Format', 'Long text', f'Values exceeding {EXCEL_MAX_CELL_CHARS:,} UTF-16 units are replaced by an OVF reference. Reconstruct the full original value by concatenating Text overflow chunks for that overflow_id in chunk_index order.')
     add('Format', 'Long-text cells', writer.overflow_cells)
@@ -362,6 +383,62 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
         add('Sheet rows', sheet.name, sheet.rows)
         add('Source table', sheet.name, sheet.table)
     return rows
+
+
+def _write_process_reports(connection, writer, created_at):
+    """Calculate reports within the raw export's snapshot, one spool at a time."""
+    events_table = SpoolProcessEvent.__table__
+    event_columns = tuple(events_table.columns.keys())
+    query = (
+        select(*events_table.c, Item.description, SpoolPlan.project_id, SpoolPlan.subproject_id)
+        .select_from(events_table.join(Item.__table__, events_table.c.item_id == Item.id)
+                     .outerjoin(SpoolPlan.__table__, events_table.c.item_id == SpoolPlan.item_id))
+        .order_by(events_table.c.item_id, events_table.c.sequence)
+    )
+    with tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as visits_file, \
+            tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as totals_file:
+        visit_count = total_count = 0
+        result = connection.execution_options(stream_results=True, yield_per=1000).execute(query)
+        try:
+            for item_id, spool_rows in groupby(result.mappings(), key=lambda row: row['item_id']):
+                rows = list(spool_rows)
+                events = [SimpleNamespace(**{key: row[key] for key in event_columns}) for row in rows]
+                snapshot = process_snapshot(None, item_id, as_of=created_at, events=events)
+                context = {key: rows[0][key] for key in PROCESS_CONTEXT_COLUMNS}
+                for source, target, columns, is_visit in (
+                    (snapshot['visits'], visits_file, PROCESS_VISIT_COLUMNS, True),
+                    (snapshot['by_process'], totals_file, PROCESS_TOTAL_COLUMNS, False),
+                ):
+                    for record in source:
+                        values = {**record, **context, 'as_of': snapshot['as_of']}
+                        if is_visit:
+                            values['visit_id'] = record['id']
+                        for measure in ('elapsed', 'active', 'paused'):
+                            values[measure + '_hours'] = record[measure + '_seconds'] / 3600
+                        target.write((json.dumps([values.get(key) for key in columns],
+                                                 ensure_ascii=True) + '\n').encode('utf-8'))
+                        if is_visit:
+                            visit_count += 1
+                        else:
+                            total_count += 1
+        finally:
+            result.close()
+
+        for name, source, columns, count in (
+            ('Process visits', visits_file, PROCESS_VISIT_COLUMNS, visit_count),
+            ('Process totals', totals_file, PROCESS_TOTAL_COLUMNS, total_count),
+        ):
+            source.seek(0)
+            def report_rows(source=source, columns=columns):
+                for line in source:
+                    values = json.loads(line)
+                    record = dict(zip(columns, values))
+                    for index, key in enumerate(columns):
+                        if values[index] is not None and key in ('started_at', 'ended_at', 'as_of'):
+                            values[index] = dt.datetime.fromisoformat(values[index].replace('Z', '+00:00'))
+                    keys = ('item_id', 'visit_id') if 'visit_id' in record else ('item_id', 'process_key', 'process_name')
+                    yield values, _json_text({key: record[key] for key in keys})
+            writer.write_rows(name, 'derived:tracking_process_events', columns, report_rows(), count, group='report')
 
 
 def build_workbook(bind, exporter, created_at=None):
@@ -400,6 +477,7 @@ def build_workbook(bind, exporter, created_at=None):
                                     json_columns={name for name in spec.columns if isinstance(table.c[name].type, JSON)})
                             finally:
                                 result.close()
+                        _write_process_reports(connection, writer, created_at)
                         writer.write_overflow()
                         manifest = _manifest_rows(created_at, exporter, writer, kind)
                         writer.write_rows('Export info', 'export_manifest', ('section', 'entry', 'part', 'value'),

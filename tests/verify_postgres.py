@@ -152,7 +152,11 @@ def seed_legacy(application):
 
 
 def verify_history_protection(application, initializer, schema):
-    assert len(initializer.HISTORY_TABLES) == 6
+    assert set(initializer.HISTORY_TABLES) == {
+        "audit_events", "tracking_requirement_evidence", "tracking_requirement_reviews",
+        "tracking_weld_work", "tracking_weld_repairs", "tracking_requirement_templates",
+        "tracking_process_events",
+    }
     results = {}
     for name in initializer.HISTORY_TABLES:
         assert name in application.Base.metadata.tables
@@ -251,7 +255,72 @@ def verify_concurrent_evidence(application, tracking, api, item_id, weld_id):
     return {"response_codes": sorted(row["status"] for row in responses), "new_evidence_rows": 1, "new_audit_rows": 1}
 
 
+def verify_concurrent_process_transition(application, production, api, item_id):
+    route = f"/api/tracking/spools/{item_id}/process"
+    initial = ok(api.get(route))
+    assert initial["status"] == "not_started" and initial["version"] == 0
+    with application.SessionLocal() as session:
+        events_before = session.scalar(select(func.count()).select_from(production.SpoolProcessEvent).where(
+            production.SpoolProcessEvent.item_id == item_id,
+        ))
+        audits_before = session.scalar(select(func.count()).select_from(application.Audit).where(
+            application.Audit.item_id == item_id, application.Audit.event == "TRACKING_PROCESS_EVENT",
+        ))
+
+    lock_barrier = Barrier(2)
+
+    def synchronize_item_lock(connection, cursor, statement, parameters, context, many):
+        if "FROM items" in statement and "FOR UPDATE" in statement:
+            lock_barrier.wait(timeout=15)
+
+    def start_one(process_key):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.post(route, {
+                "action": "start", "expected_version": initial["version"],
+                "process_key": process_key, "notes": "Concurrent local process start",
+            }, role="welder")
+            return {"status": response.status_code, "process_key": process_key, "body": response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, "before_cursor_execute", synchronize_item_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = [future.result(timeout=30) for future in [
+                pool.submit(start_one, "welding"), pool.submit(start_one, "nde"),
+            ]]
+    finally:
+        event.remove(application.engine, "before_cursor_execute", synchronize_item_lock)
+
+    assert sorted(row["status"] for row in responses) == [201, 409], responses
+    winner = next(row for row in responses if row["status"] == 201)
+    current = ok(api.get(route))
+    assert current["version"] == 1 and current["status"] == "running"
+    assert len(current["events"]) == len(current["visits"]) == 1
+    assert current["current"]["process_key"] == winner["process_key"]
+    with application.SessionLocal() as session:
+        process_events = session.scalars(select(production.SpoolProcessEvent).where(
+            production.SpoolProcessEvent.item_id == item_id,
+        ).order_by(production.SpoolProcessEvent.sequence)).all()
+        audits = session.scalars(select(application.Audit).where(
+            application.Audit.item_id == item_id, application.Audit.event == "TRACKING_PROCESS_EVENT",
+        ).order_by(application.Audit.id)).all()
+        assert len(process_events) == events_before + 1
+        assert len(audits) == audits_before + 1
+        recorded = process_events[-1]
+        audit = audits[-1]
+        assert recorded.sequence == 1 and recorded.event == "start"
+        assert recorded.process_key == winner["process_key"]
+        assert audit.details["process_event_id"] == recorded.id
+        assert audit.details["sequence"] == recorded.sequence
+        assert audit.details["process_key"] == recorded.process_key
+        assert audit.actor == recorded.actor == BADGES["welder"]
+    return {"response_codes": [201, 409], "new_process_events": 1, "new_audit_rows": 1, "open_visits": 1}
+
+
 def verify_excel_export(application, api):
+    exports = importlib.import_module("exports")
     def row_counts():
         with application.engine.connect() as connection:
             return {
@@ -291,18 +360,16 @@ def verify_excel_export(application, api):
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
         sheets = [sheet.attrib["name"] for sheet in workbook.findall("s:sheets/s:sheet", namespace)]
-    assert sheets == [
-        "Export info", "Employees", "Items", "Inspections", "Reworks", "Audit events",
-        "Projects", "Subprojects", "Spool plans", "Weld templates", "Welds", "Requirements",
-        "Evidence", "Reviews", "Weld work", "Weld repairs", "Holds",
-    ]
-    assert len(export_reads) == 16, export_reads
+    assert sheets == ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS], "Process visits", "Process totals"]
+    # Every raw table plus one joined, ordered process query for both reports
+    # stays in the same read-only repeatable-read snapshot.
+    assert len(export_reads) == len(exports.TABLE_SPECS) + 1, export_reads
     assert all(read_only == "on" and isolation == "repeatable read" and server_cursor
                for read_only, isolation, _, server_cursor in export_reads), export_reads
     assert len({backend_pid for _, _, backend_pid, _ in export_reads}) == 1
     assert row_counts() == before, "Excel export changed database row counts"
     return {
-        "response_code": 200, "business_sheets": 16, "rows_unchanged": True,
+        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 2, "rows_unchanged": True,
         "isolation": "repeatable read", "read_only": True, "server_side_queries": len(export_reads),
     }
 
@@ -337,6 +404,7 @@ def verify(dsn):
             schema_created = True
         application = importlib.import_module("main")
         tracking = importlib.import_module("tracking")
+        production = importlib.import_module("production")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -350,6 +418,7 @@ def verify(dsn):
         with application.SessionLocal() as session:
             assert session.query(tracking.SpoolPlan).count() == 0, "Migration silently enrolled legacy items"
             assert session.query(tracking.Weld).count() == 0, "Migration invented individual welds"
+            assert session.query(production.SpoolProcessEvent).count() == 0, "Migration invented process timing history"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -365,6 +434,7 @@ def verify(dsn):
         ok(api.post(f"/api/tracking/welds/{record['id']}/repairs", {
             "reason": "Local repair to verify preserved history and current-cycle evidence",
         }, role="inspector"), 201)
+        process_concurrency = verify_concurrent_process_transition(application, production, api, item_id)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -380,6 +450,7 @@ def verify(dsn):
             "legacy_rows_preserved": {name: len(rows) for name, rows in legacy.items()},
             "history_protection": history,
             "concurrent_evidence": concurrency,
+            "concurrent_process_transition": process_concurrency,
             "excel_export": excel_export,
             "health": health["status"],
             "schema_cleanup": "completed",

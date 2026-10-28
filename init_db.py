@@ -12,6 +12,7 @@ HISTORY_TABLES = (
     'tracking_weld_work',
     'tracking_weld_repairs',
     'tracking_requirement_templates',
+    'tracking_process_events',
 )
 
 def initialize():
@@ -49,6 +50,6 @@ def initialize():
                 print('Created bootstrap administrator')
             else:
                 print('Employee accounts already exist; bootstrap skipped')
-    print('Schema ready: legacy records preserved; individual tracking tables available')
+    print('Schema ready: legacy records preserved; weld and production process tracking tables available')
 if __name__=='__main__':initialize()
 

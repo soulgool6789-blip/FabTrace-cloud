@@ -8,6 +8,7 @@ This guide describes the implemented tracking extension and the constraints that
 | --- | --- |
 | `main.py` | Shared SQLAlchemy models, sessions, authentication, employee/item/QR/custody APIs, legacy inspections and release, middleware, `/healthz`, and tracking-router integration. |
 | `tracking.py` | Tracking tables, validated request models, project/spool/weld APIs, authoritative work and acceptance checks, versions, holds, repairs, and rollups. |
+| `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
 | `exports.py` | Administrator-only Excel snapshot of business records and history, excluding authentication secrets. |
 | `init_db.py` | Additive schema initialization, first-account bootstrap, PostgreSQL transaction/advisory lock, and immutable-history triggers. |
 | `static/index.html` | Canonical application shell and existing login, inventory, custody, and QR interface; tracking workspace/dialog hooks. |
@@ -18,7 +19,7 @@ This guide describes the implemented tracking extension and the constraints that
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking router at the end of the module. `tracking.py` imports those shared definitions. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, and export routers, in that order, at the end of the module. Extensions import those shared definitions. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
 
 ## Data relationships
 
@@ -55,6 +56,9 @@ All `/api/tracking` routes require an active authenticated employee. The existin
 | `POST /api/tracking/welds/{weld_id}/repairs` | Start a physical-work cycle without erasing prior records. |
 | `POST /api/tracking/spools/{item_id}/holds` | Place a spool hold or a hold on one of its welds. |
 | `POST /api/tracking/holds/{id}/close` | Record an authorized hold resolution. |
+| `GET /api/tracking/processes` | Ordered starter process catalog; custom process names are also accepted when starting or moving. |
+| `GET /api/tracking/spools/{item_id}/process` | Current process, per-process totals, every visit and immutable event history for an enrolled spool. |
+| `POST /api/tracking/spools/{item_id}/process` | Append `start`, `move`, `pause`, `resume` or `finish`, using the current `expected_version`. |
 
 Existing `/api/items/{id}/inspect`, `/release`, and `/reopen` remain the interfaces for dimensional inspection, final release, and administrative reopen. For an enrolled spool, aggregate `/weld` and `/inspect` with `kind: "Weld"` are rejected. Item detail exposes `tracking_enabled` and a tracking summary; item lists expose `tracking_enabled`.
 
@@ -73,6 +77,7 @@ Existing `/api/items/{id}/inspect`, `/release`, and `/reopen` remain the interfa
 | Action | Roles |
 | --- | --- |
 | Read tracking; submit evidence | Any active authenticated employee |
+| Record production process timing | Any active authenticated employee; released items remain read-only |
 | Create projects, subprojects, plans, welds, requirements, templates; correct metadata | Supervisor, admin |
 | Record fit-up | Handler, welder, supervisor, admin |
 | Record root, fill/cap, completion | Welder, supervisor, admin |
@@ -99,7 +104,7 @@ Tracking mutations lock the owning `Item` row before changing related state. Hie
 
 Keep validation, inserts, invalidation, counter synchronization, and audit creation in one transaction. Read-snapshot helpers preload records for one spool calculation; they are not a durable cache and must not be reused after writes.
 
-`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on six history tables:
+`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on seven history tables:
 
 - `audit_events`
 - `tracking_requirement_evidence`
@@ -107,8 +112,21 @@ Keep validation, inserts, invalidation, counter synchronization, and audit creat
 - `tracking_weld_work`
 - `tracking_weld_repairs`
 - `tracking_requirement_templates`
+- `tracking_process_events`
 
 These triggers prevent ordinary mutation, not deliberate removal by a database owner. Requirements, holds, plans, and weld metadata are current-state records and remain mutable through controlled APIs.
+
+## Production process timing
+
+`SpoolProcessEvent` is additive and append-only. Its `(item_id, sequence)` pair is unique. `sequence` is also the spool's optimistic concurrency version, starting at zero before the first event. Every write takes the existing item row lock, re-reads the event history, checks the requested version and legal transition, and appends the event and audit record in one transaction. Only the server supplies timestamps and actors. Extra fields, unknown stages, backdating, stale versions and invalid transitions are rejected. A server clock earlier than the last event is rejected for writes; read projections clamp to recorded time.
+
+POST bodies contain `action`, `expected_version`, optional `notes`, and—for start/move only—`process_key` plus `process_name` when the key is `custom`. A pause requires a reason. Start needs no open visit. Move closes the current visit and starts a different process at the same timestamp; it also works while paused. Resume needs a paused visit. Finish closes a visit without starting another. A custom process name is trimmed, whitespace-normalized and grouped without case sensitivity. The ten catalog keys remain stable even if labels are changed in a later release.
+
+The pure `summarize_process_events` projection returns `item_id`, `version`, UTC `as_of`, `status`, `current`, `totals`, `by_process`, `visits` and `events`. Status is `not_started`, `running`, `paused` or `finished`; a closed visit has status `finished`. Numeric `elapsed_seconds = active_seconds + paused_seconds`. Durations use integer microseconds internally. Visit IDs are the sequence numbers of start/move events. Events and visits are oldest first. The spool detail embeds this full object as `production_process`; overview summaries include its current state and overall totals.
+
+Timing starts only from explicit events. It measures calendar station/process duration, includes overnight time, and is not person-hours. Unstarted time and gaps after Finish are excluded. Timing does not modify weld work, requirements, custody, inspections or quality holds. `finish_on_release` is called inside the already locked final-release transaction, closes any open visit at `released_at`, and does nothing for an idle timer. Administrative reopen leaves timing stopped until a new Start.
+
+The Excel allowlist includes the raw process-event table. Two additional reports, `Process visits` and `Process totals`, derive from those events on the same read-only snapshot connection, one spool at a time. They include current project/subproject identifiers, numeric seconds and decimal hours, and an `as_of` timestamp for open visits. Historical events do not freeze earlier project assignments. Report rows use temporary spooled files and the existing sheet-continuation rules; no new runtime package is required.
 
 ## Testing
 
@@ -117,6 +135,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q
 node tests/tracking_ui_smoke.cjs
 node tests/export_ui_smoke.cjs
+node tests/process_ui_smoke.cjs
 ```
 
 API fixtures use temporary SQLite databases, override imported database settings, and create synthetic employees and authenticated sessions. They cover legacy behavior, roles, stale decisions, evidence, scope, operations, repairs, holds, hierarchy, and release. SQLite tests do not establish PostgreSQL locking or trigger behavior.
@@ -130,7 +149,7 @@ python tests/verify_postgres.py --help
 python tests/verify_postgres.py --dsn 'postgresql+psycopg://USER@localhost/fabtrace_test_upgrade'
 ```
 
-Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all six history triggers, and competing writes. Do not loosen its guard to use the operational database.
+Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all seven history triggers, competing evidence/process writes, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
 
 ## Adding the next feature
 

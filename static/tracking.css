@@ -74,6 +74,20 @@
 #trackingPage .ft-readonly{font-size:12px;color:var(--ft-muted);padding:9px 11px;background:#f4f7fa;border-radius:7px;margin-top:10px}
 #trackingPage .ft-pagination{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
 #trackingPage .ft-footer-note{font-size:12px;color:var(--ft-muted);margin-top:10px}
+#trackingPage .ft-process-card{border-top:3px solid #2475ae}
+#trackingPage .ft-process-current{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:12px 0}
+#trackingPage .ft-process-current h3{font-size:20px;margin:0;overflow-wrap:anywhere}
+#trackingPage .ft-process-current p{margin:5px 0;font-size:12px}
+#trackingPage .ft-process-current .actions{flex-wrap:wrap}
+#trackingPage .ft-process-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:15px 0}
+#trackingPage .ft-process-metrics>div{background:#f2f7fb;border:1px solid var(--ft-line);border-radius:9px;padding:14px;min-width:0}
+#trackingPage .ft-process-metrics>div>span{font-size:12px;color:var(--ft-muted);display:block;margin-bottom:5px}
+#trackingPage .ft-process-metrics strong{font-size:24px;font-weight:700;display:block;overflow-wrap:anywhere}
+#trackingPage .ft-duration{font-variant-numeric:tabular-nums;white-space:nowrap}
+#trackingPage .ft-process-total{display:flex;gap:9px 18px;flex-wrap:wrap;padding:13px 0;border-top:1px solid var(--ft-line);border-bottom:1px solid var(--ft-line);font-size:13px;margin:18px 0}
+#trackingPage .ft-process-total strong{flex-basis:100%}
+#trackingPage .ft-process-table td{font-size:12px}
+#trackingPage .ft-process-card>h3{font-size:14px;margin:20px 0 10px}
 #trackingDialog{border:1px solid #cddbe6;border-radius:14px;padding:22px;max-width:min(780px,95vw);width:100%;max-height:92vh;overflow:auto;color:#183247;box-shadow:0 20px 70px #102a4033}
 #trackingDialog::backdrop{background:#102a4060}
 #trackingDialog h2{margin:0;font-size:20px}
@@ -97,3 +111,4 @@
 @media(max-width:900px){#trackingPage .ft-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#trackingPage .ft-two-col{grid-template-columns:1fr}#trackingPage .ft-meta-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:580px){#trackingPage .ft-toolbar .field{max-width:none;min-width:140px}#trackingPage .ft-top .actions{width:100%}#trackingPage .ft-top .actions button{flex:1}#trackingPage .ft-tabs button{padding:10px 12px}#trackingPage .ft-metric{padding:13px}#trackingPage .ft-metric strong{font-size:23px}#trackingPage .ft-meta-grid{grid-template-columns:1fr 1fr;gap:12px}#trackingDialog{padding:17px}#trackingDialog .ft-form-grid{grid-template-columns:1fr}#trackingPage .ft-template-grid{grid-template-columns:1fr}#trackingPage .ft-table{min-width:720px}#trackingPage .ft-matrix{min-width:750px}#trackingDialog .ft-dialog-footer{bottom:-17px}}
 @media print{#trackingPage .ft-toolbar,#trackingPage .ft-tabs,#trackingPage button,#trackingPage .ft-crumbs{display:none!important}#trackingPage .card{break-inside:avoid;box-shadow:none}#trackingPage .tablewrap{overflow:visible}#trackingPage .ft-table,#trackingPage .ft-matrix{min-width:0}}
+@media(max-width:700px){#trackingPage .ft-process-metrics{grid-template-columns:1fr}#trackingPage .ft-process-metrics>div{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:11px 13px}#trackingPage .ft-process-metrics>div>span{margin:0}#trackingPage .ft-process-metrics strong{font-size:20px}#trackingPage .ft-process-current .actions{width:100%}#trackingPage .ft-process-current .actions button{flex:1 1 45%}#trackingPage .ft-process-table{min-width:600px}}

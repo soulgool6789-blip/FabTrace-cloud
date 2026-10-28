@@ -4,13 +4,14 @@
   const ROOT = '/api/tracking';
   const node = id => document.getElementById(id);
   const encode = encodeURIComponent;
-  const state = {view:'overview', project:'', subproject:'', query:'', status:'', overview:null, spool:null, weld:null, routeSpool:'', routeWeld:'', exceptions:[], sequence:0, dialogAction:null};
+  const state = {view:'overview', project:'', subproject:'', query:'', status:'', processFilter:'', overview:null, spool:null, weld:null, routeSpool:'', routeWeld:'', exceptions:[], sequence:0, dialogAction:null, dialogStale:false, processCatalog:null, processDialogLoading:false};
   const role = () => me?.role || '';
   const allowed = roles => roles.includes(role());
   const manage = () => allowed(['admin','supervisor']);
   const review = () => allowed(['admin','inspector']);
   const holdRole = () => allowed(['admin','supervisor','inspector']);
   const productionRole = () => allowed(['admin','supervisor','welder']);
+  const processRole = () => allowed(['admin','supervisor','handler','welder','inspector']);
   const stamp = value => value ? new Date(value).toLocaleString() : '—';
   const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
   const arr = value => Array.isArray(value) ? value : [];
@@ -25,6 +26,11 @@
   const requirementBadge = r => badge(r.status)+(r.satisfied===false&&['accepted','not_applicable'].includes(r.status)?'<span class="ft-secondary">Prerequisite incomplete</span>':'');
   const badge = status => `<span class="ft-tag ${statusClass[status]||'na'}">${esc(statusNames[status]||status||'Pending')}</span>`;
   const stageNames = {before_welding:'Before welding',after_welding:'After welding',release:'Release'};
+  const processStatusNames = {not_started:'Timing not started',running:'Running',paused:'Paused',finished:'Finished'};
+  const processEventNames = {start:'Started process',move:'Moved to process',pause:'Paused',resume:'Resumed',finish:'Finished process',release:'Closed on final release'};
+  const processClocks = new WeakMap();
+  const monotonicNow = () => typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
+  let processClockTimer=null;
   const operationNames = {fitup:'Fit-up recorded',root:'Root recorded',fill_cap:'Fill / cap recorded',complete:'Weld completed'};
   const closedHold = h => Boolean(h.closed_at || h.closed);
   const isLocked = () => Boolean(state.spool?.item?.released);
@@ -35,6 +41,49 @@
   function errorText(error) {
     try {const detail=JSON.parse(error.message);if(Array.isArray(detail))return detail.map(x=>`${arr(x.loc).filter(p=>p!=='body').join(' / ')}: ${x.msg||'Check the value'}`).join('\n')}catch(_){}
     return error.message||'The request could not be completed.';
+  }
+
+  function duration(seconds) {
+    const value=Math.max(0,Math.floor(number(seconds))), days=Math.floor(value/86400), hours=Math.floor(value%86400/3600), minutes=Math.floor(value%3600/60), rest=value%60;
+    return `${days?days+'d ':''}${days||hours?String(hours).padStart(days?2:1,'0')+'h ':''}${String(minutes).padStart(2,'0')}m ${String(rest).padStart(2,'0')}s`;
+  }
+  function markProcessClock(process) {
+    if(process&&typeof process==='object'&&!processClocks.has(process))processClocks.set(process,monotonicNow());
+    return process;
+  }
+  function processRate(process,kind) {
+    if(!process?.current||!['running','paused'].includes(process.status))return 0;
+    return kind==='elapsed_seconds'||kind==='active_seconds'&&process.status==='running'||kind==='paused_seconds'&&process.status==='paused'?1:0;
+  }
+  function clockValue(process,base,kind,live=true) {
+    markProcessClock(process);
+    const anchor=processClocks.get(process)??monotonicNow(), rate=live?processRate(process,kind):0;
+    const seconds=number(base)+rate*Math.max(0,(monotonicNow()-anchor)/1000);
+    return `<span class="ft-duration"${rate?` data-ft-clock="${number(base)}" data-ft-rate="${rate}" data-ft-anchor="${anchor}"`:''}>${duration(seconds)}</span>`;
+  }
+  function stopProcessClock() {
+    if(processClockTimer!==null){clearInterval(processClockTimer);processClockTimer=null;}
+  }
+  function startProcessClock() {
+    stopProcessClock();
+    const host=node('trackingContent');
+    if(typeof setInterval!=='function'||typeof host.querySelectorAll!=='function')return;
+    const clocks=[...host.querySelectorAll('[data-ft-clock]')];
+    if(!clocks.length)return;
+    const tick=()=>{const now=monotonicNow();for(const clock of clocks)clock.textContent=duration(number(clock.dataset.ftClock)+number(clock.dataset.ftRate)*Math.max(0,(now-number(clock.dataset.ftAnchor))/1000))};
+    tick();processClockTimer=setInterval(tick,1000);
+  }
+  function processBadge(status) {
+    return `<span class="ft-tag ${status==='running'?'pending':status==='paused'?'hold':status==='finished'?'good':'na'}">${esc(processStatusNames[status]||processStatusNames.not_started)}</span>`;
+  }
+  function processKey(process) {
+    const current=process?.current;
+    return current?(current.group_key||`${current.process_key}:${current.process_key==='custom'?String(current.process_name).toLowerCase():''}`):process?.status==='finished'?'@finished':'@not_started';
+  }
+  function processFilters() {
+    const choices=new Map([['@not_started','Timing not started'],['@finished','Finished timing']]);
+    for(const spool of arr(state.overview?.spools))if(spool.production_process?.current)choices.set(processKey(spool.production_process),spool.production_process.current.process_name);
+    return `<div class="field"><label for="ftProcessFilter">Current production process</label><select id="ftProcessFilter">${option('','All processes',state.processFilter)}${[...choices].map(([key,label])=>option(key,label,state.processFilter)).join('')}</select></div>`;
   }
 
   function field(name,label,value='',settings={}) {
@@ -94,17 +143,20 @@
   }
   async function load(target={}) {
     const sequence = ++state.sequence;
+    stopProcessClock();
     node('trackingContent').innerHTML='<div class="ft-state" role="status">Loading project and weld records…</div>';
     node('trackingContent').setAttribute('aria-busy','true');
     try {
       const overview=await getOverview();
       if(sequence!==state.sequence) return;
       state.overview=overview;
+      for(const spool of arr(overview.spools))markProcessClock(spool.production_process);
       if(target.spool || state.spool?.item?.id) {
         const id=target.spool||state.spool.item.id;
         const spool=await api(ROOT+'/spools/'+encode(id));
         if(sequence!==state.sequence)return;
         state.spool=spool;
+        markProcessClock(spool.production_process);
       }
       if(sequence!==state.sequence) return;
       const weldId=target.weld||state.weld?.id;
@@ -116,6 +168,7 @@
           const spool=await api(ROOT+'/spools/'+encode(weld.item_id));
           if(sequence!==state.sequence)return;
           state.spool=spool;
+          markProcessClock(spool.production_process);
         }
       }
       if(state.view==='exceptions') {
@@ -139,7 +192,7 @@
   function toolbar() {
     const data=state.overview||{};
     const projects=arr(data.projects), subprojects=arr(data.subprojects).filter(s=>!state.project||s.project_id===state.project);
-    return `<div class="ft-toolbar"><div class="field"><label for="ftProjectFilter">Project</label><select id="ftProjectFilter">${option('','All projects',state.project)}${projects.map(p=>option(p.id,`${p.id} · ${p.name}`,state.project)).join('')}</select></div><div class="field"><label for="ftSubprojectFilter">Subproject / work package</label><select id="ftSubprojectFilter">${option('','All subprojects',state.subproject)}${subprojects.map(p=>option(p.id,`${p.id} · ${p.name}`,state.subproject)).join('')}</select></div><div class="field ft-search"><label for="ftSearch">Find a spool, drawing, or assembly</label><input id="ftSearch" type="search" value="${esc(state.query)}" placeholder="Filter the displayed records"></div></div>`;
+    return `<div class="ft-toolbar"><div class="field"><label for="ftProjectFilter">Project</label><select id="ftProjectFilter">${option('','All projects',state.project)}${projects.map(p=>option(p.id,`${p.id} · ${p.name}`,state.project)).join('')}</select></div><div class="field"><label for="ftSubprojectFilter">Subproject / work package</label><select id="ftSubprojectFilter">${option('','All subprojects',state.subproject)}${subprojects.map(p=>option(p.id,`${p.id} · ${p.name}`,state.subproject)).join('')}</select></div>${state.view==='spools'?processFilters():''}<div class="field ft-search"><label for="ftSearch">Find a spool, drawing, assembly, or process</label><input id="ftSearch" type="search" value="${esc(state.query)}" placeholder="Filter the displayed records"></div></div>`;
   }
   function tabs() {
     return `<div class="ft-tabs" role="tablist" aria-label="Project tracking views">${[['overview','Overview'],['spools','Spool register'],['exceptions','Outstanding requirements'],['templates','Requirement templates']].map(([id,label])=>`<button type="button" role="tab" aria-selected="${state.view===id}" data-ft-action="view" data-ft-id="${id}">${label}</button>`).join('')}</div>`;
@@ -154,7 +207,7 @@
   }
   function matchingSpools() {
     const q=state.query.toLowerCase().trim();
-    return arr(state.overview?.spools).filter(s=>!q||[s.item_id,s.description,s.assembly_id,s.project_name,s.subproject_name,s.drawing_revision,s.drawing].some(x=>String(x||'').toLowerCase().includes(q)));
+    return arr(state.overview?.spools).filter(s=>(state.view!=='spools'||!state.processFilter||processKey(s.production_process)===state.processFilter)&&(!q||[s.item_id,s.description,s.assembly_id,s.project_name,s.subproject_name,s.drawing_revision,s.drawing,s.production_process?.current?.process_name].some(x=>String(x||'').toLowerCase().includes(q))));
   }
   function summaryFrom(spools) {
     return spools.reduce((m,s)=>{m.spools++;m.welds_planned+=number(s.planned_welds);m.production_complete+=number(s.production_complete);m.qa_accepted+=number(s.qa_accepted);m.ready_to_release+=s.ready_to_release&&!s.released?1:0;m.released+=s.released?1:0;return m;},{spools:0,welds_planned:0,production_complete:0,qa_accepted:0,ready_to_release:0,released:0});
@@ -175,12 +228,14 @@
     node('trackingContent').innerHTML=html;
     node('trackingContent').setAttribute('aria-busy','false');
     wireFilters();
+    startProcessClock();
   }
   function wireFilters() {
-    const project=node('ftProjectFilter'), subproject=node('ftSubprojectFilter'), search=node('ftSearch');
+    const project=node('ftProjectFilter'), subproject=node('ftSubprojectFilter'), search=node('ftSearch'), process=node('ftProcessFilter');
     if(project) project.onchange=async()=>{state.project=project.value;state.subproject='';await load()};
     if(subproject) subproject.onchange=async()=>{state.subproject=subproject.value;if(state.subproject&&!state.project){const s=arr(state.overview.subprojects).find(x=>x.id===state.subproject);if(s)state.project=s.project_id}await load()};
     if(search) search.oninput=()=>{state.query=search.value;const start=search.selectionStart,end=search.selectionEnd;render();node('ftSearch').focus();node('ftSearch').setSelectionRange(start,end)};
+    if(process)process.onchange=()=>{state.processFilter=process.value;render()};
   }
   function renderOverview() {
     const spools=matchingSpools(), data=state.overview;
@@ -198,9 +253,13 @@
     else html+=`<div class="card"><div class="ft-section-heading"><h2>Spools needing attention</h2>${btn('view','All spools','spools','ft-link')}</div>${spoolTable(spools.filter(s=>arr(s.blockers).length&&!s.released).slice(0,10))}</div>`;
     return html;
   }
+  function renderProcessCell(process) {
+    if(!process?.current)return processBadge(process?.status||'not_started');
+    return `<strong>${esc(process.current.process_name)}</strong>${small(processStatusNames[process.status]||process.status)}${clockValue(process,process.current.elapsed_seconds,'elapsed_seconds')}`;
+  }
   function spoolTable(spools) {
     if(!spools.length) return '<p class="muted">No spools with outstanding blockers in this view.</p>';
-    return wrap(`<table class="ft-table"><thead><tr><th>Spool / item</th><th>Work package</th><th>Production</th><th>Weld QA</th><th>Next blocker</th><th>Release / target</th></tr></thead><tbody>${spools.map(s=>`<tr><td>${btn('open-spool',s.item_id,s.item_id,'ft-link ft-spool-id')}${small(s.description||'')}${s.assembly_id?small('Assembly: '+s.assembly_id):''}</td><td>${esc(s.project_name||s.project_id||'Unassigned')}${small(s.subproject_name||s.subproject_id||'No subproject')}</td><td class="ft-num">${number(s.production_complete)} / ${number(s.planned_welds)}${small(`${number(s.welds_defined)} weld records`)}</td><td class="ft-num">${number(s.qa_accepted)} / ${number(s.planned_welds)}</td><td>${arr(s.blockers).length?esc(s.blockers[0])+' '+(s.blockers.length>1?small(`+ ${s.blockers.length-1} more checks`):''):'<span class="muted">No blocking checks</span>'}</td><td>${s.released?badge('accepted'):s.ready_to_release?'<span class="ft-tag good">Ready for release</span>':'<span class="ft-tag pending">Open</span>'}${small(s.due_date||'No target date')}</td></tr>`).join('')}</tbody></table>`);
+    return wrap(`<table class="ft-table"><thead><tr><th>Spool / item</th><th>Work package</th><th>Current process / elapsed</th><th>Production</th><th>Weld QA</th><th>Next blocker</th><th>Release / target</th></tr></thead><tbody>${spools.map(s=>`<tr><td>${btn('open-spool',s.item_id,s.item_id,'ft-link ft-spool-id')}${small(s.description||'')}${s.assembly_id?small('Assembly: '+s.assembly_id):''}</td><td>${esc(s.project_name||s.project_id||'Unassigned')}${small(s.subproject_name||s.subproject_id||'No subproject')}</td><td>${renderProcessCell(s.production_process)}</td><td class="ft-num">${number(s.production_complete)} / ${number(s.planned_welds)}${small(`${number(s.welds_defined)} weld records`)}</td><td class="ft-num">${number(s.qa_accepted)} / ${number(s.planned_welds)}</td><td>${arr(s.blockers).length?esc(s.blockers[0])+' '+(s.blockers.length>1?small(`+ ${s.blockers.length-1} more checks`):''):'<span class="muted">No blocking checks</span>'}</td><td>${s.released?badge('accepted'):s.ready_to_release?'<span class="ft-tag good">Ready for release</span>':'<span class="ft-tag pending">Open</span>'}${small(s.due_date||'No target date')}</td></tr>`).join('')}</tbody></table>`);
   }
   function renderSpoolRegister() {
     const spools=matchingSpools();
@@ -227,9 +286,36 @@
     if(!plan) return html+empty('This item has no individual weld plan','Set its project, subproject, and planned weld count. Existing custody, QR, and inspection records stay linked to this item.',manage()?btn('edit-plan','Set up individual weld tracking','','primary'):'A supervisor or administrator can set up the spool plan.');
     const summary=s.summary||{};
     html+=metrics({...summary,spools:1,welds_planned:plan.planned_welds,ready_to_release:summary.ready_to_release&&!item.released?1:0,released:item.released?1:0});
+    html+=renderProcess();
     html+=`<div class="card"><div class="ft-section-heading"><h2>Spool plan</h2>${item.released?'<span class="ft-tag good">Released · changes locked</span>':badge('open')}</div>${definitionRows([['Project',summary.project_name||plan.project_id],['Subproject',summary.subproject_name||plan.subproject_id],['Assembly',plan.assembly_id],['Drawing revision',plan.drawing_revision||item.drawing],['Target date',plan.due_date],['Location / handler',`${item.location||'—'} · ${item.handler||'—'}`]])}${plan.notes?`<p>${esc(plan.notes)}</p>`:''}${plan.zero_weld_reason?`<p class="muted">Zero-weld plan: ${esc(plan.zero_weld_reason)}</p>`:''}${arr(summary.blockers).length?`<details class="ft-fold" open><summary>${summary.blockers.length} release checks outstanding</summary><ul>${summary.blockers.map(b=>`<li>${esc(b)}</li>`).join('')}</ul></details>`:'<p class="muted">All current tracking checks are satisfied.</p>'}<div class="actions">${!item.released&&review()?btn('dimensional','Record dimensional inspection'):''}${!item.released&&review()?btn('release','Approve final release','','primary'):''}${item.released&&role()==='admin'?btn('reopen','Reopen released spool'):''}</div><p class="ft-footer-note">Final release is a quality approval. It does not record shipment or delivery.</p></div>`;
     html+=`<div class="card"><div class="ft-section-heading"><h2>Individual weld matrix</h2>${manage()&&!isLocked()?btn('new-weld','Add weld','','primary'):''}</div><p class="ft-filter-note">${arr(s.welds).length} defined / ${number(plan.planned_welds)} planned joints. Root and fill / cap records count toward one joint.</p>${renderMatrix(arr(s.welds))}</div>`;
     html+=`<div class="ft-two-col"><div class="card"><div class="ft-section-heading"><h2>Spool requirements</h2>${manage()&&!isLocked()?btn('new-requirement','Add requirement'):''}</div>${renderRequirements(arr(s.requirements))}</div><div><div class="card"><div class="ft-section-heading"><h2>Holds</h2>${holdRole()&&!isLocked()?btn('new-hold','Place hold'):''}</div>${renderHolds(arr(s.holds))}</div><div class="card"><h2>Recent tracking history</h2>${renderAudit(arr(s.history).slice(0,20))}</div></div></div>`;
+    return html;
+  }
+  function renderProcess() {
+    const process=state.spool.production_process;
+    if(!process)return '<section class="card"><h2>Production process time</h2><p class="muted">Refresh the spool to load its process timing.</p></section>';
+    const current=process.current, visits=arr(process.visits), totals=process.totals||{};
+    let actions='';
+    if(processRole()&&!isLocked()){
+      if(!current)actions=btn('process-start',visits.length?'Start another process':'Start process','','primary');
+      else actions=btn('process-move','Move to next process','','primary')+(process.status==='paused'?btn('process-resume','Resume process'):btn('process-pause','Pause / record delay'))+btn('process-finish','Finish process');
+    }
+    let html=`<section class="card ft-process-card" aria-labelledby="ftProcessHeading"><div class="ft-section-heading"><h2 id="ftProcessHeading">Production process time</h2>${processBadge(process.status)}</div>`;
+    if(current){
+      html+=`<div class="ft-process-current"><div><h3>${esc(current.process_name)}</h3><p class="muted">Started ${esc(stamp(current.started_at))} · ${esc(current.started_by)}</p></div><div class="actions">${actions}</div></div><div class="ft-process-metrics">${[['elapsed_seconds','Elapsed in this process'],['active_seconds','Running time'],['paused_seconds','Paused time']].map(([key,label])=>`<div><span>${label}</span><strong>${clockValue(process,current[key],key)}</strong></div>`).join('')}</div>`;
+    }else{
+      html+=`<div class="ft-process-current"><div><h3>${visits.length?'No process currently running':'Start timing when this spool enters a process'}</h3><p class="muted">${visits.length?'Choose the next process when work begins again.':'The first start records the time from now. Earlier production time is not estimated.'}</p></div><div class="actions">${actions}</div></div>`;
+    }
+    html+='<p class="ft-filter-note">Elapsed time includes pauses. Running time counts while the process is running; these are spool clock hours, not crew labor hours. Finish or move the process when the spool leaves it.</p>';
+    if(isLocked())html+='<p class="ft-readonly">Released spool · process timing is closed. An administrator must reopen the spool before another process can start.</p>';
+    if(visits.length){
+      html+=`<div class="ft-process-total"><strong>Total recorded process time</strong><span>${clockValue(process,totals.elapsed_seconds,'elapsed_seconds')} elapsed</span><span>${clockValue(process,totals.active_seconds,'active_seconds')} running</span><span>${clockValue(process,totals.paused_seconds,'paused_seconds')} paused</span><span>${number(totals.visits)} process visits</span></div>`;
+      html+='<h3>Time by process</h3>'+wrap(`<table class="ft-table ft-process-table"><thead><tr><th>Process</th><th>Visits</th><th>Elapsed</th><th>Running</th><th>Paused</th></tr></thead><tbody>${arr(process.by_process).map(row=>{const live=current&&(row.group_key&&current.group_key?row.group_key===current.group_key:row.process_key===current.process_key&&(row.process_key!=='custom'||String(row.process_name).toLowerCase()===String(current.process_name).toLowerCase()));return `<tr><td>${esc(row.process_name)}</td><td>${number(row.visits)}</td>${['elapsed_seconds','active_seconds','paused_seconds'].map(key=>`<td>${clockValue(process,row[key],key,live)}</td>`).join('')}</tr>`}).join('')}</tbody></table>`);
+      html+='<h3>Process visits</h3>'+wrap(`<table class="ft-table ft-process-table"><thead><tr><th>Process / status</th><th>Entered</th><th>Left</th><th>Elapsed</th><th>Running</th><th>Paused</th></tr></thead><tbody>${[...visits].reverse().map(visit=>{const live=current&&String(visit.id)===String(current.id);return `<tr><td><strong>${esc(visit.process_name)}</strong>${small(processStatusNames[visit.status]||visit.status)}</td><td>${esc(stamp(visit.started_at))}${small(visit.started_by)}</td><td>${visit.ended_at?esc(stamp(visit.ended_at))+small([visit.ended_by,visit.end_reason==='release'?'Final release':processEventNames[visit.end_reason]||''].filter(Boolean).join(' · ')):'<span class="muted">Still in process</span>'}</td>${['elapsed_seconds','active_seconds','paused_seconds'].map(key=>`<td>${clockValue(process,visit[key],key,live)}</td>`).join('')}</tr>`}).join('')}</tbody></table>`);
+      html+=`<details class="ft-fold"><summary>Process changes & delay reasons (${arr(process.events).length})</summary>${[...arr(process.events)].reverse().map(event=>`<div class="ft-history"><strong>${esc(processEventNames[event.event]||event.event)} · ${esc(event.process_name)}</strong>${event.notes?`<p>${esc(event.notes)}</p>`:''}<small>${esc(event.actor)} · ${esc(stamp(event.at))}</small></div>`).join('')}</details>`;
+    }
+    html+=`<p class="ft-footer-note">Timing follows the stages you record and does not grant quality acceptance. Final release closes an open process. Last synchronized ${esc(stamp(process.as_of))}; refresh to see changes recorded by another employee.</p></section>`;
     return html;
   }
   function renderMatrix(welds) {
@@ -307,10 +393,57 @@
     node('trackingDialogError').textContent='';
     node('trackingDialogSubmit').textContent=buttonLabel;
     node('trackingDialogSubmit').disabled=false;
+    state.dialogStale=false;
     state.dialogAction=action;
     node('trackingDialog').showModal();
   }
   function grid(html) {return `<div class="ft-form-grid">${html}</div>`}
+  async function processAction(action) {
+    if(state.processDialogLoading)return;
+    if(!processRole()||isLocked())throw Error('This spool is read-only for process changes.');
+    const spool=state.spool, process=spool?.production_process, sequence=state.sequence;
+    if(!process)throw Error('Refresh the spool to load its current process timing.');
+    const selecting=action==='start'||action==='move';
+    state.processDialogLoading=true;
+    try{
+      if(selecting&&!state.processCatalog)state.processCatalog=arr(await api(ROOT+'/processes'));
+      if(sequence!==state.sequence||state.spool?.item?.id!==spool.item.id)return;
+      const titles={start:'Start production process',move:'Move to next process',pause:'Pause process / record delay',resume:'Resume process',finish:'Finish process'};
+      const buttons={start:'Start process',move:'Move & start next process',pause:'Pause process',resume:'Resume process',finish:'Finish process'};
+      const notes={start:'The server records the start time when you save.',move:'Moving closes the current visit and starts the next process at the same time.',pause:'Elapsed time keeps counting during a pause. Record what is delaying the spool.',resume:'Running time resumes when you save. The recorded pause stays in the history.',finish:'Finish when the spool leaves this process. Timing stays stopped until another process starts.'};
+      let html=`<p><strong>${esc(spool.item.id)}</strong>${process.current?' · '+esc(process.current.process_name):''}</p><div class="notice">${notes[action]}</div>`;
+      if(selecting)html+=grid(field('process_key','Production process','',{required:true,options:[['','Select process'],...arr(state.processCatalog).filter(x=>action!=='move'||x.key!==process.current?.process_key).map(x=>[x.key,x.label]),['custom','Custom process']]}))+`<div id="ftProcessCustom" class="hidden">${field('process_name','Custom process name','',{maxlength:80,minlength:2,disabled:true,help:'Use the same name for repeat visits so their times add together.'})}</div>`;
+      html+=grid(field('notes',action==='pause'?'Delay reason':'Notes / work center (optional)','',{required:action==='pause',type:'textarea',full:true,maxlength:2000,help:action==='pause'?'For example: waiting for material, inspector, equipment, or another crew.':''}));
+      dialog(titles[action],html,async data=>{
+        const payload={action,expected_version:process.version,notes:String(data.notes||'').trim()};
+        if(action==='pause'&&payload.notes.length<3)throw Error('Enter a delay reason of at least 3 characters.');
+        if(selecting){
+          if(!data.process_key)throw Error('Select a production process.');
+          payload.process_key=data.process_key;
+          if(data.process_key==='custom'){
+            payload.process_name=String(data.process_name||'').trim();
+            if(payload.process_name.length<2)throw Error('Enter a custom process name of at least 2 characters.');
+          }
+        }
+        try{
+          const result=await request('/spools/'+encode(spool.item.id)+'/process','POST',payload);
+          if(state.spool?.item?.id===spool.item.id){state.spool.production_process=result;markProcessClock(result);}
+        }catch(error){
+          if(error.status===409){
+            state.dialogStale=true;state.dialogAction=null;
+            await refresh();
+            throw Error(errorText(error)+' The spool has been refreshed. Close this dialog and choose the process action again.');
+          }
+          throw error;
+        }
+      },buttons[action]);
+      if(selecting)node('ft-field-process_key').onchange=()=>{
+        const custom=node('ft-field-process_key').value==='custom', input=node('ft-field-process_name');
+        node('ftProcessCustom').classList.toggle('hidden',!custom);input.required=custom;input.disabled=!custom;
+        if(custom)input.focus();
+      };
+    }finally{state.processDialogLoading=false;}
+  }
   function newProject() {
     dialog('Create project',grid(field('id','Project ID','',{required:true,maxlength:80,help:'Use a permanent identifier for this job.'})+field('name','Project name','',{required:true,maxlength:200})+field('client','Client','',{maxlength:200})+field('description','Description','',{type:'textarea',full:true})),async data=>{const p=await request('/projects','POST',data);state.project=p.id||data.id;state.subproject='';state.view='overview';state.spool=null;state.weld=null});
   }
@@ -432,6 +565,7 @@
   }
 
   async function act(action,id) {
+    if(['process-start','process-move','process-pause','process-resume','process-finish'].includes(action))return processAction(action.slice(8));
     if(action==='overview')return open({project:state.project,subproject:state.subproject});
     if(action==='refresh'||action==='retry')return refresh();
     if(action==='view'){state.view=id;state.spool=null;state.weld=null;state.routeSpool='';state.routeWeld='';return load()}
@@ -481,11 +615,11 @@
       node('trackingDialogError').textContent=errorText(error);
       node('trackingDialogError').classList.remove('hidden');
       node('trackingDialogError').scrollIntoView({block:'nearest'});
-    }finally{node('trackingDialogSubmit').disabled=false}
+    }finally{node('trackingDialogSubmit').disabled=state.dialogStale}
   });
   node('trackingDialogClose').onclick=()=>node('trackingDialog').close();
   node('trackingDialogCancel').onclick=()=>node('trackingDialog').close();
   node('navTracking').onclick=()=>open({view:'overview'});
   node('itemTrackingBtn').onclick=()=>{if(current)open({spool:current.id})};
-  window.FabTracking={open,refresh,cancelPending(){state.sequence++}};
+  window.FabTracking={open,refresh,cancelPending(){state.sequence++;stopProcessClock()}};
 })();

@@ -37,7 +37,9 @@ TABLES = {
     "Weld work": ("tracking", "WeldWork"),
     "Weld repairs": ("tracking", "WeldRepair"),
     "Holds": ("tracking", "TrackingHold"),
+    "Process events": ("production", "SpoolProcessEvent"),
 }
+PROCESS_REPORTS = ["Process visits", "Process totals"]
 
 
 @dataclass
@@ -255,7 +257,7 @@ def test_full_database_export_requires_an_administrator(api, role, status):
 
 def test_export_contains_every_business_record_and_column(api, populated_export, tmp_path):
     response, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS]
     assert workbook.formulas == []
     for name, expected in populated_export.items():
         assert workbook.headers(name) == expected["columns"]
@@ -291,8 +293,10 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
     manifest = workbook.records("Export info")
     counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
     sources = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Source table"}
-    assert counts == {name: len(expected["rows"]) for name, expected in populated_export.items()}
-    assert sources == {name: model.__tablename__ for name, model in models().items()}
+    assert counts == {**{name: len(expected["rows"]) for name, expected in populated_export.items()},
+                      **{name: 0 for name in PROCESS_REPORTS}}
+    assert sources == {**{name: model.__tablename__ for name, model in models().items()},
+                       **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS}}
     # Downloading must not edit business records or silently log into the data snapshot.
     assert snapshot(api) == populated_export
     assert "pin_hash" not in workbook.headers("Employees")
@@ -306,11 +310,69 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
 
 def test_empty_tables_keep_their_column_headers(api):
     _, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS]
     for name, model in models().items():
         expected_columns = EMPLOYEE_COLUMNS if name == "Employees" else list(model.__table__.columns.keys())
         assert workbook.headers(name) == expected_columns
         assert len(workbook.records(name)) == (len(BADGES) if name == "Employees" else 0)
+    exporter = importlib.import_module("exports")
+    assert workbook.headers("Process visits") == list(exporter.PROCESS_VISIT_COLUMNS)
+    assert workbook.headers("Process totals") == list(exporter.PROCESS_TOTAL_COLUMNS)
+    assert all(not workbook.records(name) for name in PROCESS_REPORTS)
+
+
+def test_process_export_retains_events_and_reports_repeated_visits_and_pauses(api, monkeypatch):
+    from tracking_helpers import make_spool
+
+    production = importlib.import_module("production")
+    exporter = importlib.import_module("exports")
+    item_id = make_spool(api, item_id="000042")
+    make_spool(api, item_id="UNSTARTED-SPOOL")
+    start = dt.datetime(2024, 2, 1, 8, tzinfo=dt.timezone.utc)
+    actions = [
+        (0, {"action": "start", "process_key": "welding"}),
+        (2, {"action": "pause", "notes": "Waiting for a controlled inspection"}),
+        (3, {"action": "resume"}),
+        (4, {"action": "move", "process_key": "fit_up"}),
+        (5, {"action": "move", "process_key": "welding", "notes": "Repair visit"}),
+    ]
+    for version, (hour, action) in enumerate(actions):
+        monkeypatch.setattr(production, "utcnow", lambda hour=hour: start + dt.timedelta(hours=hour))
+        response = api.post(f"/api/tracking/spools/{item_id}/process",
+                            {**action, "expected_version": version}, role="welder")
+        assert response.status_code == 201, response.text
+    as_of = start + dt.timedelta(hours=6)
+    monkeypatch.setattr(exporter, "utcnow", lambda: as_of)
+    before = snapshot(api)
+    _, workbook = download(api)
+    assert snapshot(api) == before
+    assert len(workbook.records("Process events")) == 5
+    assert workbook.records("Process events")[1]["notes"].value == actions[1][1]["notes"]
+    visits = workbook.records("Process visits")
+    assert len(visits) == 3
+    assert [row["visit_id"].value for row in visits] == ["1", "4", "5"]
+    assert [row["elapsed_hours"].value for row in visits] == [4, 1, 1]
+    assert [row["active_hours"].value for row in visits] == [3, 1, 1]
+    assert [row["paused_hours"].value for row in visits] == [1, 0, 0]
+    assert visits[-1]["ended_at"].value is None
+    assert visits[-1]["status"].value == "running"
+    for row in visits:
+        assert row["item_id"].value == "000042" and row["item_id"].kind == "inlineStr"
+        assert row["project_id"].value == "TEST-PROJECT"
+        assert row["started_at"].style in workbook.date_styles
+        assert row["as_of"].style in workbook.date_styles
+        assert row["elapsed_seconds"].kind == "n"
+        assert row["elapsed_seconds"].value == row["active_seconds"].value + row["paused_seconds"].value
+    totals = {row["process_key"].value: row for row in workbook.records("Process totals")}
+    assert set(totals) == {"welding", "fit_up"}
+    assert totals["welding"]["visits"].value == 2
+    assert totals["welding"]["elapsed_hours"].value == 5
+    assert totals["welding"]["active_hours"].value == 4
+    assert totals["welding"]["paused_hours"].value == 1
+    assert totals["fit_up"]["elapsed_hours"].value == 1
+    manifest = workbook.records("Export info")
+    counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
+    assert counts["Process events"] == 5 and counts["Process visits"] == 3 and counts["Process totals"] == 2
 
 
 def test_long_text_and_json_overflow_can_be_reconstructed_without_loss(api):

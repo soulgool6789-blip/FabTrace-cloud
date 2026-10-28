@@ -5,17 +5,17 @@
 **Use the existing web service and its existing PostgreSQL database.** Adding project, spool, and individual-weld tracking does not require creating a second service, a second database, or a new Blueprint.
 
 1. Identify the current service's connected repository/branch and keep its existing `DATABASE_URL`, `JWT_SECRET`, public URL, and employee accounts. Make the normal database recovery point for the rollout.
-2. Update the service with the complete reviewed source. Include `main.py`, **`tracking.py`**, `init_db.py`, `requirements.txt`, **`static/index.html`**, **`static/tracking.js`**, **`static/tracking.css`**, and the existing static assets. The root `index.html` is a distribution copy; the application serves `static/index.html`.
+2. Update the service with the complete reviewed source. Include `main.py`, **`tracking.py`**, **`production.py`**, **`exports.py`**, `init_db.py`, `requirements.txt`, **`static/index.html`**, **`static/tracking.js`**, **`static/tracking.css`**, and the existing static assets. The root `index.html` is a distribution copy; the application serves `static/index.html`.
 3. Confirm the service's initialization step is **`python init_db.py`**. The supplied `render.yaml` sets this as `preDeployCommand`, but uploading a YAML file alone does not change an independently configured existing service.
 4. Run initialization before the new version accepts requests. Use the configured pre-deploy command, or a controlled manual step running the new `init_db.py` with the existing database settings. Keep the previous application serving until initialization succeeds, or use the service's maintenance procedure. Do not start the new app against an uninitialized schema.
 5. Deploy with the existing start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
-6. Check `/healthz`. It must return `status: "ok"`, the tracking application version, and the deployment commit when Render supplies it. Health checks now confirm the tracking plan table is available as well as the database connection.
+6. Check `/healthz`. It must return `status: "ok"`, the current application version, and the deployment commit when Render supplies it. Health checks confirm the tracking plan and production process event tables are available as well as the database connection.
 7. Sign in with an existing employee account. Confirm existing item, QR, custody, and inspection records are still available. The navigation should include **Projects & welds**.
 8. Follow [TRACKING_GUIDE.md](TRACKING_GUIDE.md) to create a project and explicitly enroll an intended spool. New projects and accepted welds are not seeded by deployment.
 
 ### What initialization changes
 
-`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on six history tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool enrollment occurs.
+`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on seven history tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool enrollment or process-time history is invented.
 
 `create_all()` does not add columns to tables that already exist. Future column changes require an explicit migration. If upgrading a substantially older installation, compare its actual schema with the source before deployment; the earlier Google part-number migration is separate from this tracking addition.
 
