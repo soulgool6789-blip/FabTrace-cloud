@@ -35,7 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.28-tracking.1'
+APP_VERSION='2026.10.28-export.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -474,4 +474,7 @@ def ui():
 # are defined. init_db imports this module, so all new tables join Base.metadata.
 from tracking import router as tracking_router, SpoolPlan, is_tracked, tracking_release_errors, tracking_summary, reopen_tracked
 app.include_router(tracking_router)
+
+from exports import router as exports_router
+app.include_router(exports_router)
 
