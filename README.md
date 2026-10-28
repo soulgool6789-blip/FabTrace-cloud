@@ -13,6 +13,7 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 - Immutable requirement-template revisions for newly created welds. Core material, procedure/qualification, fit-up, visual, NDE-plan, and final-QA controls remain present.
 - Separate production-complete, weld-QA-accepted, ready-for-release, and final-release counters. Final release is not shipment.
 - Spool process timers with start, move, pause, resume and finish controls; current-process age, visit history, repeat-visit totals, and Excel timing reports.
+- A numbered **Process flow** workspace following CLM's 24-step material-to-shipment chart, with linked components/spools/assemblies, scanned or entered identity checks, custody handoffs, QA gates, exception/rework returns, and separate shipment and delivery confirmation.
 
 Existing item registration, bulk CSV import, employee QR badges, item QR labels, and custody handoffs remain available. Item types include **Part**, **Spool**, and **Assembly**.
 
@@ -24,13 +25,27 @@ Enrollment is explicit. It preserves historical records, establishes the planned
 
 See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
 
+## Follow the CLM process chart
+
+Open **Process flow** in the navigation or from an item's record. An administrator or supervisor starts its route: individual components use steps 1–8, tracked spools use 9–16, and tracked assemblies use 17–24. The full map retains all 24 numbered steps, while each physical item's traveler highlights its own current, completed, pending and unrecorded steps. Parent/child links let staff follow the work across those records.
+
+Declare the required component or child-spool count, link the actual item IDs, and complete each current step's checklist and required scan/entered ID, receiving badge, location or document reference. The app records the employee and time. Spools and assemblies need their existing project/weld plans first. An assembly cannot advance with missing or unreleased child spools, or unresolved issues in their component records.
+
+Incoming verification and the four QA checkpoints have controlled failure returns. A failed inspection creates an exception, sends the traveler to its selected rework step and preserves earlier attempts. Passing the failed checkpoint again requires current quality records and an explicit resolution. Individual weld operations and acceptance still belong to **Projects & welds**. Checkbox confirmations cannot substitute for them.
+
+Numbered steps drive the existing process clock automatically. Staff can pause/resume for delays; moving to another numbered step requires completing the current one. Quality release occurs at spool QA step 15 or assembly final QA step 22; subsequent handoff and shipping steps remain available. Step 24 records shipment with a carrier, reference and destination. **Confirm delivery** separately records the receipt reference and recipient.
+
+For work already underway, a supervisor can select the current starting step and record its existing-work reference and reason. Earlier steps remain **Not recorded**. A spool using existing controlled material records instead of newly linked component travelers needs an explicit material reference. No historical completion or timing is invented. Required-child counts can be corrected with a reference and reason while the traveler is still at its material-selection/collection stage.
+
 ## Track time in each production process
 
 Open **Projects & welds**, choose a spool in the **Spool register**, and use its **Production process** card. Select a process and start its timer. **Move to process** closes the current visit and starts the next one at the same time. **Pause** records a delay reason; **Resume** continues running time. **Finish process** closes the visit when no new process should start yet.
 
 Choose material preparation, cutting/beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA, ready for dispatch, or a custom process. Repeated visits remain separate in history and are combined in totals for that process. Any active employee can record timing; the employee badge and server timestamp are retained for every change.
 
-Elapsed time includes both running and paused time. These are calendar durations for a spool, not employee labor hours or shift-adjusted hours. Timers keep counting across logout and overnight. Timing starts when staff record the first start; earlier work and gaps after finishing are not inferred. Quality holds and timer pauses are separate actions. Finishing a process does not complete welds or grant quality approval. Final release automatically closes an open timer; reopening does not restart it.
+Elapsed time includes both running and paused time. These are calendar durations for an item, not employee labor hours or shift-adjusted hours. Timers keep counting across logout and overnight. Timing starts when staff record the first start; earlier work and gaps after finishing are not inferred. Quality holds and timer pauses are separate actions. Finishing a manually selected process does not complete welds or grant quality approval.
+
+For items using manual process timing, final release closes the timer and administrative reopening leaves it stopped. A numbered CLM traveler instead starts the next required post-QA handoff/shipping step after release, and a permitted administrative reopen returns it to the relevant QA checkpoint. Its numbered workflow owns stage transitions; manual pause/resume remains available.
 
 ## Export everything to Excel
 
@@ -39,6 +54,8 @@ Sign in as an **administrator** and click **Export Excel** in the top navigation
 The workbook includes the current business records and their histories on separate worksheets, plus export information. It excludes private PINs and PIN hashes. Evidence/report references are included; linked report files are not embedded. This is a snapshot for review and analysis: editing the workbook does not update FabTrace, and the workbook is not a database restore format. Keep database backups separately.
 
 **Process events** contains every timing action. **Process visits** contains each visit's start/end, actor, and elapsed/running/paused time. **Process totals** combines repeated visits by spool and process. Both reports include project and subproject IDs and numeric seconds/decimal hours for Excel analysis. Open visits are calculated as of their report timestamp. Spools without a recorded start have no fabricated timing rows.
+
+**Flow plans**, **Flow events**, **Flow exceptions**, and **Component links** preserve numbered travelers, checklists, custody details, rework, parent/child identities, and shipment/receipt records. **Flow steps** provides the current 24-step definition lookup. Historical flow events also retain the definition version and step/checklist text recorded at the time.
 
 ## Run locally
 
@@ -78,7 +95,7 @@ Open `http://localhost:8000`, sign in with the configured bootstrap account, and
 
 Use the current web service and its current PostgreSQL database. This feature update does not require a new service, database, or Blueprint.
 
-Deploy the complete source, including `tracking.py`, `production.py`, `exports.py`, `static/tracking.js`, and `static/tracking.css`. Run `python init_db.py` against the existing database before the new application receives traffic. The supplied `render.yaml` uses this as its `preDeployCommand`; an existing service must actually have that command configured, or initialization must run as a controlled manual rollout step.
+Deploy the complete source, including `tracking.py`, `production.py`, `flow.py`, `exports.py`, and the tracking/flow JavaScript and CSS under `static/`. Run `python init_db.py` against the existing database before the new application receives traffic. The supplied `render.yaml` uses this as its `preDeployCommand`; an existing service must actually have that command configured, or initialization must run as a controlled manual rollout step.
 
 Initialization creates missing tables, installs history-protection triggers, and skips account bootstrap when employees already exist. PostgreSQL initialization runs in one transaction under an advisory lock. It does not seed production projects or alter existing item rows. `create_all()` does not add future columns to existing tables; later schema changes need explicit migrations.
 
@@ -92,6 +109,7 @@ python -m pytest tests -q
 node tests/tracking_ui_smoke.cjs
 node tests/export_ui_smoke.cjs
 node tests/process_ui_smoke.cjs
+node tests/flow_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.
@@ -108,6 +126,6 @@ See the developer guide before running that local check.
 
 Evidence is a controlled report/reference or HTTP(S) link with notes; this version does not upload or store report files. Procedure and qualification applicability are reviewed by an authorized inspector using that evidence. The application does not calculate qualification ranges or choose governing acceptance criteria.
 
-Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. No universal NDE percentage is assumed. Pressure-test packages and shipment/delivery records are not modeled. Optional assembly links organize spools; releasing an assembly record checks its own welds and requirements, not the release of every linked child spool.
+Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. No universal NDE percentage is assumed. Pressure-test packages are not modeled. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Assemblies outside that workflow retain the original behavior: their release checks their own welds and requirements. Document references identify controlled files; the app does not generate carrier labels or archive the referenced report/shipping files.
 
 Badge/PIN sign-in and audit records are the current controls. PostgreSQL history triggers reject routine updates and deletes, but do not protect against a database owner deliberately removing those controls. Validate configured work and acceptance rules with the people responsible for the job before using them for fabrication release. This application is not a certification of compliance.

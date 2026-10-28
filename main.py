@@ -35,7 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.28-process.1'
+APP_VERSION='2026.10.28-flow.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -144,6 +144,10 @@ def item_dict(s,r):
     d['qr_url']=phone_link('item',r.id) if phone_qr_ready() else None
     d['tracking_enabled']=is_tracked(s,r)
     d['tracking']=tracking_summary(s,r) if d['tracking_enabled'] else None
+    flow=s.get(FlowPlan,r.id)
+    d['flow_enabled']=flow is not None
+    d['flow_step']=flow.current_step if flow else None
+    d['flow_status']=flow.status if flow else None
     return d
 
 @app.middleware('http')
@@ -410,9 +414,10 @@ def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(a
     audit(s,r.id,u.badge,'REWORK_CLOSED',{'rework_id':rework_id,'notes':data.notes});s.commit();return item_dict(s,r)
 class ReleaseIn(BaseModel):
     reference:str=Field(min_length=3,max_length=250)
-@app.post('/api/items/{item_id}/release')
-def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
+
+def finalize_release(s,r,actor,reference,at=None,flow_step=None):
+    """Validate and record QA release inside the caller's locked transaction."""
+    require_unreleased(r)
     if is_tracked(s,r):
         reasons=tracking_release_errors(s,r)
     else:
@@ -424,17 +429,30 @@ def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depend
         if not r.dimension_at or not r.weld_at:reasons.append('Inspection timestamps missing')
         if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
         if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
+    reasons.extend(flow_release_errors(s,r,approving_step=flow_step))
     if reasons:raise HTTPException(409,{'release_blockers':reasons})
-    r.released=True;r.released_at=utcnow();r.released_by=u.badge
-    finish_on_release(s,r,u.badge,r.released_at)
-    audit(s,r.id,u.badge,'FINAL_RELEASE',{'reference':data.reference});s.commit();return item_dict(s,r)
+    r.released=True;r.released_at=at or utcnow();r.released_by=actor
+    finish_on_release(s,r,actor,r.released_at)
+    audit(s,r.id,actor,'FINAL_RELEASE',{'reference':reference})
+
+@app.post('/api/items/{item_id}/release')
+def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'inspector','admin')
+    lock_flow_topology(s)
+    r=lock_item(s,item_id)
+    finalize_release(s,r,u.badge,data.reference)
+    s.commit();return item_dict(s,r)
 @app.post('/api/items/{item_id}/reopen')
 def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'admin');r=lock_item(s,item_id)
+    permit(u,'admin')
+    lock_flow_topology(s)
+    r=lock_item(s,item_id)
     if not r.released:raise HTTPException(409,'Not released')
+    guard_flow_reopen(s,r)
     r.released=False;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.released_at=None;r.released_by=None
     if is_tracked(s,r):
         reopen_tracked(s,r,u.badge,'Administrative reopen; new requirement reviews required')
+    on_flow_item_reopened(s,r,u.badge,utcnow())
     audit(s,r.id,u.badge,'REOPENED',{'reason':'Administrative reopen; new inspections required'});s.commit();return item_dict(s,r)
 @app.get('/api/items/{item_id}/custody')
 def item_custody(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -466,6 +484,7 @@ def health(s:Session=Depends(db)):
     # A database connection alone is insufficient if the tracking migration was skipped.
     s.execute(select(SpoolPlan.item_id).limit(1))
     s.execute(select(SpoolProcessEvent.id).limit(1))
+    s.execute(select(FlowPlan.item_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -479,6 +498,11 @@ app.include_router(tracking_router)
 
 from production import router as production_router, SpoolProcessEvent, finish_on_release
 app.include_router(production_router)
+
+from flow import (router as flow_router, FlowPlan, flow_release_errors,
+                  lock_topology as lock_flow_topology, guard_reopen as guard_flow_reopen,
+                  on_item_reopened as on_flow_item_reopened)
+app.include_router(flow_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)

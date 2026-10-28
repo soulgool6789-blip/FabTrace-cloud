@@ -231,11 +231,19 @@ def process_snapshot(s, item_id, as_of=None, events=None):
     if events is None:
         events = s.scalars(select(SpoolProcessEvent).where(
             SpoolProcessEvent.item_id == item_id).order_by(SpoolProcessEvent.sequence)).all()
-    return summarize_process_events(item_id, events, as_of if as_of is not None else utcnow())
+    snapshot = summarize_process_events(item_id, events, as_of if as_of is not None else utcnow())
+    if s is not None:
+        from flow import FlowPlan
+        flow = s.get(FlowPlan, item_id)
+        snapshot.update(flow_managed=flow is not None,
+                        flow_step=flow.current_step if flow else None,
+                        flow_status=flow.status if flow else None)
+    return snapshot
 
 
 def compact_process_summary(snapshot):
-    return {key: snapshot[key] for key in ('item_id', 'version', 'as_of', 'status', 'current', 'totals')}
+    return {key: snapshot.get(key) for key in ('item_id', 'version', 'as_of', 'status', 'current', 'totals',
+                                              'flow_managed', 'flow_step', 'flow_status')}
 
 
 def _append_event(s, item, actor, event, process_key, process_name, notes, at, version):
@@ -269,6 +277,37 @@ def finish_on_release(s, item, actor, at):
         'Process timing closed automatically by final release.', at, snapshot['version'])
 
 
+def sync_flow_process(s, item, actor, step, at, notes=''):
+    """Use the existing process clock for each numbered traveler step.
+
+    Caller holds the topology and Item locks and owns the transaction. A return
+    to the same numbered step is a new visit, preserving the earlier attempt.
+    Quality release may already have closed a clock; the next custody/shipping
+    step can then start without reopening the accepted fabrication record.
+    """
+    at = _utc(at)
+    snapshot = process_snapshot(s, item.id, as_of=at)
+    _check_clock(snapshot, at)
+    current = snapshot['current']
+    if step is None:
+        if current is not None:
+            _append_event(s, item, actor, 'finish', current['process_key'], current['process_name'],
+                          notes or 'Numbered process route completed.', at, snapshot['version'])
+        return
+    key = f"clm_{step['number']:02d}"
+    name = f"{step['number']}. {step['title']}"
+    _append_event(s, item, actor, 'move' if current else 'start', key, name,
+                  notes or 'Entered numbered process step.', at, snapshot['version'])
+
+
+def _timing_flow(s, item):
+    from flow import FlowPlan
+    flow = s.get(FlowPlan, item.id)
+    if flow is None:
+        _require_plan(s, item)
+    return flow
+
+
 @router.get('/processes')
 def get_processes(u: Employee = Depends(auth)):
     return list(PROCESS_CATALOG)
@@ -279,16 +318,24 @@ def get_process(item_id: str, u: Employee = Depends(auth), s: Session = Depends(
     item = s.get(Item, item_id)
     if item is None:
         raise HTTPException(404, 'Item not found')
-    _require_plan(s, item)
+    _timing_flow(s, item)
     return process_snapshot(s, item_id)
 
 
 @router.post('/spools/{item_id}/process', status_code=201)
 def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     permit(u, *ROLES)
+    from flow import lock_topology
+    lock_topology(s)
     item = lock_item(s, item_id)
-    require_unreleased(item)
-    _require_plan(s, item)
+    flow = _timing_flow(s, item)
+    if flow is not None:
+        if data.action not in ('pause', 'resume') or flow.status != 'active':
+            raise HTTPException(409, 'Use Process flow to advance this numbered traveler. Its timer only supports pause and resume here.')
+        if item.released and flow.current_step not in (16, 23, 24):
+            require_unreleased(item)
+    else:
+        require_unreleased(item)
     at = _utc(utcnow())
     snapshot = process_snapshot(s, item_id, as_of=at)
     if data.expected_version != snapshot['version']:

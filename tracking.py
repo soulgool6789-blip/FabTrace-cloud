@@ -955,6 +955,8 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     values['due_date'] = data.due_date.isoformat() if data.due_date else None
     plan = s.get(SpoolPlan, item.id)
     before = asdict(plan, PLAN_KEYS) if plan else None
+    from flow import guard_plan_change
+    guard_plan_change(s, item, plan, values)
     if plan:
         _version(plan, data.expected_version)
         changed_scope = any(getattr(plan, key) != values[key] for key in (
@@ -1050,7 +1052,10 @@ def update_weld(weld_id: str, data: WeldUpdate, u: Employee = Depends(auth), s: 
 @router.post('/welds/{weld_id}/work')
 def record_work(weld_id: str, data: WorkIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     permit(u, *(['handler', 'welder', 'supervisor', 'admin'] if data.operation == 'fitup' else ['welder', 'supervisor', 'admin']))
+    from flow import lock_topology, guard_weld_operation
+    lock_topology(s)
     item, weld = _lock_weld(s, weld_id)
+    guard_weld_operation(s, item, data.operation)
     holds = [h for h in _holds(s, item.id, all_scopes=True)
              if h.closed_at is None and h.weld_id in (None, weld.id)]
     if item.on_hold or holds:

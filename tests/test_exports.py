@@ -38,8 +38,13 @@ TABLES = {
     "Weld repairs": ("tracking", "WeldRepair"),
     "Holds": ("tracking", "TrackingHold"),
     "Process events": ("production", "SpoolProcessEvent"),
+    "Flow plans": ("flow", "FlowPlan"),
+    "Flow events": ("flow", "FlowEvent"),
+    "Flow exceptions": ("flow", "FlowException"),
+    "Component links": ("flow", "ComponentLink"),
 }
 PROCESS_REPORTS = ["Process visits", "Process totals"]
+FLOW_DEFINITIONS = ["Flow steps"]
 
 
 @dataclass
@@ -257,7 +262,7 @@ def test_full_database_export_requires_an_administrator(api, role, status):
 
 def test_export_contains_every_business_record_and_column(api, populated_export, tmp_path):
     response, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS]
     assert workbook.formulas == []
     for name, expected in populated_export.items():
         assert workbook.headers(name) == expected["columns"]
@@ -294,9 +299,10 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
     counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
     sources = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Source table"}
     assert counts == {**{name: len(expected["rows"]) for name, expected in populated_export.items()},
-                      **{name: 0 for name in PROCESS_REPORTS}}
+                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24}
     assert sources == {**{name: model.__tablename__ for name, model in models().items()},
-                       **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS}}
+                       **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS},
+                       "Flow steps": "definition:CLM-process-flow"}
     # Downloading must not edit business records or silently log into the data snapshot.
     assert snapshot(api) == populated_export
     assert "pin_hash" not in workbook.headers("Employees")
@@ -310,7 +316,7 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
 
 def test_empty_tables_keep_their_column_headers(api):
     _, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS]
     for name, model in models().items():
         expected_columns = EMPLOYEE_COLUMNS if name == "Employees" else list(model.__table__.columns.keys())
         assert workbook.headers(name) == expected_columns
@@ -319,6 +325,8 @@ def test_empty_tables_keep_their_column_headers(api):
     assert workbook.headers("Process visits") == list(exporter.PROCESS_VISIT_COLUMNS)
     assert workbook.headers("Process totals") == list(exporter.PROCESS_TOTAL_COLUMNS)
     assert all(not workbook.records(name) for name in PROCESS_REPORTS)
+    assert workbook.headers("Flow steps") == list(exporter.FLOW_STEP_COLUMNS)
+    assert [row["number"].value for row in workbook.records("Flow steps")] == list(range(1, 25))
 
 
 def test_process_export_retains_events_and_reports_repeated_visits_and_pauses(api, monkeypatch):
@@ -373,6 +381,68 @@ def test_process_export_retains_events_and_reports_repeated_visits_and_pauses(ap
     manifest = workbook.records("Export info")
     counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
     assert counts["Process events"] == 5 and counts["Process visits"] == 3 and counts["Process totals"] == 2
+
+
+def test_flow_export_preserves_checklists_exceptions_links_and_component_project(api):
+    from tracking_helpers import make_spool
+
+    parent_id = make_spool(api, item_id="FLOW-EXPORT-SPOOL")
+    component_id = "000007-COMP"
+    response = api.post("/api/items", {
+        "id": component_id, "description": "Export component", "kind": "Part", "project": "TEST-PROJECT",
+        "location": "Receiving", "handler": BADGES["handler"], "welds_required": 0,
+    })
+    assert response.status_code == 201, response.text
+    path = f"/api/flow/items/{component_id}"
+    started = api.post(path + "/start", {"route": "component"})
+    assert started.status_code == 201, started.text
+    linked = api.post(path + "/assign-component", {
+        "expected_version": started.json()["flow"]["version"], "spool_id": parent_id,
+        "reference": "BOM-0007", "notes": "Controlled component assignment",
+    })
+    assert linked.status_code == 201, linked.text
+    current = linked.json()["flow"]
+    received = api.post(path + "/advance", {
+        "expected_version": current["version"],
+        "confirmations": [row["id"] for row in current["current"]["checks"]],
+        "scanned_item_id": component_id, "reference": "PO-0007", "notes": "Receipt α < & >",
+    }, role="handler")
+    assert received.status_code == 200, received.text
+    failed = api.post(path + "/fail", {
+        "expected_version": received.json()["flow"]["version"],
+        "reason": "MTR and material dimensions need supplier review", "reference": "NCR-0007",
+    }, role="inspector")
+    assert failed.status_code == 200, failed.text
+    before = snapshot(api)
+    _, workbook = download(api)
+    assert snapshot(api) == before
+    assert workbook.formulas == []
+    plan = workbook.records("Flow plans")[0]
+    assert plan["item_id"].value == component_id
+    assert plan["route"].value == "component" and plan["current_step"].value == 2
+    assert plan["version"].value == 4 and plan["status"].value == "active"
+    assert plan["shipped_at"].value is None and plan["delivered_at"].value is None
+    events = workbook.records("Flow events")
+    assert len(events) == 4 and [row["sequence"].value for row in events] == [1, 2, 3, 4]
+    receipt = next(row for row in events if row["action"].value == "advance")
+    data = json.loads(receipt["data"].value)
+    assert data["confirmations"] == [row["id"] for row in current["current"]["checks"]]
+    assert data["definition_version"] == "CLM-24-v1"
+    assert data["step_definition"]["number"] == 1
+    assert receipt["notes"].value == "Receipt α < & >"
+    exception = workbook.records("Flow exceptions")[0]
+    assert exception["reference"].value == "NCR-0007"
+    assert exception["step"].value == exception["return_step"].value == 2
+    assert exception["closed_at"].value is None
+    link = workbook.records("Component links")[0]
+    assert link["component_id"].value == component_id and link["spool_id"].value == parent_id
+    visits = workbook.records("Process visits")
+    assert len(visits) == 3
+    assert all(row["item_id"].value == component_id and row["project_id"].value == "TEST-PROJECT" for row in visits)
+    assert [row["process_key"].value for row in visits] == ["clm_01", "clm_02", "clm_02"]
+    assert len(workbook.records("Flow steps")) == 24
+    shipping = workbook.records("Flow steps")[22]
+    assert shipping["number"].value == 23 and shipping["requires_reference"].value is True
 
 
 def test_long_text_and_json_overflow_can_be_reconstructed_without_loss(api):
