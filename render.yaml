@@ -1,0 +1,34 @@
+# FabTrace: paid pilot deployment with persistent managed PostgreSQL.
+# Render estimates its own charges before creation; review before approval.
+services:
+  - type: web
+    name: fabtrace-cloud
+    runtime: python
+    region: ohio
+    plan: 0.5c-512mb
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python init_db.py
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fabtrace-postgres
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: BOOTSTRAP_BADGE
+        sync: false
+      - key: BOOTSTRAP_PIN
+        sync: false
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+
+databases:
+  - name: fabtrace-postgres
+    databaseName: fabtrace
+    user: fabtrace
+    region: ohio
+    plan: 0.1c-256mb

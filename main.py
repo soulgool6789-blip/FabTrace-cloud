@@ -1,0 +1,451 @@
+import os, io, time, secrets, datetime as dt
+from contextlib import contextmanager
+from typing import Literal
+from urllib.parse import urlencode, urlparse
+import jwt, qrcode
+from fastapi import FastAPI, HTTPException, Depends, Request, Response
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, select, func, text
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
+from pwdlib import PasswordHash
+
+DATABASE_URL=os.environ.get('DATABASE_URL','')
+# Render PostgreSQL supplies postgresql://, but SQLAlchemy must use the
+# psycopg v3 driver installed by requirements.txt.
+for prefix in ('postgres://', 'postgresql://'):
+    if DATABASE_URL.startswith(prefix):
+        DATABASE_URL='postgresql+psycopg://'+DATABASE_URL[len(prefix):]
+        break
+JWT_SECRET=os.environ.get('JWT_SECRET','')
+PUBLIC_BASE_URL=(os.environ.get('PUBLIC_BASE_URL') or os.environ.get('RENDER_EXTERNAL_URL') or 'http://localhost:8000').rstrip('/')
+def phone_qr_ready():
+    """Only print QR links when the service has a real public HTTPS URL."""
+    parsed=urlparse(PUBLIC_BASE_URL)
+    return (parsed.scheme=='https' and bool(parsed.hostname) and parsed.hostname not in ('localhost','127.0.0.1','0.0.0.0') and not parsed.username and not parsed.password and parsed.path in ('','/') and not parsed.query and not parsed.fragment)
+def require_phone_qr_ready():
+    if not phone_qr_ready():
+        raise HTTPException(503,'QR labels disabled: configure PUBLIC_BASE_URL to the deployed public HTTPS web address before printing labels.')
+def phone_link(kind,code):
+    return PUBLIC_BASE_URL+'/?'+urlencode({kind:code})
+if not DATABASE_URL: raise RuntimeError('DATABASE_URL environment variable required')
+if len(JWT_SECRET)<32: raise RuntimeError('JWT_SECRET must be at least 32 characters')
+engine=create_engine(DATABASE_URL,pool_pre_ping=True)
+SessionLocal=sessionmaker(engine,expire_on_commit=False)
+password_hash=PasswordHash.recommended()
+UTC=dt.timezone.utc
+
+def utcnow(): return dt.datetime.now(UTC)
+class Base(DeclarativeBase): pass
+class Employee(Base):
+    __tablename__='employees'
+    badge=Column(String(80),primary_key=True)
+    name=Column(String(160),nullable=False)
+    pin_hash=Column(Text,nullable=False)
+    role=Column(String(30),nullable=False)
+    active=Column(Boolean,default=True,nullable=False)
+    created_at=Column(DateTime(timezone=True),default=utcnow,nullable=False)
+class Item(Base):
+    __tablename__='items'
+    id=Column(String(60),primary_key=True)
+    description=Column(String(300),nullable=False)
+    kind=Column(String(25),nullable=False,default='Part')
+    project=Column(String(120),default='')
+    google_part_number=Column(String(160),nullable=False,default='',index=True)
+    drawing=Column(String(160),default='')
+    location=Column(String(160),nullable=False)
+    handler=Column(String(80),ForeignKey('employees.badge'),nullable=False)
+    welds_required=Column(Integer,default=0,nullable=False)
+    welds_done=Column(Integer,default=0,nullable=False)
+    dimensional=Column(String(20),default='Not started',nullable=False)
+    weld=Column(String(20),default='Not started',nullable=False)
+    dimension_at=Column(DateTime(timezone=True))
+    weld_at=Column(DateTime(timezone=True))
+    last_work_at=Column(DateTime(timezone=True))
+    reinspection_due=Column(Boolean,default=False,nullable=False)
+    on_hold=Column(Boolean,default=False,nullable=False)
+    released=Column(Boolean,default=False,nullable=False)
+    released_at=Column(DateTime(timezone=True))
+    released_by=Column(String(80))
+    created_at=Column(DateTime(timezone=True),default=utcnow,nullable=False)
+    updated_at=Column(DateTime(timezone=True),default=utcnow,onupdate=utcnow,nullable=False)
+class Inspection(Base):
+    __tablename__='inspections'
+    id=Column(Integer,primary_key=True,autoincrement=True)
+    item_id=Column(String(60),ForeignKey('items.id'),nullable=False,index=True)
+    kind=Column(String(20),nullable=False)
+    result=Column(String(20),nullable=False)
+    inspector=Column(String(80),ForeignKey('employees.badge'),nullable=False)
+    report=Column(String(200),nullable=False)
+    measurements=Column(Text,nullable=False)
+    at=Column(DateTime(timezone=True),default=utcnow,nullable=False)
+class Rework(Base):
+    __tablename__='reworks'
+    id=Column(Integer,primary_key=True,autoincrement=True)
+    item_id=Column(String(60),ForeignKey('items.id'),nullable=False,index=True)
+    kind=Column(String(50),nullable=False)
+    reason=Column(Text,nullable=False)
+    assigned=Column(String(80),nullable=False)
+    opened_at=Column(DateTime(timezone=True),default=utcnow,nullable=False)
+    closed_at=Column(DateTime(timezone=True))
+    closed_by=Column(String(80))
+    close_notes=Column(Text)
+class Audit(Base):
+    __tablename__='audit_events'
+    id=Column(Integer,primary_key=True,autoincrement=True)
+    item_id=Column(String(60),index=True)
+    actor=Column(String(80),nullable=False)
+    event=Column(String(80),nullable=False)
+    details=Column(JSON,nullable=False)
+    at=Column(DateTime(timezone=True),default=utcnow,nullable=False)
+
+app=FastAPI(title='FabTrace Cloud',docs_url=None,redoc_url=None)
+app.mount('/static',StaticFiles(directory=os.path.join(os.path.dirname(__file__),'static')),name='static')
+failed={}
+
+def db():
+    with SessionLocal() as s: yield s
+
+def audit(s,item_id,actor,event,details):
+    s.add(Audit(item_id=item_id,actor=actor,event=event,details=details))
+
+def auth(request:Request,s:Session=Depends(db)):
+    token=request.cookies.get('fabtrace_session')
+    if not token: raise HTTPException(401,'Badge login required')
+    try:
+        payload=jwt.decode(token,JWT_SECRET,algorithms=['HS256'],options={'require':['exp','sub']})
+    except jwt.InvalidTokenError: raise HTTPException(401,'Session expired or invalid')
+    user=s.get(Employee,payload['sub'])
+    if not user or not user.active: raise HTTPException(401,'Inactive employee')
+    return user
+
+def permit(user,*roles):
+    if user.role not in roles: raise HTTPException(403,'Your employee role cannot perform this action')
+
+def lock_item(s,item_id):
+    obj=s.scalar(select(Item).where(Item.id==item_id).with_for_update())
+    if not obj: raise HTTPException(404,'Item not found')
+    return obj
+
+def require_unreleased(r):
+    if r.released: raise HTTPException(409,'Item already released; admin must reopen first')
+
+def asdict(row,keys):
+    def fmt(v): return v.isoformat() if isinstance(v,dt.datetime) else v
+    return {k:fmt(getattr(row,k)) for k in keys}
+ITEM_KEYS='id description kind project google_part_number drawing location handler welds_required welds_done dimensional weld dimension_at weld_at last_work_at reinspection_due on_hold released released_at released_by created_at updated_at'.split()
+
+def item_dict(s,r):
+    d=asdict(r,ITEM_KEYS)
+    d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
+    d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
+    d['qr_url']=phone_link('item',r.id) if phone_qr_ready() else None
+    return d
+
+@app.middleware('http')
+async def origin_check(request:Request,call_next):
+    if request.method in ('POST','PUT','PATCH','DELETE'):
+        origin=request.headers.get('origin')
+        # Reject cross-site browser requests; for scripted clients use an authenticated token instead of cookies.
+        if origin and origin.rstrip('/') != str(request.base_url).rstrip('/') and origin.rstrip('/') != PUBLIC_BASE_URL:
+            return Response('Forbidden origin',status_code=403)
+    result=await call_next(request)
+    result.headers['X-Content-Type-Options']='nosniff'
+    result.headers['X-Frame-Options']='DENY'
+    result.headers['Referrer-Policy']='no-referrer'
+    result.headers['Cache-Control']='no-store'
+    return result
+
+class Login(BaseModel):
+    badge:str=Field(min_length=1,max_length=80)
+    pin:str=Field(min_length=6,max_length=128)
+@app.post('/api/login')
+def login(data:Login,response:Response,request:Request,s:Session=Depends(db)):
+    k=(request.client.host if request.client else 'unknown')+':'+data.badge
+    hits=[v for v in failed.get(k,[]) if time.time()-v<900]
+    failed[k]=hits
+    if len(hits)>=8: raise HTTPException(429,'Too many attempts; try again later')
+    u=s.get(Employee,data.badge)
+    if not u or not u.active or not password_hash.verify(data.pin,u.pin_hash):
+        failed[k].append(time.time())
+        raise HTTPException(401,'Invalid badge or PIN')
+    failed.pop(k,None)
+    token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow()},JWT_SECRET,algorithm='HS256')
+    response.set_cookie('fabtrace_session',token,httponly=True,secure=os.environ.get('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=8*3600,path='/')
+    audit(s,None,u.badge,'LOGIN',{'result':'success'});s.commit()
+    return {'badge':u.badge,'name':u.name,'role':u.role}
+@app.post('/api/logout')
+def logout(response:Response,u:Employee=Depends(auth),s:Session=Depends(db)):
+    audit(s,None,u.badge,'LOGOUT',{});s.commit()
+    response.delete_cookie('fabtrace_session',path='/')
+    return {'ok':True}
+@app.get('/api/me')
+def me(u:Employee=Depends(auth)):
+    return {'badge':u.badge,'name':u.name,'role':u.role}
+class EmployeeIn(BaseModel):
+    badge:str=Field(min_length=2,max_length=80,pattern=r'^[A-Za-z0-9_-]+$')
+    name:str=Field(min_length=2,max_length=160)
+    pin:str=Field(min_length=8,max_length=128)
+    role:Literal['admin','supervisor','handler','welder','inspector']
+@app.get('/api/employees')
+def employees(u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin');return [asdict(x,'badge name role active'.split()) for x in s.scalars(select(Employee).order_by(Employee.name)).all()]
+@app.get('/api/employees/directory')
+def employee_directory(u:Employee=Depends(auth),s:Session=Depends(db)):
+    # Public-to-staff identity lookups expose only active badge, name and role.
+    return [asdict(x,'badge name role'.split()) for x in s.scalars(
+        select(Employee).where(Employee.active.is_(True)).order_by(Employee.name)).all()]
+
+@app.get('/api/employees/{badge}/qr.png')
+def employee_badge_qr(badge:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin')
+    employee=s.get(Employee,badge)
+    if not employee or not employee.active: raise HTTPException(404,'Active employee badge not found')
+    # An HTTPS link is recognized by normal phone cameras; login is still required.
+    require_phone_qr_ready()
+    image=qrcode.make(phone_link('badge',employee.badge))
+    buf=io.BytesIO();image.save(buf,format='PNG');buf.seek(0)
+    return StreamingResponse(buf,media_type='image/png',headers={
+        'Content-Disposition':f'inline; filename="badge-{employee.badge}.png"'})
+
+@app.post('/api/employees',status_code=201)
+def employee_create(data:EmployeeIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin')
+    if s.get(Employee,data.badge):raise HTTPException(409,'Badge already exists')
+    s.add(Employee(badge=data.badge,name=data.name,pin_hash=password_hash.hash(data.pin),role=data.role))
+    audit(s,None,u.badge,'EMPLOYEE_CREATED',{'badge':data.badge,'role':data.role});s.commit()
+    return {'badge':data.badge,'name':data.name,'role':data.role}
+@app.get('/api/items')
+def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Session=Depends(db)):
+    limit=min(max(limit,1),500);offset=max(offset,0)
+    q=select(Item)
+    if search:
+        q=q.where((Item.id.ilike('%'+search[:100]+'%'))|(Item.description.ilike('%'+search[:100]+'%'))|(Item.project.ilike('%'+search[:100]+'%'))|(Item.google_part_number.ilike('%'+search[:100]+'%')))
+    count=s.scalar(select(func.count()).select_from(q.subquery()))
+    rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
+    return {'total':count,'items':[asdict(r,ITEM_KEYS) for r in rows]}
+class ItemIn(BaseModel):
+    id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')
+    description:str=Field(min_length=2,max_length=300)
+    kind:Literal['Part','Assembly']='Part'
+    project:str=Field(default='',max_length=120)
+    google_part_number:str=Field(default='',max_length=160)
+    drawing:str=Field(default='',max_length=160)
+    location:str=Field(min_length=1,max_length=160)
+    handler:str=Field(min_length=2,max_length=80)
+    welds_required:int=Field(default=0,ge=0)
+@app.post('/api/items',status_code=201)
+def create_item(data:ItemIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin','supervisor')
+    if s.get(Item,data.id):raise HTTPException(409,'Item ID already exists')
+    if not s.get(Employee,data.handler):raise HTTPException(422,'Unknown handler badge')
+    r=Item(**data.model_dump());s.add(r)
+    audit(s,r.id,u.badge,'ITEM_CREATED',data.model_dump());s.commit()
+    return item_dict(s,r)
+
+class PartNumberUpdate(BaseModel):
+    google_part_number:str=Field(min_length=1,max_length=160)
+
+@app.patch('/api/items/{item_id}/part-number')
+def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin','supervisor')
+    r=lock_item(s,item_id);require_unreleased(r)
+    before=r.google_part_number
+    r.google_part_number=data.google_part_number.strip()
+    if not r.google_part_number:raise HTTPException(422,'Google part number cannot be blank')
+    audit(s,r.id,u.badge,'GOOGLE_PART_NUMBER_CHANGED',{'previous':before,'new':r.google_part_number})
+    s.commit()
+    return item_dict(s,r)
+
+class BulkItemRow(BaseModel):
+    id:str=Field(default='',max_length=60)
+    google_part_number:str=Field(min_length=1,max_length=160)
+    description:str=Field(min_length=2,max_length=300)
+    kind:Literal['Part','Assembly']='Part'
+    project:str=Field(default='',max_length=120)
+    drawing:str=Field(default='',max_length=160)
+    location:str=Field(min_length=1,max_length=160)
+    handler:str=Field(min_length=2,max_length=80)
+    welds_required:int=Field(default=0,ge=0,le=100000)
+    quantity:int=Field(default=1,ge=1,le=500)
+
+class BulkImport(BaseModel):
+    rows:list[BulkItemRow]=Field(min_length=1,max_length=500)
+
+@app.post('/api/items/bulk',status_code=201)
+def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends(db)):
+    """Atomic import: each quantity makes a separately traceable physical item."""
+    permit(u,'admin','supervisor')
+    if sum(row.quantity for row in data.rows)>500:
+        raise HTTPException(422,'Maximum 500 individual items per request; import in batches')
+    seen=set()
+    handlers={row.handler for row in data.rows}
+    missing=[badge for badge in handlers if not s.get(Employee,badge)]
+    if missing:raise HTTPException(422,{'unknown_handler_badges':sorted(missing)})
+    new_items=[]
+    for index,row in enumerate(data.rows,start=1):
+        base=row.id.strip()
+        if base and (not base.replace('_','').replace('-','').isalnum() or len(base)<3):
+            raise HTTPException(422,f'Row {index}: item ID may contain letters, digits, hyphens and underscores')
+        # A manually supplied ID is allowed for one unit only. Multiple physical
+        # items must have independent IDs; auto-generate when quantity > 1.
+        if base and row.quantity!=1:
+            raise HTTPException(422,f'Row {index}: leave item ID blank when quantity exceeds 1')
+        for _ in range(row.quantity):
+            item_id=base or 'FAB-'+secrets.token_hex(6).upper()
+            if item_id in seen or s.get(Item,item_id):
+                raise HTTPException(409,f'Row {index}: duplicate item ID {item_id}')
+            seen.add(item_id)
+            item=Item(id=item_id,google_part_number=row.google_part_number.strip(),
+                      description=row.description.strip(),kind=row.kind,project=row.project,
+                      drawing=row.drawing,location=row.location,handler=row.handler,
+                      welds_required=row.welds_required)
+            if not item.google_part_number:raise HTTPException(422,f'Row {index}: Google part number required')
+            s.add(item)
+            audit(s,item.id,u.badge,'ITEM_CREATED_BULK',{'google_part_number':item.google_part_number,'source_row':index})
+            new_items.append(item)
+    try:
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise HTTPException(409,'Import failed; check duplicate IDs and retry. No items from this batch were imported.')
+    return {'created_count':len(new_items),'items':[{'id':r.id,'google_part_number':r.google_part_number,'description':r.description} for r in new_items]}
+
+@app.post('/api/items/{item_id}/scan')
+def scan_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    r=lock_item(s,item_id)
+    audit(s,r.id,u.badge,'QR_SCAN',{'location':r.location,'current_handler':r.handler})
+    s.commit()
+    return {'item_id':r.id,'scanned_at':utcnow().isoformat(),'badge':u.badge}
+
+@app.get('/api/items/{item_id}')
+def get_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    r=s.get(Item,item_id)
+    if not r:raise HTTPException(404,'Item not found')
+    return item_dict(s,r)
+class Transfer(BaseModel):
+    location:str=Field(min_length=1,max_length=160)
+    handler:str=Field(min_length=2,max_length=80)
+    notes:str=Field(default='',max_length=1000)
+    expected_handler:str|None=Field(default=None,max_length=80)
+    scan_method:Literal['manual','employee_qr']='manual'
+
+@app.post('/api/items/{item_id}/transfer')
+def transfer(item_id:str,data:Transfer,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'handler','welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    receiver=s.get(Employee,data.handler)
+    if not receiver or not receiver.active:raise HTTPException(422,'Receiving badge is missing or inactive')
+    if data.expected_handler is not None and data.expected_handler!=r.handler:
+        raise HTTPException(409,'Item handler changed since scanning; refresh and retry')
+    if r.location==data.location and r.handler==data.handler:
+        raise HTTPException(409,'No change to current handler or location')
+    before={'location':r.location,'handler':r.handler};r.location=data.location;r.handler=data.handler
+    audit(s,r.id,u.badge,'TRANSFER',{'from':before,
+        'to':{'location':r.location,'handler':r.handler,'name':receiver.name},
+        'notes':data.notes,'scan_method':data.scan_method,
+        'handoff_recorded_by':u.badge,'recipient_acknowledged':False})
+    s.commit()
+    return item_dict(s,r)
+class WeldEvent(BaseModel):
+    count:int=Field(ge=1,le=10000)
+    weld_ids:str=Field(min_length=1,max_length=1000)
+    notes:str=Field(default='',max_length=2000)
+@app.post('/api/items/{item_id}/weld')
+def weld(item_id:str,data:WeldEvent,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    if r.welds_done+data.count>r.welds_required:raise HTTPException(409,'Exceeds required weld count; change controlled traveler first')
+    r.welds_done+=data.count;r.last_work_at=utcnow();r.dimensional='Not started';r.weld='Not started';r.reinspection_due=True
+    audit(s,r.id,u.badge,'WELDS_COMPLETED',data.model_dump());s.commit();return item_dict(s,r)
+class InspectionIn(BaseModel):
+    kind:Literal['Dimensional','Weld']
+    result:Literal['Pass','Fail']
+    report:str=Field(min_length=2,max_length=200)
+    measurements:str=Field(min_length=2,max_length=5000)
+@app.post('/api/items/{item_id}/inspect')
+def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
+    t=utcnow();s.add(Inspection(item_id=r.id,kind=data.kind,result=data.result,inspector=u.badge,report=data.report,measurements=data.measurements,at=t))
+    if data.kind=='Dimensional':r.dimensional=data.result;r.dimension_at=t
+    else:r.weld=data.result;r.weld_at=t
+    if data.result=='Fail':
+        r.reinspection_due=True
+        s.add(Rework(item_id=r.id,kind=data.kind+' correction',reason=data.measurements,assigned=r.handler,opened_at=t))
+    elif r.dimensional=='Pass' and r.weld=='Pass' and not s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):
+        r.reinspection_due=False
+    audit(s,r.id,u.badge,'INSPECTION',data.model_dump());s.commit();return item_dict(s,r)
+class ReworkIn(BaseModel):
+    kind:str=Field(min_length=2,max_length=50)
+    reason:str=Field(min_length=4,max_length=3000)
+    assigned:str=Field(min_length=2,max_length=80)
+@app.post('/api/items/{item_id}/rework',status_code=201)
+def open_rework(item_id:str,data:ReworkIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'inspector','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    if not s.get(Employee,data.assigned):raise HTTPException(422,'Unknown employee badge')
+    r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.last_work_at=utcnow()
+    s.add(Rework(item_id=r.id,**data.model_dump()))
+    audit(s,r.id,u.badge,'REWORK_OPENED',data.model_dump());s.commit();return item_dict(s,r)
+class CloseRework(BaseModel):
+    notes:str=Field(min_length=4,max_length=3000)
+@app.post('/api/items/{item_id}/rework/{rework_id}/close')
+def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    x=s.get(Rework,rework_id)
+    if not x or x.item_id!=r.id:raise HTTPException(404,'Rework not found')
+    if x.closed_at:raise HTTPException(409,'Rework already closed')
+    x.closed_at=utcnow();x.closed_by=u.badge;x.close_notes=data.notes
+    r.last_work_at=x.closed_at;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started'
+    audit(s,r.id,u.badge,'REWORK_CLOSED',{'rework_id':rework_id,'notes':data.notes});s.commit();return item_dict(s,r)
+class ReleaseIn(BaseModel):
+    reference:str=Field(min_length=3,max_length=250)
+@app.post('/api/items/{item_id}/release')
+def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
+    reasons=[]
+    if r.on_hold:reasons.append('Item is on hold')
+    if r.welds_done!=r.welds_required:reasons.append('Required welds not completed')
+    if r.dimensional!='Pass' or r.weld!='Pass':reasons.append('Both inspections must pass')
+    if r.reinspection_due:reasons.append('Reinspection still due')
+    if not r.dimension_at or not r.weld_at:reasons.append('Inspection timestamps missing')
+    if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
+    if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
+    if reasons:raise HTTPException(409,{'release_blockers':reasons})
+    r.released=True;r.released_at=utcnow();r.released_by=u.badge
+    audit(s,r.id,u.badge,'FINAL_RELEASE',{'reference':data.reference});s.commit();return item_dict(s,r)
+@app.post('/api/items/{item_id}/reopen')
+def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin');r=lock_item(s,item_id)
+    if not r.released:raise HTTPException(409,'Not released')
+    r.released=False;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.released_at=None;r.released_by=None
+    audit(s,r.id,u.badge,'REOPENED',{'reason':'Administrative reopen; new inspections required'});s.commit();return item_dict(s,r)
+@app.get('/api/items/{item_id}/custody')
+def item_custody(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    if not s.get(Item,item_id):raise HTTPException(404,'Item not found')
+    entries=s.scalars(select(Audit).where(Audit.item_id==item_id,
+        Audit.event=='TRANSFER').order_by(Audit.id.desc()).limit(500)).all()
+    return [asdict(x,'id item_id actor event details at'.split()) for x in entries]
+
+@app.get('/api/items/{item_id}/audit')
+def item_audit(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    return [asdict(a,'id item_id actor event details at'.split()) for a in s.scalars(select(Audit).where(Audit.item_id==item_id).order_by(Audit.id.desc()).limit(500)).all()]
+@app.get('/api/audit')
+def all_audit(u:Employee=Depends(auth),s:Session=Depends(db)):
+    permit(u,'admin','supervisor','inspector')
+    return [asdict(a,'id item_id actor event details at'.split()) for a in s.scalars(select(Audit).order_by(Audit.id.desc()).limit(500)).all()]
+@app.get('/api/items/{item_id}/qr.png')
+def qr(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    if not s.get(Item,item_id):raise HTTPException(404,'Item not found')
+    require_phone_qr_ready()
+    image=qrcode.make(phone_link('item',item_id))
+    buf=io.BytesIO();image.save(buf,format='PNG');buf.seek(0)
+    return StreamingResponse(buf,media_type='image/png',headers={'Content-Disposition':f'inline; filename="{item_id}.png"'})
+@app.get('/api/qr/status')
+def qr_status(u:Employee=Depends(auth)):
+    return {'ready':phone_qr_ready(), 'public_base_url':PUBLIC_BASE_URL if phone_qr_ready() else None, 'message':'Phone QR labels ready' if phone_qr_ready() else 'Set PUBLIC_BASE_URL to the deployed public HTTPS URL, then redeploy; QR printing is disabled until then.'}
+@app.get('/healthz')
+def health(s:Session=Depends(db)):
+    s.execute(text('select 1'));return {'status':'ok'}
+@app.get('/')
+def ui():
+    from pathlib import Path
+    return HTMLResponse((Path(__file__).parent/'static'/'index.html').read_text(encoding='utf8'))
