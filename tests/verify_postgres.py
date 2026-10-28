@@ -155,7 +155,7 @@ def verify_history_protection(application, initializer, schema):
     assert set(initializer.HISTORY_TABLES) == {
         "audit_events", "tracking_requirement_evidence", "tracking_requirement_reviews",
         "tracking_weld_work", "tracking_weld_repairs", "tracking_requirement_templates",
-        "tracking_process_events",
+        "tracking_process_events", "flow_events",
     }
     results = {}
     for name in initializer.HISTORY_TABLES:
@@ -270,7 +270,10 @@ def verify_concurrent_process_transition(application, production, api, item_id):
     lock_barrier = Barrier(2)
 
     def synchronize_item_lock(connection, cursor, statement, parameters, context, many):
-        if "FROM items" in statement and "FOR UPDATE" in statement:
+        # Flow-aware process operations now acquire the topology advisory lock
+        # before an Item lock. Synchronize before that first serialization
+        # point; a barrier after it would deadlock the second request.
+        if "pg_advisory_xact_lock" in statement:
             lock_barrier.wait(timeout=15)
 
     def start_one(process_key):
@@ -319,6 +322,62 @@ def verify_concurrent_process_transition(application, production, api, item_id):
     return {"response_codes": [201, 409], "new_process_events": 1, "new_audit_rows": 1, "open_visits": 1}
 
 
+def verify_concurrent_flow_step(application, flow, production, api):
+    from test_flow import action_body, create_item, detail, enroll
+
+    item_id = create_item(api, "PG-FLOW-COMPONENT")
+    initial = enroll(api, item_id, "component")
+    body = action_body(api, item_id)
+    with application.SessionLocal() as session:
+        flow_before = session.scalar(select(func.count()).select_from(flow.FlowEvent).where(
+            flow.FlowEvent.item_id == item_id,
+        ))
+        process_before = session.scalar(select(func.count()).select_from(production.SpoolProcessEvent).where(
+            production.SpoolProcessEvent.item_id == item_id,
+        ))
+
+    gate = Barrier(2)
+
+    def synchronize_topology_lock(connection, cursor, statement, parameters, context, many):
+        if "pg_advisory_xact_lock" in statement:
+            gate.wait(timeout=15)
+
+    def advance_one(note):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.post(f"/api/flow/items/{item_id}/advance", {**body, "notes": note})
+            return {"status": response.status_code, "note": note, "body": response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, "before_cursor_execute", synchronize_topology_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = [future.result(timeout=30) for future in [
+                pool.submit(advance_one, "Concurrent flow request A"),
+                pool.submit(advance_one, "Concurrent flow request B"),
+            ]]
+    finally:
+        event.remove(application.engine, "before_cursor_execute", synchronize_topology_lock)
+
+    assert sorted(row["status"] for row in responses) == [200, 409], responses
+    current = detail(api, item_id)
+    assert current["flow"]["version"] == initial["flow"]["version"] + 1
+    assert current["flow"]["current_step"] == 2
+    assert len(current["production_process"]["visits"]) == 2
+    assert current["production_process"]["current"] is not None
+    with application.SessionLocal() as session:
+        flow_after = session.scalar(select(func.count()).select_from(flow.FlowEvent).where(
+            flow.FlowEvent.item_id == item_id,
+        ))
+        process_after = session.scalar(select(func.count()).select_from(production.SpoolProcessEvent).where(
+            production.SpoolProcessEvent.item_id == item_id,
+        ))
+        assert flow_after == flow_before + 1
+        assert process_after == process_before + 1
+    return {"response_codes": [200, 409], "new_flow_events": 1, "new_process_events": 1, "current_step": 2}
+
+
 def verify_excel_export(application, api):
     exports = importlib.import_module("exports")
     def row_counts():
@@ -360,7 +419,7 @@ def verify_excel_export(application, api):
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
         sheets = [sheet.attrib["name"] for sheet in workbook.findall("s:sheets/s:sheet", namespace)]
-    assert sheets == ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS], "Process visits", "Process totals"]
+    assert sheets == ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS], "Process visits", "Process totals", "Flow steps"]
     # Every raw table plus one joined, ordered process query for both reports
     # stays in the same read-only repeatable-read snapshot.
     assert len(export_reads) == len(exports.TABLE_SPECS) + 1, export_reads
@@ -369,7 +428,7 @@ def verify_excel_export(application, api):
     assert len({backend_pid for _, _, backend_pid, _ in export_reads}) == 1
     assert row_counts() == before, "Excel export changed database row counts"
     return {
-        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 2, "rows_unchanged": True,
+        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 3, "rows_unchanged": True,
         "isolation": "repeatable read", "read_only": True, "server_side_queries": len(export_reads),
     }
 
@@ -405,6 +464,7 @@ def verify(dsn):
         application = importlib.import_module("main")
         tracking = importlib.import_module("tracking")
         production = importlib.import_module("production")
+        flow = importlib.import_module("flow")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -419,6 +479,10 @@ def verify(dsn):
             assert session.query(tracking.SpoolPlan).count() == 0, "Migration silently enrolled legacy items"
             assert session.query(tracking.Weld).count() == 0, "Migration invented individual welds"
             assert session.query(production.SpoolProcessEvent).count() == 0, "Migration invented process timing history"
+            assert session.query(flow.FlowPlan).count() == 0, "Migration invented fabrication travelers"
+            assert session.query(flow.FlowEvent).count() == 0, "Migration invented fabrication step history"
+            assert session.query(flow.FlowException).count() == 0, "Migration invented quality exceptions"
+            assert session.query(flow.ComponentLink).count() == 0, "Migration invented parent-child links"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -435,6 +499,7 @@ def verify(dsn):
             "reason": "Local repair to verify preserved history and current-cycle evidence",
         }, role="inspector"), 201)
         process_concurrency = verify_concurrent_process_transition(application, production, api, item_id)
+        flow_concurrency = verify_concurrent_flow_step(application, flow, production, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -451,6 +516,7 @@ def verify(dsn):
             "history_protection": history,
             "concurrent_evidence": concurrency,
             "concurrent_process_transition": process_concurrency,
+            "concurrent_flow_step": flow_concurrency,
             "excel_export": excel_export,
             "health": health["status"],
             "schema_cleanup": "completed",

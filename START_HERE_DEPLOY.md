@@ -5,17 +5,17 @@
 **Use the existing web service and its existing PostgreSQL database.** Adding project, spool, and individual-weld tracking does not require creating a second service, a second database, or a new Blueprint.
 
 1. Identify the current service's connected repository/branch and keep its existing `DATABASE_URL`, `JWT_SECRET`, public URL, and employee accounts. Make the normal database recovery point for the rollout.
-2. Update the service with the complete reviewed source. Include `main.py`, **`tracking.py`**, **`production.py`**, **`exports.py`**, `init_db.py`, `requirements.txt`, **`static/index.html`**, **`static/tracking.js`**, **`static/tracking.css`**, and the existing static assets. The root `index.html` is a distribution copy; the application serves `static/index.html`.
+2. Update the service with the complete reviewed source. Include `main.py`, **`tracking.py`**, **`production.py`**, **`flow.py`**, **`exports.py`**, `init_db.py`, `requirements.txt`, **`static/index.html`**, the **tracking and flow JavaScript/CSS** under `static/`, and the existing static assets. The root `index.html` is a distribution copy; the application serves `static/index.html`.
 3. Confirm the service's initialization step is **`python init_db.py`**. The supplied `render.yaml` sets this as `preDeployCommand`, but uploading a YAML file alone does not change an independently configured existing service.
 4. Run initialization before the new version accepts requests. Use the configured pre-deploy command, or a controlled manual step running the new `init_db.py` with the existing database settings. Keep the previous application serving until initialization succeeds, or use the service's maintenance procedure. Do not start the new app against an uninitialized schema.
 5. Deploy with the existing start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
-6. Check `/healthz`. It must return `status: "ok"`, the current application version, and the deployment commit when Render supplies it. Health checks confirm the tracking plan and production process event tables are available as well as the database connection.
+6. Check `/healthz`. It must return `status: "ok"`, the current application version, and the deployment commit when Render supplies it. Health checks confirm the weld tracking plan, production process event and numbered flow plan tables are available as well as the database connection.
 7. Sign in with an existing employee account. Confirm existing item, QR, custody, and inspection records are still available. The navigation should include **Projects & welds**.
 8. Follow [TRACKING_GUIDE.md](TRACKING_GUIDE.md) to create a project and explicitly enroll an intended spool. New projects and accepted welds are not seeded by deployment.
 
 ### What initialization changes
 
-`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on seven history tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool enrollment or process-time history is invented.
+`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on eight history tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool/traveler enrollment or process-time history is invented. The numbered-flow release adds four tables and its event-history trigger; it does not alter existing table columns.
 
 `create_all()` does not add columns to tables that already exist. Future column changes require an explicit migration. If upgrading a substantially older installation, compare its actual schema with the source before deployment; the earlier Google part-number migration is separate from this tracking addition.
 
@@ -51,4 +51,4 @@ Keeping the same service origin and item IDs preserves existing item links. An e
 
 Browser-local prototype data is not automatically copied into PostgreSQL. Use the cloud item/employee workflows and supported CSV import; a prototype JSON backup is not a database restore.
 
-This release stores evidence references/URLs, not uploaded reports. Qualification applicability and job-specific acceptance criteria remain reviewed decisions. Assembly links organize records; shipment, pressure-test packages, and collective release of linked children are separate future features. Use the workflow and developer guides to configure and extend those boundaries deliberately.
+This release stores evidence/document references, not uploaded report files. Qualification applicability and job-specific acceptance criteria remain reviewed decisions. Numbered assembly travelers check their declared child scope and readiness and record shipment/delivery; plain assembly links retain the earlier per-item release behavior. Pressure-test packages and carrier/document-system integrations remain separate features. Use the workflow and developer guides to configure and extend those boundaries deliberately.

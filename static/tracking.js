@@ -281,6 +281,7 @@
   function renderSpool() {
     const s=state.spool, item=s.item, plan=s.plan;
     let actions=btn('item-record','Item & QR record',item.id);
+    actions+=btn('process-flow','Process flow',item.id);
     if(manage()&&!item.released) actions+=btn('edit-plan',plan?'Edit spool plan':'Set up spool','','primary');
     let html=crumbs()+pageHeading(item.id,item.description||'Spool / item',actions);
     if(!plan) return html+empty('This item has no individual weld plan','Set its project, subproject, and planned weld count. Existing custody, QR, and inspection records stay linked to this item.',manage()?btn('edit-plan','Set up individual weld tracking','','primary'):'A supervisor or administrator can set up the spool plan.');
@@ -297,7 +298,10 @@
     if(!process)return '<section class="card"><h2>Production process time</h2><p class="muted">Refresh the spool to load its process timing.</p></section>';
     const current=process.current, visits=arr(process.visits), totals=process.totals||{};
     let actions='';
-    if(processRole()&&!isLocked()){
+    if(process.flow_managed){
+      actions=btn('process-flow','Open process flow',state.spool.item.id,'primary');
+      if(processRole()&&process.flow_status==='active'&&current)actions+=process.status==='paused'?btn('process-resume','Resume process'):btn('process-pause','Pause / record delay');
+    }else if(processRole()&&!isLocked()){
       if(!current)actions=btn('process-start',visits.length?'Start another process':'Start process','','primary');
       else actions=btn('process-move','Move to next process','','primary')+(process.status==='paused'?btn('process-resume','Resume process'):btn('process-pause','Pause / record delay'))+btn('process-finish','Finish process');
     }
@@ -307,15 +311,15 @@
     }else{
       html+=`<div class="ft-process-current"><div><h3>${visits.length?'No process currently running':'Start timing when this spool enters a process'}</h3><p class="muted">${visits.length?'Choose the next process when work begins again.':'The first start records the time from now. Earlier production time is not estimated.'}</p></div><div class="actions">${actions}</div></div>`;
     }
-    html+='<p class="ft-filter-note">Elapsed time includes pauses. Running time counts while the process is running; these are spool clock hours, not crew labor hours. Finish or move the process when the spool leaves it.</p>';
-    if(isLocked())html+='<p class="ft-readonly">Released spool · process timing is closed. An administrator must reopen the spool before another process can start.</p>';
+    html+='<p class="ft-filter-note">Elapsed time includes pauses. Running time counts while the process is running; these are spool clock hours, not crew labor hours. '+(process.flow_managed?'Complete each numbered step in Process flow to move the timer.':'Finish or move the process when the spool leaves it.')+'</p>';
+    if(isLocked())html+=process.flow_managed?'<p class="ft-readonly">Quality release is recorded. The numbered process flow tracks the remaining receiving, assembly, or shipment steps.</p>':'<p class="ft-readonly">Released spool · process timing is closed. An administrator must reopen the spool before another process can start.</p>';
     if(visits.length){
       html+=`<div class="ft-process-total"><strong>Total recorded process time</strong><span>${clockValue(process,totals.elapsed_seconds,'elapsed_seconds')} elapsed</span><span>${clockValue(process,totals.active_seconds,'active_seconds')} running</span><span>${clockValue(process,totals.paused_seconds,'paused_seconds')} paused</span><span>${number(totals.visits)} process visits</span></div>`;
       html+='<h3>Time by process</h3>'+wrap(`<table class="ft-table ft-process-table"><thead><tr><th>Process</th><th>Visits</th><th>Elapsed</th><th>Running</th><th>Paused</th></tr></thead><tbody>${arr(process.by_process).map(row=>{const live=current&&(row.group_key&&current.group_key?row.group_key===current.group_key:row.process_key===current.process_key&&(row.process_key!=='custom'||String(row.process_name).toLowerCase()===String(current.process_name).toLowerCase()));return `<tr><td>${esc(row.process_name)}</td><td>${number(row.visits)}</td>${['elapsed_seconds','active_seconds','paused_seconds'].map(key=>`<td>${clockValue(process,row[key],key,live)}</td>`).join('')}</tr>`}).join('')}</tbody></table>`);
       html+='<h3>Process visits</h3>'+wrap(`<table class="ft-table ft-process-table"><thead><tr><th>Process / status</th><th>Entered</th><th>Left</th><th>Elapsed</th><th>Running</th><th>Paused</th></tr></thead><tbody>${[...visits].reverse().map(visit=>{const live=current&&String(visit.id)===String(current.id);return `<tr><td><strong>${esc(visit.process_name)}</strong>${small(processStatusNames[visit.status]||visit.status)}</td><td>${esc(stamp(visit.started_at))}${small(visit.started_by)}</td><td>${visit.ended_at?esc(stamp(visit.ended_at))+small([visit.ended_by,visit.end_reason==='release'?'Final release':processEventNames[visit.end_reason]||''].filter(Boolean).join(' · ')):'<span class="muted">Still in process</span>'}</td>${['elapsed_seconds','active_seconds','paused_seconds'].map(key=>`<td>${clockValue(process,visit[key],key,live)}</td>`).join('')}</tr>`}).join('')}</tbody></table>`);
       html+=`<details class="ft-fold"><summary>Process changes & delay reasons (${arr(process.events).length})</summary>${[...arr(process.events)].reverse().map(event=>`<div class="ft-history"><strong>${esc(processEventNames[event.event]||event.event)} · ${esc(event.process_name)}</strong>${event.notes?`<p>${esc(event.notes)}</p>`:''}<small>${esc(event.actor)} · ${esc(stamp(event.at))}</small></div>`).join('')}</details>`;
     }
-    html+=`<p class="ft-footer-note">Timing follows the stages you record and does not grant quality acceptance. Final release closes an open process. Last synchronized ${esc(stamp(process.as_of))}; refresh to see changes recorded by another employee.</p></section>`;
+    html+=`<p class="ft-footer-note">Timing follows the stages you record and does not grant quality acceptance. ${process.flow_managed?'Numbered process steps control stage changes.':'Final release closes an open process.'} Last synchronized ${esc(stamp(process.as_of))}; refresh to see changes recorded by another employee.</p></section>`;
     return html;
   }
   function renderMatrix(welds) {
@@ -400,8 +404,10 @@
   function grid(html) {return `<div class="ft-form-grid">${html}</div>`}
   async function processAction(action) {
     if(state.processDialogLoading)return;
-    if(!processRole()||isLocked())throw Error('This spool is read-only for process changes.');
     const spool=state.spool, process=spool?.production_process, sequence=state.sequence;
+    const flowPause=process?.flow_managed&&process.flow_status==='active'&&['pause','resume'].includes(action);
+    if(!processRole()||isLocked()&&!flowPause)throw Error('This spool is read-only for process changes.');
+    if(process?.flow_managed&&!flowPause)throw Error('Use Process flow to complete the numbered step and change its process.');
     if(!process)throw Error('Refresh the spool to load its current process timing.');
     const selecting=action==='start'||action==='move';
     state.processDialogLoading=true;
@@ -565,6 +571,7 @@
   }
 
   async function act(action,id) {
+    if(action==='process-flow')return window.FabFlow.open({item:id||state.spool?.item?.id});
     if(['process-start','process-move','process-pause','process-resume','process-finish'].includes(action))return processAction(action.slice(8));
     if(action==='overview')return open({project:state.project,subproject:state.subproject});
     if(action==='refresh'||action==='retry')return refresh();

@@ -9,17 +9,19 @@ This guide describes the implemented tracking extension and the constraints that
 | `main.py` | Shared SQLAlchemy models, sessions, authentication, employee/item/QR/custody APIs, legacy inspections and release, middleware, `/healthz`, and tracking-router integration. |
 | `tracking.py` | Tracking tables, validated request models, project/spool/weld APIs, authoritative work and acceptance checks, versions, holds, repairs, and rollups. |
 | `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
+| `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
 | `exports.py` | Administrator-only Excel snapshot of business records and history, excluding authentication secrets. |
 | `init_db.py` | Additive schema initialization, first-account bootstrap, PostgreSQL transaction/advisory lock, and immutable-history triggers. |
 | `static/index.html` | Canonical application shell and existing login, inventory, custody, and QR interface; tracking workspace/dialog hooks. |
 | `static/tracking.js` | Framework-free tracking UI, forms, role-aware actions, API requests, and direct-link routing. |
 | `static/tracking.css` | Styles scoped to the tracking workspace and dialog. |
+| `static/flow.js`, `static/flow.css` | Numbered process map, production board, route forms, hierarchy links, timer controls and mobile layout. |
 | `index.html` | Distribution copy of the shell. Keep synchronized with `static/index.html`; the server serves the latter. |
 | `migrate_google_part_numbers.py` | Earlier explicit migration for the Google part-number column. Review the actual schema before using an older migration. |
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, and export routers, in that order, at the end of the module. Extensions import those shared definitions. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
 
 ## Data relationships
 
@@ -96,7 +98,7 @@ Existing `/api/items/{id}/inspect`, `/release`, and `/reopen` remain the interfa
 5. **Templates retain core gates.** Material, procedure/qualification, fit-up, visual, NDE-plan, and final-QA controls remain. Templates add requirements or permitted core labels/source/assignment; they cannot weaken core checks. Saved revisions affect newly created welds only.
 6. **Release is derived.** Defined weld count must match the controlled plan; zero-weld scope needs a basis. Current requirements, physical completion, dimensions, holds, rework, and hierarchy are checked. Legacy summaries cannot override those checks.
 7. **Identity and history persist.** Corrections use versions and audit records. Never overwrite evidence, reviews, work, repairs, or a saved template revision to conceal a change.
-8. **Grouping is not collective release.** Assembly links do not implement child-spool acceptance. Final release is not shipment or delivery.
+8. **Release scope is explicit.** Plain assembly links do not implement child-spool acceptance. Numbered assembly travelers additionally verify their declared children and descendant component readiness at their gates. Final release is not shipment or delivery.
 
 ## Concurrency and history
 
@@ -104,7 +106,7 @@ Tracking mutations lock the owning `Item` row before changing related state. Hie
 
 Keep validation, inserts, invalidation, counter synchronization, and audit creation in one transaction. Read-snapshot helpers preload records for one spool calculation; they are not a durable cache and must not be reused after writes.
 
-`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on seven history tables:
+`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on eight history tables:
 
 - `audit_events`
 - `tracking_requirement_evidence`
@@ -113,6 +115,7 @@ Keep validation, inserts, invalidation, counter synchronization, and audit creat
 - `tracking_weld_repairs`
 - `tracking_requirement_templates`
 - `tracking_process_events`
+- `flow_events`
 
 These triggers prevent ordinary mutation, not deliberate removal by a database owner. Requirements, holds, plans, and weld metadata are current-state records and remain mutable through controlled APIs.
 
@@ -124,9 +127,44 @@ POST bodies contain `action`, `expected_version`, optional `notes`, and—for st
 
 The pure `summarize_process_events` projection returns `item_id`, `version`, UTC `as_of`, `status`, `current`, `totals`, `by_process`, `visits` and `events`. Status is `not_started`, `running`, `paused` or `finished`; a closed visit has status `finished`. Numeric `elapsed_seconds = active_seconds + paused_seconds`. Durations use integer microseconds internally. Visit IDs are the sequence numbers of start/move events. Events and visits are oldest first. The spool detail embeds this full object as `production_process`; overview summaries include its current state and overall totals.
 
-Timing starts only from explicit events. It measures calendar station/process duration, includes overnight time, and is not person-hours. Unstarted time and gaps after Finish are excluded. Timing does not modify weld work, requirements, custody, inspections or quality holds. `finish_on_release` is called inside the already locked final-release transaction, closes any open visit at `released_at`, and does nothing for an idle timer. Administrative reopen leaves timing stopped until a new Start.
+Timing starts only from explicit events. It measures calendar station/process duration, includes overnight time, and is not person-hours. Unstarted time and gaps after Finish are excluded. Manual timing does not modify weld work, requirements, custody, inspections or quality holds. `finish_on_release` closes an open visit inside the locked final-release transaction. For manually timed records, administrative reopen leaves timing stopped until a new Start. Numbered travelers own their stage transitions through `sync_flow_process`, including post-QA handoffs and a return to QA on a permitted reopen.
 
 The Excel allowlist includes the raw process-event table. Two additional reports, `Process visits` and `Process totals`, derive from those events on the same read-only snapshot connection, one spool at a time. They include current project/subproject identifiers, numeric seconds and decimal hours, and an `as_of` timestamp for open visits. Historical events do not freeze earlier project assignments. Report rows use temporary spooled files and the existing sheet-continuation rules; no new runtime package is required.
+
+## Numbered CLM process flow
+
+`flow.py` transcribes the supplied chart into `STEPS` / `STEP_BY_NUMBER`, version `CLM-24-v1`. Routes retain the original numbering: component 1–8, spool 9–16, assembly 17–24. The catalog supplies role lists, checklist identifiers/text, scan/location/handoff/reference requirements and allowed rework destinations. Frontend forms consume those definitions and the authenticated `allowed_actions` response. Keep role enforcement and release gates on the server.
+
+Four additive tables model the flow: `FlowPlan` is the current route/version/scope and shipment state; `FlowEvent` is its immutable revision history; `FlowException` retains failed inspections and controlled resolution metadata; `ComponentLink` is the current physical component-to-spool assignment. Existing `SpoolPlan.assembly_id` remains authoritative for spool-to-assembly membership. Events snapshot the definition version and step/checklist text so later catalog edits cannot silently rewrite the meaning of recorded observations.
+
+All routes below use the existing badge session. Reads are available to active staff. Start/scope/link permissions are enforced separately from step roles.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/flow/catalog` | Current definition version, 24 steps and route boundaries. |
+| `GET /api/flow/items?project_id=&subproject_id=` | Enrolled item summaries, current stage, readiness and timing. |
+| `GET /api/flow/items/{id}` | Item, traveler and projected step statuses, linked identities, process clock, exceptions/events and permitted actions. |
+| `POST /api/flow/items/{id}/start` | Explicitly enroll a route; declare child scope and optional documented later starting point. |
+| `POST /api/flow/items/{id}/advance` | Verify the exact current checklist, identity, documents and custody fields, then advance one step. |
+| `POST /api/flow/items/{id}/fail` | Record a verification/QA exception and return to an allowed earlier step. |
+| `POST /api/flow/items/{id}/scope` | Correct required-child scope at spool step 9 or assembly step 17/18, with version, reason and reference. |
+| `POST /api/flow/items/{id}/assign-component` | Assign or correct a component's spool before material selection is fixed. |
+| `POST /api/flow/items/{id}/link-spool` | Add a released child spool to the assembly's controlled collection scope. |
+| `POST /api/flow/items/{id}/deliver` | Record actual receipt reference and recipient after shipment. |
+
+Every update after start requires `expected_version`. `FlowEvent.sequence` matches the traveler version; the independent process clock has its own sequence. Inputs forbid extra fields and do not accept actors or timestamps. A later starting baseline requires its existing-work reference and reason, leaves earlier steps `not_recorded` and does not bypass weld/QA readiness. Expected-child scope cannot be reduced below actual links. Zero newly linked components requires an explicit legacy material basis; assemblies always need at least one declared spool.
+
+Mutations acquire the topology advisory lock `0x4641425452414345` before any Item lock, then refresh the traveler version. Membership, release/reopen, physical weld operations and manual timing controls share the relevant serialization order. Assembly validation locks child spools and descendant components before checking readiness. Generic component rework writers still take the same component Item lock, so they cannot race a locked assembly release decision. Never introduce a barrier or wait after acquiring the advisory lock in concurrency tests: synchronize the competing requests before that first serialization point.
+
+Each numbered step uses the existing `SpoolProcessEvent` clock under `clm_01` through `clm_24`; it does not create a competing clock. A rework return creates another visit even if it returns to the same number. `flow_managed`, `flow_step` and `flow_status` identify the owner in process responses. Any enrolled flow rejects manual start/move/finish; pause/resume is allowed while active, including the explicitly permitted post-QA steps 16/23/24. Completing component/spool routes or recording shipment closes the current clock.
+
+`main.finalize_release` is a transaction helper with no internal commit. Its original weld/inspection checks plus `flow_release_errors` run when an authorized inspector advances step 15 or 22. Matching exception resolutions flush inside that transaction; a failed release rolls them back. The helper closes the quality-process visit, then the traveler starts its next post-QA step at the same timestamp. Generic final release cannot skip the traveler QA gate. Generic reopen is blocked for shipped/delivered assemblies and for child spools whose parent is past the permitted rework stage; permitted flow reopening returns to QA 15/22 and invalidates applicable verification.
+
+Failures at 11 invalidate before-welding requirement approvals; failures at 15 invalidate post-weld/release approvals. Other QA failures require fresh dimensional verification where relevant. Physical repair cycles remain explicit individual-weld actions. Fit-up is allowed at spool 10 or 14, welding at spool 14, and assembly joining operations at 18. Completing assembly work at 18 and coating at 21 requires fresh dimensions afterward. Material holds/open rework are checked recursively through components, spools and assemblies through shipment.
+
+`shipped` requires the current step 24, item verification, checklist, carrier, shipment reference and destination; it stores `shipped_at`. Only a later delivery action sets `delivered_at`, `receipt_reference`, `recipient` and status `delivered`. Document references do not imply generated/archived PDFs or carrier-system integration. The recorded handoff identifies the recorder and receiving badge but does not fabricate the recipient's independent acknowledgment.
+
+Excel exports explicitly allowlist all four flow tables, plus a `Flow steps` definition sheet. Flow event JSON retains its captured checklist definition. The process reports join a component through `ComponentLink` to its parent's current project/subproject; unassigned component report project IDs are blank and the original free-text Item project remains in the Items sheet. Definition/report rows are distinguished from raw database records in Export info.
 
 ## Testing
 
@@ -136,6 +174,7 @@ python -m pytest tests -q
 node tests/tracking_ui_smoke.cjs
 node tests/export_ui_smoke.cjs
 node tests/process_ui_smoke.cjs
+node tests/flow_ui_smoke.cjs
 ```
 
 API fixtures use temporary SQLite databases, override imported database settings, and create synthetic employees and authenticated sessions. They cover legacy behavior, roles, stale decisions, evidence, scope, operations, repairs, holds, hierarchy, and release. SQLite tests do not establish PostgreSQL locking or trigger behavior.
@@ -149,7 +188,7 @@ python tests/verify_postgres.py --help
 python tests/verify_postgres.py --dsn 'postgresql+psycopg://USER@localhost/fabtrace_test_upgrade'
 ```
 
-Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all seven history triggers, competing evidence/process writes, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
+Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all eight history triggers, competing evidence/process/flow writes, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
 
 ## Adding the next feature
 
@@ -161,6 +200,6 @@ Features that need deliberate additional models:
 
 - **Report uploads:** file storage, authorization, retention, and links to immutable evidence. Current evidence stores references/URLs only.
 - **Automatic qualification applicability:** structured ranges, continuity, governing rules, and revisions. Current acceptance is an inspector's evidence-backed review.
-- **NDE sampling, pressure-test packages, cross-spool field tie-ins, shipment/delivery, and collective assembly release:** each needs explicit scope and lifecycle rules rather than a generic green flag.
+- **NDE sampling, pressure-test packages, cross-spool field tie-ins, carrier/document integrations and richer field-return workflows:** each needs explicit scope and lifecycle rules. Basic child assembly readiness and shipment/delivery confirmation are already implemented in the numbered traveler.
 
 Project-specific NDE, PMI, PWHT, hardness, and other requirements can already be configured. Approved project documents supply their technical criteria and extent; this release infers no universal code rule or NDE percentage.

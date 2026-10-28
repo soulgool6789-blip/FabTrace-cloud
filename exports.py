@@ -30,6 +30,7 @@ from tracking import (
     SpoolPlan, Subproject, TrackingHold, Weld, WeldRepair, WeldRequirement, WeldWork,
 )
 from production import SpoolProcessEvent, process_snapshot
+from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, STEPS as FLOW_STEPS, VERSION as FLOW_VERSION
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -84,7 +85,14 @@ TABLE_SPECS = (
     _spec(WeldRepair, 'Weld repairs', 'id weld_id cycle reason opened_by opened_at'),
     _spec(TrackingHold, 'Holds', 'id item_id weld_id reason opened_by opened_at closed_by closed_at close_notes'),
     _spec(SpoolProcessEvent, 'Process events', 'id item_id sequence event process_key process_name actor at notes'),
+    _spec(FlowPlan, 'Flow plans', 'item_id route current_step status version expected_children baseline_step baseline_reference baseline_reason material_reference started_by started_at step_entered_at updated_at completed_at shipped_at carrier shipment_reference destination delivered_at receipt_reference recipient', 'item_id'),
+    _spec(FlowEvent, 'Flow events', 'id item_id sequence action step actor at reference notes data'),
+    _spec(FlowException, 'Flow exceptions', 'id item_id step return_step reason reference opened_by opened_at closed_by closed_at resolution'),
+    _spec(ComponentLink, 'Component links', 'component_id spool_id assigned_by assigned_at', 'component_id'),
 )
+
+FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'route', 'section', 'roles', 'checks',
+                     'requires_scan', 'requires_handoff', 'requires_reference', 'qa', 'return_steps')
 
 PROCESS_CONTEXT_COLUMNS = ('project_id', 'subproject_id', 'item_id', 'description')
 PROCESS_TIME_COLUMNS = ('elapsed_seconds', 'active_seconds', 'paused_seconds',
@@ -121,6 +129,11 @@ RELATIONSHIPS = (
     'tracking_holds.item_id -> items.id; optional weld_id -> tracking_welds.id.',
     'tracking_process_events.item_id -> items.id; actor -> employees.badge. sequence is the immutable per-spool order and concurrency version.',
     'Process visits and Process totals are calculated reports from Process events, grouped by item_id and process. visit_id is the sequence that started that visit, not a separate database row.',
+    'flow_plans.item_id / flow_events.item_id / flow_exceptions.item_id -> items.id. Flow event sequence is the per-item traveler revision; it differs from the separate process-timer sequence.',
+    'flow_component_links.component_id -> individual component items.id; spool_id -> the parent spool items.id. SpoolPlan.assembly_id remains the spool-to-assembly relationship.',
+    'Process reports use the current SpoolPlan project/subproject, or the assigned parent spool plan for a component. Unassigned component project/subproject cells remain blank; past project assignments are not frozen in timing events.',
+    'Flow steps contains the current numbered CLM process definitions. Recorded event data retains its own definition version and step/checklist snapshot.',
+    'Flow plans stores shipment and receipt details. shipped_at confirms dispatch; delivered_at exists only after a separately recorded delivery receipt.',
     'created_by, actor, completed_by, opened_by and closed_by badge fields retain the recorded employee identities.',
     'Audit details, template requirements and required_operations are JSON text. Preserve the JSON when using these records elsewhere.',
 )
@@ -359,7 +372,7 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Export', 'Exporter name', exporter.name)
     add('Export', 'Exporter role', exporter.role)
     add('Export', 'Snapshot method', 'PostgreSQL REPEATABLE READ READ ONLY, separate connection' if database_kind == 'postgresql' else 'SQLite explicit read transaction, separate connection')
-    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds and production process events. Two additional process reports summarize recorded visits and totals. No screen pagination limits.')
+    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events and numbered travelers. Two process reports summarize recorded visits and totals; Flow steps supplies the current 24-step definition lookup. No screen pagination limits.')
     add('Export', 'Database writes', 'None. This export does not append audit records or alter application data.')
     add('Exclusions', 'Authentication', 'Employee PIN hashes, PINs, passwords, session tokens, JWT secrets, database credentials and environment variables are excluded. Employee roster includes badge, name, role, active and created_at only.')
     add('Exclusions', 'External documents', 'References and URLs are exported as stored. External report/MTR contents and linked files are not fetched or embedded.')
@@ -372,13 +385,16 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Process timing', 'Coverage', 'Timing begins with the first recorded start, with no inferred earlier history. Idle gaps after Finish and before the next Start are not assigned to a process. Repeated visits are kept separately and summed in Process totals. Unstarted spools have no process report rows.')
     add('Process timing', 'Open visits', 'Open visits are calculated as of the report as_of timestamp, using the same read-only database snapshot as the raw events. Paused time remains part of elapsed time. Final release closes an open visit. Finished visits do not keep accumulating time.')
     add('Process timing', 'Analysis', 'Process visits has one row per recorded visit; Process totals has one row per spool/process. Seconds and decimal hours are numeric and may be summed or used in Excel PivotTables by project_id, subproject_id, item_id and process_name. Do not add report totals to raw business-row counts.')
+    add('Process flow', 'Route scopes', 'Components use steps 1-8; spools use 9-16; assemblies use 17-24. Parent/child IDs link the routes. Advancing a traveler records a checklist, handoff or review; underlying weld and quality gates remain authoritative.')
+    add('Process flow', 'History and baselines', 'Earlier steps before an explicitly documented baseline are not recorded completions. Failed inspections append exceptions and return to a recorded rework step; earlier attempts remain in Flow events and Process visits. Generic quality release cannot bypass the required traveler inspection.')
+    add('Process flow', 'References and receipts', 'References identify external purchase orders, BOMs, reports, shipping documents and delivery receipts. Files are not embedded. A shipment confirmation does not infer delivery; receipt confirmation records its own time, recipient and reference.')
     add('Format', 'Continuation sheets', f'Each sheet holds at most {EXCEL_MAX_ROWS:,} rows including its repeated header. Additional data continues on sheets named with a numeric suffix.')
     add('Format', 'Long text', f'Values exceeding {EXCEL_MAX_CELL_CHARS:,} UTF-16 units are replaced by an OVF reference. Reconstruct the full original value by concatenating Text overflow chunks for that overflow_id in chunk_index order.')
     add('Format', 'Long-text cells', writer.overflow_cells)
     add('Format', 'Overflow chunk rows', writer.overflow_rows)
     for index, relationship in enumerate(RELATIONSHIPS, start=1):
         add('Relationships', f'R{index:02}', relationship)
-    add('Counts', 'How to read counts', 'Data-row counts exclude headers. Continuation-sheet counts are separate. Manifest sheets are descriptive metadata, not business records.')
+    add('Counts', 'How to read counts', 'Data-row counts exclude headers. Continuation-sheet counts are separate. Process reports are calculated rows and Flow steps is definition data; neither adds database records. Manifest sheets are descriptive metadata.')
     for sheet in writer.sheets:
         add('Sheet rows', sheet.name, sheet.rows)
         add('Source table', sheet.name, sheet.table)
@@ -389,10 +405,15 @@ def _write_process_reports(connection, writer, created_at):
     """Calculate reports within the raw export's snapshot, one spool at a time."""
     events_table = SpoolProcessEvent.__table__
     event_columns = tuple(events_table.columns.keys())
+    component_plan = SpoolPlan.__table__.alias('component_spool_plan')
     query = (
-        select(*events_table.c, Item.description, SpoolPlan.project_id, SpoolPlan.subproject_id)
+        select(*events_table.c, Item.description,
+               func.coalesce(SpoolPlan.project_id, component_plan.c.project_id).label('project_id'),
+               func.coalesce(SpoolPlan.subproject_id, component_plan.c.subproject_id).label('subproject_id'))
         .select_from(events_table.join(Item.__table__, events_table.c.item_id == Item.id)
-                     .outerjoin(SpoolPlan.__table__, events_table.c.item_id == SpoolPlan.item_id))
+                     .outerjoin(SpoolPlan.__table__, events_table.c.item_id == SpoolPlan.item_id)
+                     .outerjoin(ComponentLink.__table__, events_table.c.item_id == ComponentLink.component_id)
+                     .outerjoin(component_plan, ComponentLink.spool_id == component_plan.c.item_id))
         .order_by(events_table.c.item_id, events_table.c.sequence)
     )
     with tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as visits_file, \
@@ -441,6 +462,15 @@ def _write_process_reports(connection, writer, created_at):
             writer.write_rows(name, 'derived:tracking_process_events', columns, report_rows(), count, group='report')
 
 
+def _write_flow_steps(writer):
+    def rows():
+        for step in FLOW_STEPS:
+            record = {'definition_version': FLOW_VERSION, **step}
+            yield [record[key] for key in FLOW_STEP_COLUMNS], _json_text({'number': step['number'], 'version': FLOW_VERSION})
+    writer.write_rows('Flow steps', 'definition:CLM-process-flow', FLOW_STEP_COLUMNS, rows(), len(FLOW_STEPS),
+                      json_columns={'roles', 'checks', 'return_steps'}, group='definition')
+
+
 def build_workbook(bind, exporter, created_at=None):
     """Return a rewound temporary XLSX; caller owns and must close the file."""
     created_at = created_at or utcnow()
@@ -478,6 +508,7 @@ def build_workbook(bind, exporter, created_at=None):
                             finally:
                                 result.close()
                         _write_process_reports(connection, writer, created_at)
+                        _write_flow_steps(writer)
                         writer.write_overflow()
                         manifest = _manifest_rows(created_at, exporter, writer, kind)
                         writer.write_rows('Export info', 'export_manifest', ('section', 'entry', 'part', 'value'),
