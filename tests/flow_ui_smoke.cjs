@@ -27,10 +27,12 @@ class Element {
 for(const id of ['flowContent','flowDialog','flowDialogTitle','flowDialogFields','flowDialogForm','flowDialogSubmit','flowDialogError','flowDialogClose','flowDialogCancel','navFlow','itemFlowBtn'])elements.set(id,new Element(id));
 const titles=['Receive Shipment','Check Dimensions','Capture Location','Material in Inventory','Select Components for Spool','Release to Fabrication Prep Technician','Prep Components','Return to Production','Release to Fit-Up Welder','Fit-Up & Tack Weld','QA/QC – Check Dimensions','Return to Production','Release to Process Welder','Complete Welds','QA/QC – Inspect Welds','Scan Completed Spool','Collect Spools for Assembly','Create Assembly ID','QA/QC – Assembly Inspection','Release to Sandblast & Paint','Sandblast & Paint','QA/QC – Final Inspection','Release to Ready to Ship','Ship to Customer'];
 const catalog={version:'CLM-24-v1',routes:[{id:'component',label:'Component',first_step:1,last_step:8},{id:'spool',label:'Spool',first_step:9,last_step:16},{id:'assembly',label:'Assembly',first_step:17,last_step:24}],steps:titles.map((title,index)=>{const n=index+1,qa=[2,11,15,19,22].includes(n);return {number:n,title,route:n<9?'component':n<17?'spool':'assembly',section:'Fixture section',checks:[{id:'s'+n+'_1',label:'Verify physical item & records'}],roles:qa?['admin','inspector']:['admin','supervisor','handler'],requires_scan:[1,3,5,6,8,9,12,13,16,17,18,20,23,24].includes(n),requires_handoff:[6,8,9,12,13,16,20,23].includes(n),requires_location:[3,6,8,9,12,13,16,20,23].includes(n),requires_reference:[1,2,5,11,15,19,22].includes(n),qa,return_steps:({2:[2],11:[10],15:[14],19:[17,18],22:[17,18,19,20,21]})[n]||[]}})};
+const handoffOptions={locations:[{id:'welding',label:'Weld Bay 2',kind:'builtin',active:true,version:1},{id:'custom_rack',label:'Rack A',kind:'custom',active:true,version:1}],statuses:[{id:'queued',label:'Queued'},{id:'in_progress',label:'In progress'}],keep_current_location_id:'current',can_manage_locations:true};
 const baseProcess=()=>({item_id:'ITM-001',version:11,as_of:'2026-10-28T12:05:00Z',status:'running',current:{id:1,process_name:'Fixture step',started_at:'2026-10-28T12:00:00Z',elapsed_seconds:300,active_seconds:240,paused_seconds:60},totals:{elapsed_seconds:300,active_seconds:240,paused_seconds:60,visits:1},by_process:[{process_name:'Fixture step',visits:1,elapsed_seconds:300,active_seconds:240,paused_seconds:60}],events:[]});
 function detailAt(number,extra={}){
   const step=catalog.steps[number-1],r=catalog.routes.find(row=>row.id===step.route);
-  return {item:{id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24].includes(number)},flow:{item_id:'ITM-001',route:step.route,current_step:number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:catalog.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
+  const transfer={item_id:'ITM-001',version:4,handler:'SHOP1',handler_name:'Sender One',handler_active:true,location:'Shop',location_id:null,operational_status:'queued',status_label:'Queued',can_transfer:![16,23,24].includes(number)};
+  return {transfer,item:{id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24].includes(number)},flow:{item_id:'ITM-001',route:step.route,current_step:number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:catalog.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
 }
 let record=detailAt(6),allowedOverride=null,fail=null,hold=null,now=10000,timerId=0;
 const calls=[],messages=[],timers=new Map();
@@ -51,11 +53,13 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:{role:'ad
   FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
   api:async(url,options={})=>{
     calls.push({url,...options});if(options.method){if(hold)await hold;if(fail)throw fail;return detail()}
+    if(url==='/api/transfers/options')return structuredClone(handoffOptions);
+    if(url==='/api/employees/directory')return [{badge:'SHOP1',name:'Sender One',role:'welder',active:true},{badge:'SHOP2',name:'Receiver Two',role:'handler',active:true},{badge:'OLD1',name:'Former worker',role:'handler',active:false}];
     if(url==='/api/flow/catalog')return structuredClone(catalog);
     if(url==='/api/flow/items')return {items:[{item_id:'ITM-001',description:'Test item',route:record.flow?.route||'component',status:record.flow?.status||'active',current_step:record.flow?.current_step||6,current_title:record.flow?.current?.title||'Prep',project_id:'P1',subproject_id:'SUB1',open_exceptions:record.exceptions?.filter(x=>!x.closed_at).length||0,blockers:[],production_process:baseProcess()},{item_id:'OTHER-002',description:'Other project item',route:'assembly',status:'delivered',current_step:null,current_title:'',project_id:'P2',subproject_id:null,open_exceptions:0,blockers:[],production_process:null}]};
     if(url.startsWith('/api/flow/items/'))return detail();throw Error('Unexpected endpoint '+url);
   },
-};context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow.js'),'utf8'),context);
+};context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/handoff.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow.js'),'utf8'),context);
 const html=()=>elements.get('flowContent').innerHTML,posts=()=>calls.filter(row=>row.method==='POST');
 const click=(name,id='')=>elements.get('flowContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{flowAction:name,flowId:id}})}});
 const submitStep=async values=>{const form=elements.get('flowStepForm');assert.ok(form,'current-step form exists');form.values=values;await form.onsubmit({preventDefault(){},target:form})};
@@ -77,15 +81,24 @@ const check=number=>({['check_s'+number+'_1']:'on'});
   assert.match(context.url,/project=P2/);await context.FabFlow.open({project:'P1',resetFilters:true});
   await context.FabFlow.open({item:'ITM-001'});assert.match(context.url,/flow=1/);assert.match(context.url,/item=ITM-001/);
   assert.equal((html().match(/class="ff-route-step /g)||[]).length,8,'selected item only has its own route');
-  assert.match(html(),/Test &lt;item&gt;/);assert.match(html(),/Receiving employee badge ID/);assert.match(html(),/Receiving location/);
+  assert.match(html(),/Test &lt;item&gt;/);assert.match(html(),/Receiving employee badge QR \/ ID/);assert.match(html(),/Destination location/);
   assert.equal(timers.size,1);now+=65000;for(const tick of timers.values())tick();assert.ok(elements.get('flowContent').clocks.some(clock=>clock.textContent==='06m 05s'));
-  const before=posts().length;await submitStep({receiver_badge:'SHOP2',location:'Bay 2',scanned_item_id:'ITM-001'});assert.equal(posts().length,before,'all checks required');
-  await submitStep({...check(6),receiver_badge:'FABTRACE:EMP:SHOP2',location:'  Bay 2  ',scanned_item_id:'https://fabtrace-cloud.onrender.com/?item=ITM-001',notes:'  Handoff  '});
-  assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,confirmations:['s6_1'],notes:'Handoff',scanned_item_id:'ITM-001',receiver_badge:'SHOP2',location:'Bay 2'});
+  const before=posts().length;await submitStep({sender_badge:'SHOP1',receiver_badge:'SHOP2',location_id:'welding',operational_status:'in_progress',scanned_item_id:'ITM-001'});assert.equal(posts().length,before,'all checks required');
+  await submitStep({...check(6),sender_badge:'FABTRACE:EMP:SHOP1',receiver_badge:'FABTRACE:EMP:SHOP2',location_id:'welding',operational_status:'in_progress',scanned_item_id:'https://fabtrace-cloud.onrender.com/?item=ITM-001',notes:'  Handoff  '});
+  assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,confirmations:['s6_1'],notes:'Handoff',scanned_item_id:'ITM-001',sender_badge:'SHOP1',receiver_badge:'SHOP2',location_id:'welding',operational_status:'in_progress',expected_transfer_version:4});
   assert.equal(posts().at(-1).url,'/api/flow/items/ITM-001/advance');
 
-  record=detailAt(3);await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Storage location/);assert.doesNotMatch(html(),/Receiving employee badge ID/);
-  await submitStep({...check(3),scanned_item_id:'ITM-001',location:'Rack A'});assert.equal(JSON.parse(posts().at(-1).body).location,'Rack A');
+  const beforeInvalidHandoff=posts().length;
+  await submitStep({...check(6),sender_badge:'SHOP2',receiver_badge:'SHOP1',location_id:'welding',operational_status:'in_progress',scanned_item_id:'ITM-001'});
+  assert.equal(posts().length,beforeInvalidHandoff,'wrong sender cannot complete a numbered handoff');assert.match(elements.get('flowHandoffSenderInfo').textContent,/recorded custodian/);
+  await submitStep({...check(6),sender_badge:'SHOP1',receiver_badge:'OLD1',location_id:'welding',operational_status:'in_progress',scanned_item_id:'ITM-001'});
+  assert.equal(posts().length,beforeInvalidHandoff,'inactive receiving employee is blocked');
+  record=detailAt(16);await context.FabFlow.open({item:'ITM-001'});assert.equal(record.transfer.can_transfer,false);
+  await submitStep({...check(16),sender_badge:'SHOP1',receiver_badge:'SHOP1',location_id:'current',operational_status:'queued',scanned_item_id:'ITM-001'});
+  assert.equal(posts().length,beforeInvalidHandoff+1,'permitted numbered release handoff is not blocked by generic can_transfer');assert.equal(JSON.parse(posts().at(-1).body).sender_badge,'SHOP1');assert.equal(JSON.parse(posts().at(-1).body).receiver_badge,'SHOP1');assert.equal(elements.get('flowHandoffSender').value,'');assert.equal(elements.get('flowHandoffReceiver').value,'','each numbered handoff starts with two blank badge fields');
+
+  record=detailAt(3);await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Storage location/);assert.doesNotMatch(html(),/Receiving employee badge QR \/ ID/);
+  await submitStep({...check(3),scanned_item_id:'ITM-001',location_id:'custom_rack'});assert.equal(JSON.parse(posts().at(-1).body).location_id,'custom_rack');assert.equal(JSON.parse(posts().at(-1).body).expected_transfer_version,4);assert.equal(JSON.parse(posts().at(-1).body).sender_badge,undefined);
 
   record=detailAt(11);context.me.role='handler';await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/id="flowStepForm"/);assert.doesNotMatch(html(),/data-flow-action="fail"/);
   context.me.role='inspector';await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Pass inspection & continue/);

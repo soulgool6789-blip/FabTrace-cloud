@@ -710,6 +710,110 @@ def verify_concurrent_parts_allocation(application, api):
             "readonly_views_and_export": 5, "write_locks_on_reads": 0, "mutations_on_reads": 0}
 
 
+def verify_concurrent_transfers(application, api):
+    """Exercise actual PostgreSQL serialization across ordinary and flow moves."""
+    from test_flow import action_body, create_item, detail, enroll
+    from test_progress import database_state
+
+    def race(calls):
+        gate, seen = Barrier(2), set()
+
+        def synchronize(connection, cursor, statement, parameters, context, many):
+            if "pg_advisory_xact_lock" in statement and id(connection) not in seen:
+                seen.add(id(connection))
+                gate.wait(timeout=15)
+
+        def submit(call):
+            worker = TestAPI(application, application.SessionLocal)
+            try:
+                method, path, body = call
+                response = worker.request(method, path, json=body)
+                return {"status": response.status_code, "body": response.json()}
+            finally:
+                worker.client.close()
+
+        event.listen(application.engine, "before_cursor_execute", synchronize)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = [future.result(timeout=30) for future in [pool.submit(submit, call) for call in calls]]
+        finally:
+            event.remove(application.engine, "before_cursor_execute", synchronize)
+        assert sorted(row["status"] for row in responses) == [200, 409], responses
+        return [200, 409]
+
+    def transfer_body(item_id, **values):
+        current = ok(api.get(f"/api/transfers/items/{item_id}"))
+        return {"sender_badge": current["handler"], "handler": current["handler"],
+                "location_id": "welding", "operational_status": "in_progress",
+                "expected_transfer_version": current["version"], **values}
+
+    item_id = create_item(api, "PG-TRANSFER-SAME-CUSTODIAN")
+    body = transfer_body(item_id)
+    ordinary_codes = race([("POST", f"/api/items/{item_id}/transfer", {**body, "location_id": location})
+                           for location in ("welding", "fit_up")])
+    current = ok(api.get(f"/api/transfers/items/{item_id}"))
+    assert current["version"] == 1 and current["handler"] == BADGES["handler"]
+    # Handler values alone cannot detect a location-only update or an ABA move.
+    assert api.post(f"/api/items/{item_id}/transfer", body).status_code == 409
+    ok(api.post(f"/api/items/{item_id}/transfer", transfer_body(item_id, handler=BADGES["welder"])))
+    ok(api.post(f"/api/items/{item_id}/transfer", transfer_body(item_id, handler=BADGES["handler"])))
+    assert api.post(f"/api/items/{item_id}/transfer", body).status_code == 409
+    assert ok(api.get(f"/api/transfers/items/{item_id}"))["version"] == 3
+
+    flow_codes = {}
+    for step in (3, 6):
+        routed_id = create_item(api, f"PG-TRANSFER-STEP-{step}")
+        initial = enroll(api, routed_id, "component", start_step=step)
+        ordinary = transfer_body(routed_id, location_id="production_staging", operational_status="queued")
+        advance_body = action_body(api, routed_id)
+        flow_codes[str(step)] = race([
+            ("POST", f"/api/items/{routed_id}/transfer", ordinary),
+            ("POST", f"/api/flow/items/{routed_id}/advance", advance_body),
+        ])
+        after = detail(api, routed_id)
+        assert after["flow"]["version"] == initial["flow"]["version"] + 1
+        assert after["transfer"]["version"] == 1
+        advanced = after["flow"]["current_step"] == step + 1
+        assert after["flow"]["current_step"] in (step, step + 1)
+        assert after["production_process"]["version"] == initial["production_process"]["version"] + int(advanced)
+        if not advanced:
+            assert after["flow"]["step_entered_at"] == initial["flow"]["step_entered_at"]
+        assert api.post(f"/api/flow/items/{routed_id}/advance", advance_body).status_code == 409
+
+    custom = ok(api.post("/api/transfers/locations", {"label": "PG verified custom work bay"}), 201)
+    location_codes = race([("PATCH", f"/api/transfers/locations/{custom['id']}", {
+        "label": label, "active": False, "expected_version": custom["version"],
+    }) for label in ("PG first renamed work bay", "PG second renamed work bay")])
+    options = ok(api.get("/api/transfers/options"))
+    updated = next(row for row in options["locations"] if row["id"] == custom["id"])
+    assert updated["version"] == 2 and updated["active"] is False
+    rejected = api.post(f"/api/items/{item_id}/transfer", transfer_body(item_id, location_id=custom["id"]))
+    assert rejected.status_code == 422, rejected.text
+
+    before, unsafe = database_state(api), []
+
+    def observe(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if sql.startswith(("INSERT", "UPDATE", "DELETE")) or "FOR UPDATE" in sql or "PG_ADVISORY_XACT_LOCK" in sql:
+            unsafe.append(statement)
+
+    paths = ("/api/transfers/options", f"/api/transfers/items/{item_id}", f"/api/items/{item_id}",
+             "/api/flow/items/PG-TRANSFER-STEP-6", "/api/exports/excel")
+    event.listen(application.engine, "before_cursor_execute", observe)
+    try:
+        for path in paths:
+            response = api.get(path)
+            assert response.status_code == 200, response.text
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe)
+    assert unsafe == []
+    assert database_state(api) == before
+    return {"same_custodian_competing_moves": ordinary_codes, "stale_ABA_rejected": True,
+            "ordinary_vs_numbered_step": flow_codes, "competing_location_edits": location_codes,
+            "inactive_destination_rejected": True, "readonly_views_and_export": len(paths),
+            "write_locks_on_reads": 0, "mutations_on_reads": 0}
+
+
 def verify_excel_export(application, api):
     exports = importlib.import_module("exports")
     def row_counts():
@@ -807,6 +911,7 @@ def verify(dsn):
         quality = importlib.import_module("quality")
         dossier = importlib.import_module("dossier")
         parts = importlib.import_module("parts")
+        transfers = importlib.import_module("transfers")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -836,6 +941,8 @@ def verify(dsn):
                 assert session.query(model).count() == 0, "Migration invented packet scope, evidence, approval, or handover"
             for model in (parts.SpoolPartsPlan, parts.PartLine, parts.PartAllocation, parts.PartEvent):
                 assert session.query(model).count() == 0, "Migration invented parts requirements, allocations or history"
+            for model in (transfers.ItemTransferState, transfers.TransferLocation):
+                assert session.query(model).count() == 0, "Migration invented transfer status or custom shop locations"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -858,6 +965,7 @@ def verify(dsn):
         dossier_concurrency = verify_concurrent_dossier_mutation(application, dossier, api)
         dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
         parts_concurrency = verify_concurrent_parts_allocation(application, api)
+        transfer_concurrency = verify_concurrent_transfers(application, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -879,6 +987,7 @@ def verify(dsn):
             "concurrent_quality_evidence": quality_concurrency,
             "concurrent_dossier_mutation": dossier_concurrency,
             "concurrent_parts_allocation": parts_concurrency,
+            "concurrent_transfers": transfer_concurrency,
             "readonly_quality_gate_views": quality_read_views,
             "readonly_dossier_progress_and_exports": dossier_read_views,
             "excel_export": excel_export,

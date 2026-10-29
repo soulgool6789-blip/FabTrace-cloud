@@ -477,8 +477,11 @@ def test_material_change_invalidates_signed_pressure_but_routine_custody_does_no
     signed(entry(api, item_id, "pressure", document_ids=[file["id"]], values=PRESSURE_VALUES))
     signed(review(api, item_id, "pressure"))
     signed_before = check(api, item_id, "pressure")
+    transfer = ok(api.get(f"/api/transfers/items/{item_id}"))
     ok(api.post(f"/api/items/{item_id}/transfer", {
-        "location": "Synthetic inspection bay", "handler": BADGES["handler"],
+        "sender_badge": transfer["handler"], "handler": BADGES["handler"],
+        "location_id": "qa_qc", "operational_status": "awaiting_inspection",
+        "expected_transfer_version": transfer["version"],
         "notes": "Routine custody only; no material or work changed.",
     }, role="handler"))
     assert check(api, item_id, "pressure")["status"] == "accepted"

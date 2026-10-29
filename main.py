@@ -35,7 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.29-parts.1'
+APP_VERSION='2026.10.29-transfer.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -137,7 +137,7 @@ def asdict(row,keys):
     return {k:fmt(getattr(row,k)) for k in keys}
 ITEM_KEYS='id description kind project google_part_number drawing location handler welds_required welds_done dimensional weld dimension_at weld_at last_work_at reinspection_due on_hold released released_at released_by created_at updated_at'.split()
 
-def item_dict(s,r):
+def item_dict(s,r,user=None):
     d=asdict(r,ITEM_KEYS)
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
     d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
@@ -148,6 +148,7 @@ def item_dict(s,r):
     d['flow_enabled']=flow is not None
     d['flow_step']=flow.current_step if flow else None
     d['flow_status']=flow.status if flow else None
+    d['transfer']=transfer_snapshot(s,r,user)
     return d
 
 @app.middleware('http')
@@ -250,7 +251,7 @@ def create_item(data:ItemIn,u:Employee=Depends(auth),s:Session=Depends(db)):
     if not s.get(Employee,data.handler):raise HTTPException(422,'Unknown handler badge')
     r=Item(**data.model_dump());s.add(r)
     audit(s,r.id,u.badge,'ITEM_CREATED',data.model_dump());s.commit()
-    return item_dict(s,r)
+    return item_dict(s,r,u)
 
 class PartNumberUpdate(BaseModel):
     google_part_number:str=Field(min_length=1,max_length=160)
@@ -264,7 +265,7 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
     if not r.google_part_number:raise HTTPException(422,'Google part number cannot be blank')
     audit(s,r.id,u.badge,'GOOGLE_PART_NUMBER_CHANGED',{'previous':before,'new':r.google_part_number})
     s.commit()
-    return item_dict(s,r)
+    return item_dict(s,r,u)
 
 class BulkItemRow(BaseModel):
     id:str=Field(default='',max_length=60)
@@ -331,30 +332,7 @@ def scan_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
 def get_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     r=s.get(Item,item_id)
     if not r:raise HTTPException(404,'Item not found')
-    return item_dict(s,r)
-class Transfer(BaseModel):
-    location:str=Field(min_length=1,max_length=160)
-    handler:str=Field(min_length=2,max_length=80)
-    notes:str=Field(default='',max_length=1000)
-    expected_handler:str|None=Field(default=None,max_length=80)
-    scan_method:Literal['manual','employee_qr']='manual'
-
-@app.post('/api/items/{item_id}/transfer')
-def transfer(item_id:str,data:Transfer,u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'handler','welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
-    receiver=s.get(Employee,data.handler)
-    if not receiver or not receiver.active:raise HTTPException(422,'Receiving badge is missing or inactive')
-    if data.expected_handler is not None and data.expected_handler!=r.handler:
-        raise HTTPException(409,'Item handler changed since scanning; refresh and retry')
-    if r.location==data.location and r.handler==data.handler:
-        raise HTTPException(409,'No change to current handler or location')
-    before={'location':r.location,'handler':r.handler};r.location=data.location;r.handler=data.handler
-    audit(s,r.id,u.badge,'TRANSFER',{'from':before,
-        'to':{'location':r.location,'handler':r.handler,'name':receiver.name},
-        'notes':data.notes,'scan_method':data.scan_method,
-        'handoff_recorded_by':u.badge,'recipient_acknowledged':False})
-    s.commit()
-    return item_dict(s,r)
+    return item_dict(s,r,u)
 class WeldEvent(BaseModel):
     count:int=Field(ge=1,le=10000)
     weld_ids:str=Field(min_length=1,max_length=1000)
@@ -366,7 +344,7 @@ def weld(item_id:str,data:WeldEvent,u:Employee=Depends(auth),s:Session=Depends(d
         raise HTTPException(409,'This spool uses individual weld tracking. Record work on the specific weld in Projects & welds.')
     if r.welds_done+data.count>r.welds_required:raise HTTPException(409,'Exceeds required weld count; change controlled traveler first')
     r.welds_done+=data.count;r.last_work_at=utcnow();r.dimensional='Not started';r.weld='Not started';r.reinspection_due=True
-    audit(s,r.id,u.badge,'WELDS_COMPLETED',data.model_dump());s.commit();return item_dict(s,r)
+    audit(s,r.id,u.badge,'WELDS_COMPLETED',data.model_dump());s.commit();return item_dict(s,r,u)
 class InspectionIn(BaseModel):
     kind:Literal['Dimensional','Weld']
     result:Literal['Pass','Fail']
@@ -385,7 +363,7 @@ def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Dep
         s.add(Rework(item_id=r.id,kind=data.kind+' correction',reason=data.measurements,assigned=r.handler,opened_at=t))
     elif r.dimensional=='Pass' and r.weld=='Pass' and not s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):
         r.reinspection_due=False
-    audit(s,r.id,u.badge,'INSPECTION',data.model_dump());s.commit();return item_dict(s,r)
+    audit(s,r.id,u.badge,'INSPECTION',data.model_dump());s.commit();return item_dict(s,r,u)
 class ReworkIn(BaseModel):
     kind:str=Field(min_length=2,max_length=50)
     reason:str=Field(min_length=4,max_length=3000)
@@ -398,7 +376,7 @@ def open_rework(item_id:str,data:ReworkIn,u:Employee=Depends(auth),s:Session=Dep
     s.add(Rework(item_id=r.id,**data.model_dump()))
     if is_tracked(s,r):
         reopen_tracked(s,r,u.badge,'Item rework opened: '+data.reason)
-    audit(s,r.id,u.badge,'REWORK_OPENED',data.model_dump());s.commit();return item_dict(s,r)
+    audit(s,r.id,u.badge,'REWORK_OPENED',data.model_dump());s.commit();return item_dict(s,r,u)
 class CloseRework(BaseModel):
     notes:str=Field(min_length=4,max_length=3000)
 @app.post('/api/items/{item_id}/rework/{rework_id}/close')
@@ -411,7 +389,7 @@ def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(a
     r.last_work_at=x.closed_at;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started'
     if is_tracked(s,r):
         reopen_tracked(s,r,u.badge,'Item rework completed; current requirements need review: '+data.notes)
-    audit(s,r.id,u.badge,'REWORK_CLOSED',{'rework_id':rework_id,'notes':data.notes});s.commit();return item_dict(s,r)
+    audit(s,r.id,u.badge,'REWORK_CLOSED',{'rework_id':rework_id,'notes':data.notes});s.commit();return item_dict(s,r,u)
 class ReleaseIn(BaseModel):
     reference:str=Field(min_length=3,max_length=250)
 
@@ -443,7 +421,7 @@ def release(item_id:str,data:ReleaseIn,u:Employee=Depends(auth),s:Session=Depend
     lock_flow_topology(s)
     r=lock_item(s,item_id)
     finalize_release(s,r,u.badge,data.reference)
-    s.commit();return item_dict(s,r)
+    s.commit();return item_dict(s,r,u)
 @app.post('/api/items/{item_id}/reopen')
 def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     permit(u,'admin')
@@ -455,7 +433,7 @@ def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     if is_tracked(s,r):
         reopen_tracked(s,r,u.badge,'Administrative reopen; new requirement reviews required')
     on_flow_item_reopened(s,r,u.badge,utcnow())
-    audit(s,r.id,u.badge,'REOPENED',{'reason':'Administrative reopen; new inspections required'});s.commit();return item_dict(s,r)
+    audit(s,r.id,u.badge,'REOPENED',{'reason':'Administrative reopen; new inspections required'});s.commit();return item_dict(s,r,u)
 @app.get('/api/items/{item_id}/custody')
 def item_custody(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     if not s.get(Item,item_id):raise HTTPException(404,'Item not found')
@@ -494,6 +472,8 @@ def health(s:Session=Depends(db)):
     s.execute(select(PartLine.id).limit(1))
     s.execute(select(PartAllocation.component_id).limit(1))
     s.execute(select(PartEvent.id).limit(1))
+    s.execute(select(ItemTransferState.item_id).limit(1))
+    s.execute(select(TransferLocation.id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -524,6 +504,9 @@ app.include_router(dossier_router)
 
 from progress import router as progress_router
 app.include_router(progress_router)
+
+from transfers import router as transfers_router, ItemTransferState, TransferLocation, transfer_snapshot
+app.include_router(transfers_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)

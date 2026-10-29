@@ -54,7 +54,7 @@ Expand a line to see the actual item IDs, current process, handler and location.
 
 ## 4. Continue using the QR handoffs
 
-The same item QR continues to identify the physical piece. Employee badge QRs identify receiving employees. **Scan & Handoff** records custody/location; completing the current handoff in **Process flow** also advances the numbered step and its timer after the required checks pass.
+The same item QR continues to identify the physical piece. Handoffs require both the current custodian's **sending badge** and the **receiving badge**, plus a location and work status selected from dropdowns. **Scan & Handoff** records custody/location/status; completing the current handoff in **Process flow** also advances the numbered step and its timer after the required checks pass. The signed-in recorder remains separate from both scanned identities. See [HANDOFF_GUIDE.md](HANDOFF_GUIDE.md) for the complete sequence and shop-location management.
 
 Quantity progress follows those recorded component steps. There is no editable "completed quantity" counter that can substitute for the individual records. Weld traceability, inspection decisions, existing holds and final release remain separate controls.
 
