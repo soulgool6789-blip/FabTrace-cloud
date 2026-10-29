@@ -70,4 +70,4 @@ An administrator can use **Admin controls → Correct custodian / location** to 
 | Item is released | Continue through its permitted current post-QA traveler step. An ordinary transfer does not unlock released work. |
 | Camera unavailable | Use a keyboard scanner or enter the item/badge value in the correct field and confirm the displayed identity. |
 
-Ordinary transfers are available to handlers, welders, supervisors and administrators. Custom location management is restricted to supervisors and administrators. Numbered flow actions keep their existing step-specific role rules; scanning another person's badge does not grant their permissions.
+Ordinary dual-badge transfers are available to all active employees in the supported job positions, including QA/QC, painters, finishers and miscellaneous support. Custom location management is restricted to supervisors and administrators. Numbered flow actions follow the current step's job permissions; scanning another person's badge or becoming an item's custodian does not grant their work or approval permissions. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md).

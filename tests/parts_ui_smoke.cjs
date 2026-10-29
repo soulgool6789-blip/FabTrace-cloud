@@ -35,7 +35,7 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:null,curr
     assert.ok(url==='/api/parts/spools'||url.startsWith('/api/parts/spools/'),'unexpected route '+url);return captured;
   }
 };
-elements.get('navBulk').onclick=()=>routes.push({type:'bulk'});context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/parts.js'),'utf8'),context);
+elements.get('navBulk').onclick=()=>routes.push({type:'bulk'});context.window=context;vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/parts.js'),'utf8'),context);
 const html=()=>elements.get('partsContent').innerHTML,click=(action,id='')=>elements.get('partsContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{partsAction:action,partsId:String(id)}})}});
 const set=(id,value)=>{assert.ok(elements.has(id),'field '+id);elements.get(id).value=String(value);};
 const submit=id=>{const form=elements.get(id);assert.ok(form,'form '+id);return form.onsubmit({preventDefault(){},target:form});};

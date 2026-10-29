@@ -29,6 +29,12 @@ An active administrator can open **Admin controls** (`/?admin=1`) to release any
 
 **Scan & Handoff** now requires the item QR, the current custodian's sending badge and the receiving employee's badge. Select the destination and operational work status from dropdowns, review both employees and the signed-in recorder, and save. Supervisors/administrators can add and maintain actual shop locations. Keeping the same employee in both badge fields supports a location/status change without claiming a new custodian. Stale forms are rejected, and every new move retains its before/after state. Ordinary transfers do not advance a process, change its timer or grant QA approval. Numbered handoff steps use the same checks. See [HANDOFF_GUIDE.md](HANDOFF_GUIDE.md).
 
+### Job positions and restricted controls
+
+Administrators assign one position per employee in **Admin controls → Employee accounts**: Administrator, Supervisor, Material coordinator, Welder, Fit-up welder, Process welder, QA/QC, Painter, Finisher or Miscellaneous. **Welder** covers both welding stages; the two specialist positions separate fit-up from production welding. Finisher completes component preparation, Painter completes sandblast/paint, and QA/QC performs inspection and acceptance. Supervisors plan and coordinate without physical welding/painting completion authority.
+
+The server enforces job-specific work, timer and evidence permissions. Job Packet checks/uploads are scoped to the trade; QA review/issue and package handover have separate permissions. Ordinary dual-badge custody transfers remain available to all supported positions. A position change revokes existing sessions, including a queued write waiting behind that change. Employee badges, historical records and existing assignments remain intact; an Administrator account retains full authority until explicitly reassigned. No schema, resource or automatic account changes are introduced. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the complete matrix and setup instructions.
+
 ## Existing records and enrollment
 
 Deploying this version does **not** convert existing items, invent individual welds, or turn aggregate weld counts into accepted weld records. Items retain their previous workflow until a supervisor or administrator creates a spool plan for that item.
@@ -83,7 +89,7 @@ See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for setup and the evidence/review seq
 
 Open **Projects & welds**, choose a spool in the **Spool register**, and use its **Production process** card. Select a process and start its timer. **Move to process** closes the current visit and starts the next one at the same time. **Pause** records a delay reason; **Resume** continues running time. **Finish process** closes the visit when no new process should start yet.
 
-Choose material preparation, cutting/beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA, ready for dispatch, or a custom process. Repeated visits remain separate in history and are combined in totals for that process. Any active employee can record timing; the employee badge and server timestamp are retained for every change.
+The catalog includes material preparation, cutting/beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA, ready for dispatch and custom support processes. Your assigned position determines the available controls; supervisors and administrators coordinate all timers. Moving requires authority over both current and destination process. Repeated visits remain separate in history and are combined in totals. The employee badge and server timestamp are retained for every change.
 
 Elapsed time includes both running and paused time. These are calendar durations for an item, not employee labor hours or shift-adjusted hours. Timers keep counting across logout and overnight. Timing starts when staff record the first start; earlier work and gaps after finishing are not inferred. Quality holds and timer pauses are separate actions. Finishing a manually selected process does not complete welds or grant quality approval.
 

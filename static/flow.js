@@ -4,7 +4,7 @@
   const ROOT='/api/flow', node=id=>document.getElementById(id), encode=encodeURIComponent;
   const arr=value=>Array.isArray(value)?value:[], num=value=>Number.isFinite(Number(value))?Number(value):0;
   const stamp=value=>value?new Date(value).toLocaleString():'—';
-  const roles={admin:'Administrator',supervisor:'Supervisor',handler:'Material coordinator / handler',welder:'Welder / production',inspector:'Inspector'};
+  const roles={admin:'Administrator',supervisor:'Supervisor',handler:'Material coordinator',welder:'Welder',fitup_welder:'Fit-up welder',process_welder:'Process welder',inspector:'QA/QC',painter:'Painter',finisher:'Finisher',misc:'Miscellaneous / support'};
   const routeNames={component:'Component',spool:'Spool',assembly:'Assembly'};
   const statusNames={admin_released:'Administrative release',not_started:'Not started',active:'In progress',completed:'Route complete',shipped:'Shipped',delivered:'Delivered',rework:'Needs rework'};
   const stepStatusNames={pending:'Upcoming',current:'Current step',completed:'Completed',not_recorded:'Not recorded',rework:'Needs reinspection',other_route:'Linked record'};

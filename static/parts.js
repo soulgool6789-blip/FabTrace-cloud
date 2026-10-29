@@ -6,8 +6,8 @@
   const state={active:false,sequence:0,pending:null,loading:false,saving:false,project:'',spool:'',items:[],detail:null,query:'',editor:null,assign:null,remove:null,error:'',formError:'',stale:false};
   const button=(action,label,id='',cls='',disabled=false)=>`<button type="button" class="${esc(cls)}" data-parts-action="${esc(action)}" data-parts-id="${esc(id)}"${disabled?' disabled':''}>${esc(label)}</button>`;
   const option=(value,label,current)=>`<option value="${esc(value)}"${text(value)===text(current)?' selected':''}>${esc(label)}</option>`;
-  const canManage=()=>state.detail?.permissions?.can_manage===true&&state.detail?.editable===true&&['admin','supervisor'].includes(me?.role);
-  const canAllocate=()=>state.detail?.permissions?.can_allocate===true&&state.detail?.editable===true&&['admin','supervisor','handler'].includes(me?.role);
+  const canManage=()=>state.detail?.permissions?.can_manage===true&&state.detail?.editable===true&&window.FabPermissions?.can('manage_production')===true;
+  const canAllocate=()=>state.detail?.permissions?.can_allocate===true&&state.detail?.editable===true&&window.FabPermissions?.can('allocate_parts')===true;
   const stamp=v=>v?new Date(v).toLocaleString():'—';
   const cleanLine=line=>({...(line.id?{id:line.id}:{}),part_number:text(line.part_number),description:text(line.description),required_qty:line.required_qty,notes:text(line.notes)});
   function errorText(error){try{const d=JSON.parse(error.message);if(d.message)return d.message;if(Array.isArray(d))return d.map(x=>`${arr(x.loc).filter(k=>k!=='body').join(' / ')}: ${x.msg||'Check the value'}`).join('; ');if(d.blockers)return arr(d.blockers).join('; ');}catch(_){}return text(error.message||'The parts list could not be loaded.');}

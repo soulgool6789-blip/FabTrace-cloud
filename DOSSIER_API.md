@@ -7,19 +7,32 @@ The `/api/dossier` router implements **Kelvion Job Packet / CLM Final Dossier** 
 1. Set up the actual project, spool/assembly plans, drawing IDs and separate drawing revisions in Projects & welds. Register component preparation and parent relationships where applicable.
 2. An admin or supervisor explicitly configures Job Packets for the project, including manufacturer contact, PO, sources and the declared expected number of spool/assembly packets. Existing uninvolved projects are not silently enrolled.
 3. An inspector or admin records a source/applicability review. This confirms the project's actual source and PO basis, rather than declaring that every manufacturing or test record exists.
-4. Admins, supervisors and inspectors upload actual files, select their applicable checklist entries, and record actual observations/measurements or justified non-applicability. Draft saves can be incomplete.
+4. Employees prepare only the checklist entries and upload sections allowed for their assigned job. Admins, supervisors and inspectors may prepare the full packet. Record actual observations/measurements or justified non-applicability; draft saves can be incomplete.
 5. An inspector/admin reviews each current entry. An upload or a saved narrative alone is not acceptance. Superseded files, changed relevant evidence, repaired welds or changed scope make affected prior reviews stale.
 6. After current physical release and all applicable current checklist reviews, QA issues an immutable item revision. Assemblies require current released child spool packets.
 7. After **all** declared packets and all registered project parts are finished, QA issues an immutable project package. The declared packet count must equal the number of registered spool/assembly plans. Unplanned items and unfinished component routes are blockers.
 8. Download the ZIP or print the issued revision. Independently record actual physical and/or digital dispatch, and subsequently confirmed receipt, against that project issue. The application does not email, send, deliver, or acknowledge a package when it is downloaded.
 
-All authenticated employees can read and download. `admin`, `supervisor`, and `inspector` can write evidence and handover records. `admin` and `inspector` can sign source/check reviews and issue packets. Project configuration is managed by `admin` and `supervisor`; only an admin can change an existing production gate or customer-approval rule, or initially disable the gate.
+All authenticated employees can read and download. The shared `permissions.py` policy determines exact writable checklist codes and upload sections:
+
+| Position | Checklist codes | Upload sections |
+| --- | --- | --- |
+| `admin`, `supervisor`, `inspector` | All catalog entries | `01`–`10` |
+| `handler` | `materials`, `packaging`, `packing_slip` | `02`, `09` |
+| `welder`, `fitup_welder`, `process_welder` | `procedures`, `brazing_bonding` | `03` |
+| `painter` | `surface`, `coating` | `08` |
+| `finisher` | `surface`, `packaging` | `08`, `09` |
+| `misc` | None | None |
+
+Packet dispatch/receipt is a separate capability for `handler`, `supervisor`, `inspector` and `admin`. Only `admin` and `inspector` (displayed as QA/QC) can sign source/check reviews and issue packets. Project configuration remains managed by `admin` and `supervisor`; only an admin can change an existing production gate or customer-approval rule, or initially disable the gate. An evidence-writing permission never grants review, issue or handover authority by implication. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for employee assignments and the full application matrix.
+
+Uploads must use an allowed section. Revising an existing document identity also requires authority over **every prior section** recorded for its project, scope and document code. A later revision cannot bypass that restriction by declaring an allowed section; original revisions remain immutable.
 
 ## Versioning and concurrency
 
 Every mutation requires `expected_version`, the current **project Job Packet configuration version**. An unconfigured project has version `0`; its first configuration has version `1`. Each successful mutation increments once and appends a corresponding audit and dossier event. A mismatched version returns HTTP `409` with `current_version`. Refresh and review the latest records before resubmission. JSON integer inputs are strict; boolean values are not integers.
 
-Writes follow the existing topology advisory lock, project row lock and sorted physical item locks. This serializes packet decisions and physical mutations against the production gates. Reads do not create rows, update history, acquire `FOR UPDATE`, or take advisory locks. The deployment adds append-only protection to document bytes/metadata, reviews, issues, handovers and event history.
+Writes follow the existing topology advisory lock, project row lock and sorted physical item locks. After the topology lock is acquired, current employee/session authority is refreshed; a request queued behind an access or PIN change is rejected before mutation. This serializes packet decisions and physical mutations against the production gates. Reads do not create rows, update history, acquire `FOR UPDATE`, or take advisory locks. Existing append-only protection covers document bytes/metadata, reviews, issues, handovers and event history.
 
 ## Endpoints
 
@@ -128,7 +141,7 @@ project, configured, config|null, version,
 documents:[document metadata], items:[item summary], scope:[physical progress row],
 issues:[project issue metadata], latest_project_issue|null, latest_issue|null,
 handovers:[event], transfer_status:{digital:{status,dispatch,receipt},physical:{...}},
-events:[audit event], permissions:{manage,write,review},
+events:[audit event], permissions:{manage,write,review,editable_check_codes,upload_sections,can_handover},
 source_status, source_review|null, completion_blockers:[string], fingerprint,
 summary:{items,approved_packets,stale_packets,checklist_percent}
 ```
@@ -141,8 +154,10 @@ Item summary is `{item_id,description,kind,status,percent,blockers,latest_issue,
 project, config, version, item,
 sections:[{code,title,checks:[check view]}], records:{...}, documents:[metadata],
 issues:[metadata], latest_issue|null, blockers:[string], status, percent,
-permissions:{manage,write,review}, source_status, source_review|null, fingerprint
+permissions:{manage,write,review,editable_check_codes,upload_sections,can_handover}, source_status, source_review|null, fingerprint
 ```
+
+`manage`, `write`, `review` and `can_handover` are booleans. `editable_check_codes` and `upload_sections` are exact string allowlists. `write=true` means some preparation is permitted, not that every check or section is writable. These authenticated-view hints do not enter physical evidence, checklist fingerprints or frozen issued records; changing the viewer's position does not change an issued revision's validity.
 
 Check view includes its catalog definition and `{applicability,reference,notes,document_ids,values,status,blockers,latest_review,fingerprint}`. `records` groups actual data as `tracking`, `inspections`, `reworks`, `component_links`, `child_spools`, `flow`, `flow_events`, `flow_exceptions`, and `quality_records`. Tracking retains the actual weld register, individual requirement evidence/reviews, operations, repairs, holds and production timing. Linked quality/audit evidence and actions are included where they identify this item or its welds.
 

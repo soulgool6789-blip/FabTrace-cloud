@@ -48,7 +48,7 @@ const context={document:{getElementById:id=>elements.get(id)||null,body:elements
   }
 };
 for(const name of ['Tracking','Progress','Dossier','Flow','Quality','Parts','Admin'])context['Fab'+name]={open:options=>routes.push({module:name.toLowerCase(),...options})};
-context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/guide.js'),'utf8'),context);
+context.window=context;vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/guide.js'),'utf8'),context);
 const html=()=>elements.get('guideContent').innerHTML;
 const click=(action,id='',tab='')=>elements.get('guideContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{guideAction:action,guideId:id,guideTab:tab}})}});
 const input=(id,value)=>{elements.get(id).value=value;return elements.get(id).oninput();};
@@ -128,7 +128,7 @@ async function check(name,fn){await fn();checks.push(name);}
   });
   await check('roles explain ownership without granting mutations',async()=>{
     setProjects(complete());
-    const roles={handler:/Ask the listed owner/,welder:/permitted welding work/,supervisor:/QA review and issue require an inspector or administrator/,inspector:/Project scope\/setup is managed by a supervisor or administrator/,admin:/control gate flags and export Excel/};
+    const roles={handler:/Material coordination/,welder:/root and fill/,fitup_welder:/Fit-up and tack/,process_welder:/PWHT/,painter:/Sandblast and paint/,finisher:/Component preparation/,misc:/General support/,supervisor:/specialized work and QA acceptance/,inspector:/QA\/QC inspections/,admin:/Full site administration/};
     const allowed=new Set(['topic','refresh','project','tracking','progress','dossier','item','flow-item','packet','print','clear','items','flow','quality','parts','admin']);
     for(const [role,expectation] of Object.entries(roles)){context.me.role=role;await context.FabGuide.open({project:'P1'});const note=html().match(/<p class="fg-role">([\s\S]*?)<\/p>/)[1];assert.match(note,expectation);assert.match(note,/only reads existing records/);for(const m of html().matchAll(/data-guide-action="([^"]+)"/g))assert.ok(allowed.has(m[1]),'guide must navigate to the permission-enforcing screen: '+m[1]);}
     assert.equal(calls.filter(c=>c.method&&c.method!=='GET').length,0);

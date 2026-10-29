@@ -21,8 +21,10 @@ from sqlalchemy.orm import Session
 from main import Base, Employee, Item, audit, auth, db, item_dict, permit, require_unreleased, utcnow
 
 
+from permissions import ROLE_IDS
+
 router = APIRouter(tags=['transfers'])
-TRANSFER_ROLES = ('admin', 'supervisor', 'handler', 'welder')
+TRANSFER_ROLES = ROLE_IDS
 MANAGE_ROLES = ('admin', 'supervisor')
 KEEP_CURRENT = 'current'
 LOCATIONS = (
@@ -306,8 +308,8 @@ def get_transfer(item_id: str, u: Employee = Depends(auth), s: Session = Depends
 @router.post('/api/items/{item_id}/transfer')
 def transfer(item_id: str, data: TransferIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import FlowPlan, _event, lock_topology
-    permit(u, *TRANSFER_ROLES)
     lock_topology(s)
+    permit(u, *TRANSFER_ROLES)
     item = s.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
     if not item:
         raise HTTPException(404, 'Item not found')
@@ -343,8 +345,8 @@ def _check_label(s, label, exclude_id=None):
 @router.post('/api/transfers/locations', status_code=201)
 def create_location(data: LocationIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import lock_topology
-    permit(u, *MANAGE_ROLES)
     lock_topology(s)
+    permit(u, *MANAGE_ROLES)
     normalized = _check_label(s, data.label)
     now = _utc(utcnow())
     row = TransferLocation(id='custom_' + uuid.uuid4().hex, label=data.label, normalized_label=normalized,
@@ -358,8 +360,8 @@ def create_location(data: LocationIn, u: Employee = Depends(auth), s: Session = 
 @router.patch('/api/transfers/locations/{location_id}')
 def update_location(location_id: str, data: LocationUpdate, u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import lock_topology
-    permit(u, *MANAGE_ROLES)
     lock_topology(s)
+    permit(u, *MANAGE_ROLES)
     row = s.scalar(select(TransferLocation).where(TransferLocation.id == location_id)
         .with_for_update().execution_options(populate_existing=True))
     if not row:

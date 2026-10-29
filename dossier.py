@@ -24,7 +24,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, deferred
 from starlette.background import BackgroundTask
 
-from main import Base, Employee, Item, Inspection, Rework, audit, auth, db, permit, utcnow
+from main import Base, Employee, Item, Inspection, Rework, audit, auth, db, utcnow
+from permissions import has_capability, require_capability, user_permissions
 from tracking import (Project, SpoolPlan, Weld, WeldRequirement, RequirementEvidence,
                       RequirementReview, WeldWork, WeldRepair, TrackingHold,
                       tracking_release_errors, spool_dict)
@@ -33,9 +34,6 @@ from quality import QualityWorkspace, QualityEvidence, QualityAction, workspace_
 from dossier_templates import VERSION, SOURCE_NOTE, SECTIONS, CHECKS, CHECK_BY_CODE, SOURCE_REFERENCES
 
 router = APIRouter(prefix='/api/dossier', tags=['dossier'])
-WRITE = ('admin', 'supervisor', 'inspector')
-MANAGE = ('admin', 'supervisor')
-REVIEW = ('admin', 'inspector')
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_PROJECT_FILE_BYTES = 256 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 12 * 1024 * 1024
@@ -292,7 +290,13 @@ def _commit(s):
         _error('Conflicting Job Packet update or duplicate revision; refresh before retrying')
 
 def _permissions(user):
-    return {'manage': user.role in MANAGE, 'write': user.role in WRITE, 'review': user.role in REVIEW}
+    scope = user_permissions(user)
+    return {'manage': has_capability(user, 'dossier_manage'),
+            'write': bool(scope['dossier_check_codes'] or scope['dossier_upload_sections']),
+            'review': has_capability(user, 'dossier_review'),
+            'editable_check_codes': scope['dossier_check_codes'],
+            'upload_sections': scope['dossier_upload_sections'],
+            'can_handover': has_capability(user, 'dossier_handover')}
 
 def _source_basis(cfg):
     return {key: getattr(cfg, key) for key in ('project_id','manufacturer_name','manufacturer_contact',
@@ -692,13 +696,13 @@ def get_project(project_id:str,user:Employee=Depends(auth),s:Session=Depends(db)
 
 @router.put('/projects/{project_id}/config')
 def configure_project(project_id:str,data:ConfigIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*MANAGE)
+    require_capability(user,'dossier_manage')
     cfg=_locked(s,project_id,data.expected_version)
     _lock_items(s,project_id)
     if cfg and (cfg.shipping_gate!=data.shipping_gate or cfg.customer_approval_required!=data.customer_approval_required):
-        permit(user,*REVIEW)
+        require_capability(user,'dossier_review')
     if not cfg and not data.shipping_gate:
-        permit(user,*REVIEW)
+        require_capability(user,'dossier_review')
     values=data.model_dump(exclude={'expected_version'})
     before=row_dict(cfg) if cfg else None
     first=cfg is None
@@ -714,7 +718,7 @@ def configure_project(project_id:str,data:ConfigIn,user:Employee=Depends(auth),s
 
 @router.post('/projects/{project_id}/source-review')
 def review_source(project_id:str,data:SignedIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*REVIEW)
+    require_capability(user,'dossier_review')
     cfg=_locked(s,project_id,data.expected_version) or _config(s,project_id)
     _lock_items(s,project_id)
     basis=_source_basis(cfg)
@@ -742,8 +746,9 @@ def _editable_item(s,item_id,expected):
 
 @router.put('/items/{item_id}/checks/{code}')
 def save_check(item_id:str,code:str,data:EntryIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*WRITE)
     if code not in CHECK_BY_CODE:_error('Unknown Job Packet checklist item',404)
+    if code not in user_permissions(user)['dossier_check_codes']:
+        _error('Your job position cannot edit this Job Packet checklist item',403)
     item,plan,cfg=_editable_item(s,item_id,data.expected_version)
     if set(data.values)-{f['name'] for f in CHECK_BY_CODE[code]['fields']}:
         _error('Use the named evidence fields in the checklist catalog',422)
@@ -769,7 +774,7 @@ def save_check(item_id:str,code:str,data:EntryIn,user:Employee=Depends(auth),s:S
 
 @router.post('/items/{item_id}/checks/{code}/review')
 def review_check(item_id:str,code:str,data:ReviewIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*REVIEW)
+    require_capability(user,'dossier_review')
     if code not in CHECK_BY_CODE:_error('Unknown Job Packet checklist item',404)
     item,plan,cfg=_editable_item(s,item_id,data.expected_version)
     entry=s.scalar(select(DossierEntry).where(DossierEntry.item_id==item_id,DossierEntry.code==code,
@@ -835,17 +840,23 @@ def upload_document(project_id:str,expected_version:str=Form(...,min_length=1,ma
         revision:str=Form(...,min_length=1,max_length=80),section:str=Form(...,min_length=2,max_length=2),
         item_id:str=Form(default='',max_length=60),reference:str=Form(default='',max_length=1000),
         file:UploadFile=File(...),user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*WRITE)
     if not re.fullmatch(r'0|[1-9][0-9]*',expected_version):_error('expected_version must be a nonnegative integer',422)
     code,title,revision,section,item_id,reference=(x.strip() for x in (code,title,revision,section,item_id,reference))
     if not code or len(title)<2 or not revision or any(ord(c)<32 for c in code+title+revision+reference):
         _error('Use nonblank document identifiers, title and revision without control characters',422)
     if section not in {r['code'] for r in SECTIONS}:_error('Select a valid CLM dossier section',422)
+    if section not in user_permissions(user)['dossier_upload_sections']:
+        _error('Your job position cannot upload records to this Job Packet section',403)
     cfg=_locked(s,project_id,int(expected_version)) or _config(s,project_id)
     _lock_items(s,project_id)
     if item_id:
         item,plan=_item(s,item_id)
         if plan.project_id!=project_id:_error('The document item must belong to this project',422)
+    prior_sections=set(s.scalars(select(DossierDocument.section).where(
+        DossierDocument.project_id==project_id,DossierDocument.scope_key==item_id,
+        DossierDocument.code==code)))
+    if prior_sections-set(user_permissions(user)['dossier_upload_sections']):
+        _error('Your job position cannot revise this document by moving it from another department section',403)
     if s.scalar(select(DossierDocument.id).where(DossierDocument.project_id==project_id,
             DossierDocument.scope_key==item_id,DossierDocument.code==code,DossierDocument.revision==revision)):
         _error('This document revision already exists. Upload a new controlled revision; existing bytes cannot be replaced')
@@ -916,7 +927,7 @@ def _save_issue(s,cfg,item_id,kind,fingerprint,snapshot,data,user,at):
 
 @router.post('/items/{item_id}/issue',status_code=201)
 def issue_item(item_id:str,data:SignedIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*REVIEW)
+    require_capability(user,'dossier_review')
     item,plan,cfg=_editable_item(s,item_id,data.expected_version)
     packet=_packet(s,item,user)
     if packet['blockers']:_error({'message':'The Job Packet is incomplete or its physical release is not current','blockers':packet['blockers']})
@@ -943,7 +954,7 @@ def issue_item(item_id:str,data:SignedIn,user:Employee=Depends(auth),s:Session=D
 
 @router.post('/projects/{project_id}/issue',status_code=201)
 def issue_project(project_id:str,data:SignedIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*REVIEW)
+    require_capability(user,'dossier_review')
     cfg=_locked(s,project_id,data.expected_version) or _config(s,project_id)
     _lock_items(s,project_id)
     packets,scope,blockers,fingerprint,basis=_project_state(s,project_id,user)
@@ -989,7 +1000,7 @@ def _date(value,earliest=None):
 
 @router.post('/projects/{project_id}/handovers',status_code=201)
 def record_handover(project_id:str,data:HandoverIn,user:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(user,*WRITE)
+    require_capability(user,'dossier_handover')
     cfg=_locked(s,project_id,data.expected_version) or _config(s,project_id)
     _lock_items(s,project_id)
     issue=_get_issue(s,data.issue_id)
@@ -1006,7 +1017,7 @@ def record_handover(project_id:str,data:HandoverIn,user:Employee=Depends(auth),s
 
 
 def _receipt(s,project_id,handover_id,data,user):
-    permit(user,*WRITE)
+    require_capability(user,'dossier_handover')
     cfg=_locked(s,project_id,data.expected_version) or _config(s,project_id)
     original=s.get(DossierHandover,handover_id)
     if not original or original.project_id!=project_id:_error('Dispatch record not found',404)

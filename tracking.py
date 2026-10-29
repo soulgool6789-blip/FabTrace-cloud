@@ -30,7 +30,9 @@ from main import (
 
 
 router = APIRouter(prefix='/api/tracking', tags=['tracking'])
-ROLES = ('admin', 'supervisor', 'handler', 'welder', 'inspector')
+from permissions import (Role, ROLE_IDS, WELD_OPERATIONS, can_record_weld_operation,
+    can_submit_requirement_evidence, has_capability)
+ROLES = ROLE_IDS
 ACCEPTED = ('accepted', 'not_applicable')
 
 
@@ -234,7 +236,6 @@ class PlanIn(InputModel):
 
 
 Stage = Literal['before_welding', 'after_welding', 'release']
-Role = Literal['admin', 'supervisor', 'handler', 'welder', 'inspector']
 Check = Literal['none', 'materials', 'procedure', 'welding_complete']
 Operation = Literal['root', 'fill_cap']
 
@@ -786,8 +787,11 @@ def tracking_summary(s, item):
 
 
 @_snapshot_response
-def requirement_dict(s, req):
+def requirement_dict(s, req, user=None):
     out = asdict(req, REQUIREMENT_KEYS)
+    if user is not None:
+        out['permissions'] = {'can_submit_evidence': can_submit_requirement_evidence(user, req),
+                              'can_review': has_capability(user, 'quality_review')}
     out['check'] = req.check_kind
     out['satisfied'] = _requirement_satisfied(s, req)
     out['check_errors'] = _check_errors(s, req)
@@ -800,12 +804,14 @@ def requirement_dict(s, req):
 
 
 @_snapshot_response
-def weld_dict(s, weld):
+def weld_dict(s, weld, user=None):
     out = asdict(weld, WELD_KEYS)
+    if user is not None:
+        out['allowed_operations'] = list(WELD_OPERATIONS.get(user.role, ()))
     out['production_complete'] = _production_complete(s, weld)
     out['qa_accepted'] = _qa_accepted(s, weld)
     out['blockers'] = _weld_blockers(s, weld)
-    out['requirements'] = [requirement_dict(s, r) for r in _requirements(s, weld.item_id, weld.id)]
+    out['requirements'] = [requirement_dict(s, r, user) for r in _requirements(s, weld.item_id, weld.id)]
     snapshot = _snapshot(s, weld.item_id)
     out['work'] = [asdict(row, 'id weld_id cycle operation notes actor at'.split())
                    for row in snapshot['work'].get(weld.id, [])]
@@ -820,10 +826,11 @@ def template_dict(row):
 
 
 @_snapshot_response
-def spool_dict(s, item):
+def spool_dict(s, item, user=None):
     plan = s.get(SpoolPlan, item.id)
     from parts import parts_summary
     from administration import release_summary
+    from production import with_process_permissions
     parts = parts_summary(s, item.id)
     return {
         **({'parts': parts} if parts else {}),
@@ -831,9 +838,9 @@ def spool_dict(s, item):
                  'release_control': release_summary(s, item)},
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
         'summary': tracking_summary(s, item),
-        'production_process': _snapshot(s, item.id)['production_process'],
-        'welds': [weld_dict(s, row) for row in _welds(s, item.id)],
-        'requirements': [requirement_dict(s, row) for row in _requirements(s, item.id)],
+        'production_process': with_process_permissions(s, item.id, _snapshot(s, item.id)['production_process'], user),
+        'welds': [weld_dict(s, row, user) for row in _welds(s, item.id)],
+        'requirements': [requirement_dict(s, row, user) for row in _requirements(s, item.id)],
         'holds': [asdict(row, HOLD_KEYS) for row in _holds(s, item.id, all_scopes=True)],
         'history': [asdict(row, 'id item_id actor event details at'.split()) for row in s.scalars(
             select(Audit).where(Audit.item_id == item.id).order_by(Audit.id.desc()).limit(100)).all()],
@@ -877,6 +884,8 @@ def get_projects(u: Employee = Depends(auth), s: Session = Depends(db)):
 
 @router.post('/projects', status_code=201)
 def create_project(data: ProjectIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'supervisor', 'admin')
     if s.get(Project, data.id):
         raise HTTPException(409, 'Project ID already exists')
@@ -898,6 +907,8 @@ def get_subprojects(project_id: str = '', u: Employee = Depends(auth), s: Sessio
 
 @router.post('/subprojects', status_code=201)
 def create_subproject(data: SubprojectIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'supervisor', 'admin')
     if not s.get(Project, data.project_id):
         raise HTTPException(422, 'Project not found')
@@ -918,6 +929,8 @@ def get_templates(u: Employee = Depends(auth), s: Session = Depends(db)):
 
 @router.post('/templates', status_code=201)
 def create_template(data: TemplateIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'supervisor', 'admin')
     codes = [r.code for r in data.requirements]
     if len(codes) != len(set(codes)):
@@ -938,18 +951,16 @@ def get_spool(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db
     item = s.get(Item, item_id)
     if not item:
         raise HTTPException(404, 'Item not found')
-    return spool_dict(s, item)
+    return spool_dict(s, item, u)
 
 
 @router.post('/spools/{item_id}/plan')
 def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'supervisor', 'admin')
-    # Topology is the only cross-Item mutation. Serialize topology edits first,
-    # always before the owning Item lock, so concurrent initial enrollment or
-    # parent moves cannot create cross-project links or cycles. Production and
-    # review operations do not need this advisory lock.
-    if s.get_bind().dialect.name == 'postgresql':
-        s.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': 0x4641425452414345})
+    # Serialize topology before Item locks. The same boundary revalidates
+    # account permissions for production and review writers queued behind edits.
     item = lock_item(s, item_id)
     require_unreleased(item)
     if not s.get(Project, data.project_id):
@@ -994,11 +1005,13 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     _sync_legacy_counts(s, item)
     audit(s, item.id, u.badge, 'TRACKING_PLAN_SAVED', {'before': before, 'after': values})
     _commit(s)
-    return spool_dict(s, item)
+    return spool_dict(s, item, u)
 
 
 @router.post('/spools/{item_id}/welds', status_code=201)
 def create_weld(item_id: str, data: WeldIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'supervisor', 'admin')
     item = lock_item(s, item_id)
     require_unreleased(item)
@@ -1022,7 +1035,7 @@ def create_weld(item_id: str, data: WeldIn, u: Employee = Depends(auth), s: Sess
     _sync_legacy_counts(s, item)
     audit(s, item.id, u.badge, 'TRACKING_WELD_CREATED', {'weld_id': weld.id, **values})
     _commit(s)
-    return weld_dict(s, weld)
+    return weld_dict(s, weld, u)
 
 
 @router.get('/welds/{weld_id}')
@@ -1030,11 +1043,13 @@ def get_weld(weld_id: str, u: Employee = Depends(auth), s: Session = Depends(db)
     weld = s.get(Weld, weld_id)
     if not weld:
         raise HTTPException(404, 'Weld not found')
-    return weld_dict(s, weld)
+    return weld_dict(s, weld, u)
 
 
 @router.patch('/welds/{weld_id}')
 def update_weld(weld_id: str, data: WeldUpdate, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'supervisor', 'admin')
     item, weld = _lock_weld(s, weld_id)
     _version(weld, data.expected_version)
@@ -1063,14 +1078,16 @@ def update_weld(weld_id: str, data: WeldUpdate, u: Employee = Depends(auth), s: 
     _sync_legacy_counts(s, item)
     audit(s, item.id, u.badge, 'TRACKING_WELD_UPDATED', {'weld_id': weld.id, 'reason': data.change_reason, 'changes': changes})
     _commit(s)
-    return weld_dict(s, weld)
+    return weld_dict(s, weld, u)
 
 
 @router.post('/welds/{weld_id}/work')
 def record_work(weld_id: str, data: WorkIn, u: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(u, *(['handler', 'welder', 'supervisor', 'admin'] if data.operation == 'fitup' else ['welder', 'supervisor', 'admin']))
-    from flow import lock_topology, guard_weld_operation
+    from flow import lock_topology
     lock_topology(s)
+    if not can_record_weld_operation(u, data.operation):
+        raise HTTPException(403, 'Your assigned position cannot record this welding operation.')
+    from flow import guard_weld_operation
     item, weld = _lock_weld(s, weld_id)
     guard_weld_operation(s, item, data.operation)
     holds = [h for h in _holds(s, item.id, all_scopes=True)
@@ -1119,7 +1136,7 @@ def record_work(weld_id: str, data: WorkIn, u: Employee = Depends(auth), s: Sess
     _sync_legacy_counts(s, item)
     audit(s, item.id, u.badge, 'TRACKING_WELD_WORK', {'weld_id': weld.id, 'cycle': weld.cycle, **data.model_dump()})
     _commit(s)
-    return weld_dict(s, weld)
+    return weld_dict(s, weld, u)
 
 
 def _new_requirement(item_id, weld_id, data, u, s):
@@ -1140,23 +1157,31 @@ def _new_requirement(item_id, weld_id, data, u, s):
     _invalidate_spool(item)
     audit(s, item.id, u.badge, 'TRACKING_REQUIREMENT_ADDED', {'weld_id': weld.id if weld else None, **data.model_dump()})
     _commit(s)
-    return requirement_dict(s, req)
+    return requirement_dict(s, req, u)
 
 
 @router.post('/spools/{item_id}/requirements', status_code=201)
 def add_spool_requirement(item_id: str, data: RequirementIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     return _new_requirement(item_id, None, data, u, s)
 
 
 @router.post('/welds/{weld_id}/requirements', status_code=201)
 def add_weld_requirement(weld_id: str, data: RequirementIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     return _new_requirement(None, weld_id, data, u, s)
 
 
 @router.post('/requirements/{requirement_id}/evidence', status_code=201)
 def submit_evidence(requirement_id: int, data: EvidenceIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, *ROLES)
     item, req = _lock_requirement(s, requirement_id)
+    if not can_submit_requirement_evidence(u, req):
+        raise HTTPException(403, 'This requirement is assigned to a different position. Ask a supervisor or QA/QC to review its assignment.')
     _version(req, data.expected_version)
     previous = req.status
     evidence = RequirementEvidence(requirement_id=req.id, cycle=req.cycle,
@@ -1173,11 +1198,13 @@ def submit_evidence(requirement_id: int, data: EvidenceIn, u: Employee = Depends
         'cycle': req.cycle, 'previous_status': previous,
         'reference': data.reference, 'notes': data.notes, 'result': data.result})
     _commit(s)
-    return requirement_dict(s, req)
+    return requirement_dict(s, req, u)
 
 
 @router.post('/requirements/{requirement_id}/review')
 def review_requirement(requirement_id: int, data: ReviewIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'inspector', 'admin')
     item, req = _lock_requirement(s, requirement_id)
     _version(req, data.expected_version)
@@ -1228,11 +1255,13 @@ def review_requirement(requirement_id: int, data: ReviewIn, u: Employee = Depend
     if not tracking_release_errors(s, item):
         item.reinspection_due = False
     _commit(s)
-    return requirement_dict(s, req)
+    return requirement_dict(s, req, u)
 
 
 @router.post('/welds/{weld_id}/repairs', status_code=201)
 def open_weld_repair(weld_id: str, data: ReasonIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'inspector', 'supervisor', 'admin')
     item, weld = _lock_weld(s, weld_id)
     previous_cycle = weld.cycle
@@ -1248,11 +1277,13 @@ def open_weld_repair(weld_id: str, data: ReasonIn, u: Employee = Depends(auth), 
     audit(s, item.id, u.badge, 'TRACKING_WELD_REPAIR_OPENED', {
         'weld_id': weld.id, 'previous_cycle': previous_cycle, 'cycle': weld.cycle, 'reason': data.reason})
     _commit(s)
-    return weld_dict(s, weld)
+    return weld_dict(s, weld, u)
 
 
 @router.post('/spools/{item_id}/holds', status_code=201)
 def open_hold(item_id: str, data: HoldIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'inspector', 'supervisor', 'admin')
     item = lock_item(s, item_id)
     require_unreleased(item)
@@ -1277,6 +1308,8 @@ def open_hold(item_id: str, data: HoldIn, u: Employee = Depends(auth), s: Sessio
 
 @router.post('/holds/{hold_id}/close')
 def close_hold(hold_id: int, data: CloseHoldIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    lock_topology(s)
     permit(u, 'inspector', 'admin')
     initial = s.get(TrackingHold, hold_id)
     if not initial:

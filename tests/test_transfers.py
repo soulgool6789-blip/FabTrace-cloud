@@ -139,8 +139,8 @@ def test_unknown_or_inactive_badges_never_create_a_transfer(api, field):
     rejected(api, api.post(f"/api/items/{item_id}/transfer", body, role="admin"), before, (404,))
 
 
-@pytest.mark.parametrize("role", [None, "inspector"])
-def test_generic_transfer_retains_the_existing_recorder_role_boundary(api, role):
+@pytest.mark.parametrize("role", [None])
+def test_generic_transfer_requires_an_authenticated_recorder(api, role):
     item_id = item(api)
     body = transfer_body(api, item_id)
     before = database_state(api)
@@ -148,7 +148,7 @@ def test_generic_transfer_retains_the_existing_recorder_role_boundary(api, role)
              (401,) if role is None else (403,))
 
 
-@pytest.mark.parametrize("role", ["handler", "welder", "supervisor", "admin"])
+@pytest.mark.parametrize("role", list(BADGES))
 def test_every_authorized_recorder_can_save_a_real_metadata_change(api, role):
     item_id = item(api)
     result = transfer(api, item_id, role=role, operational_status="waiting_material")

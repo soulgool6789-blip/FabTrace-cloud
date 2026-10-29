@@ -8,9 +8,9 @@
   const fieldLabels={scope:'Scope',auditor:'Auditor',scheduled_for:'Planned audit date',approval_reference:'Schedule approval reference',findings:'Findings',outcome:'Audit outcome',issue:'Issue / defect',containment:'Containment',training_required:'Training required',required_participants:'Required employee badges',topic:'Training topic',assessment:'Assessment / understanding check',asset:'Asset / equipment',description:'Description',result:'Recorded result',measurements:'Measured results',disposition:'Customer disposition',approved_by:'Customer approver'};
   const focusItems=['7','9','13','14'];
   const can=key=>Boolean(state.detail?.permissions?.[key]);
-  const manage=()=>state.detail?can('manage'):['admin','supervisor'].includes(me?.role);
-  const write=()=>state.detail?can('write'):['admin','supervisor','inspector'].includes(me?.role);
-  const review=()=>state.detail?can('review'):['admin','inspector'].includes(me?.role);
+  const manage=()=>state.detail?can('manage'):window.FabPermissions?.can('manage_production')===true;
+  const write=()=>state.detail?can('write'):window.FabPermissions?.can('quality_write')===true;
+  const review=()=>state.detail?can('review'):window.FabPermissions?.can('quality_review')===true;
   const button=(action,label,id='',cls='',disabled=false)=>`<button type="button" class="${esc(cls)}" data-quality-action="${esc(action)}"${id!==''?` data-quality-id="${esc(id)}"`:''}${disabled?' disabled':''}>${esc(label)}</button>`;
   const option=(value,label,selected='')=>`<option value="${esc(value)}"${text(value)===text(selected)?' selected':''}>${esc(label)}</option>`;
   const tag=(status,label='')=>`<span class="fq-tag ${esc(text(status).replace(/[^a-z_-]/gi,''))}">${esc(label||names[status]||status)}</span>`;

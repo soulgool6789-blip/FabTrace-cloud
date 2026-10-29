@@ -58,7 +58,7 @@
         if(!employee){info(role,'Badge not found or employee is inactive.','error');changed();return null}
         if(role==='sender'&&transfer&&employee.badge!==transfer.handler){info(role,`This is ${employee.name} (${employee.badge}). The recorded custodian is ${transfer.handler_name||transfer.handler} (${transfer.handler}); scan that employee's badge.`,'error');changed();return null}
         input.value=employee.badge;control.people[role]=employee;
-        info(role,`${employee.name} · ${employee.badge}${employee.role?' · '+employee.role:''}`,'valid');changed();return employee;
+        info(role,`${employee.name} · ${employee.badge}${employee.role?' · '+(window.FabPermissions?.label(employee.role)||employee.role):''}`,'valid');changed();return employee;
       }catch(error){if(control.alive&&sequence===control.sequence[role]){info(role,errorText(error),'error');changed()}return null}
     };
     control.validate=()=>{

@@ -41,13 +41,15 @@ Every new weld receives these baseline controls:
 
 These are a starter checklist. A supervisor or administrator adds the exact examinations, hold points, process records and acceptance references required by the approved job documents. Add spool-level requirements for checks that belong to the whole spool.
 
-Each requirement identifies its stage, responsible role, evidence rule, applicability rule and source reference. Its responsible-role label helps organize work; only an inspector or administrator can accept it. A before-welding requirement cannot use completed welding as its prerequisite.
+Each requirement identifies its stage, responsible job position, evidence rule, applicability rule and source reference. The responsible position controls who may submit evidence; only QA/QC or an administrator may accept it. Existing requirements keep their assignment, and default inspector-owned requirements are QA/QC responsibilities. A before-welding requirement cannot use completed welding as its prerequisite.
 
-Record fit-up and obtain the required before-welding approvals before recording root or fill/cap. If both operations are required, root precedes fill/cap. **Mark weld complete** becomes available after the configured operations are recorded. The signed-in employee and server time are recorded for every operation.
+Welder, Fit-up welder or Administrator records fit-up. Obtain the required before-welding approvals before Welder, Process welder or Administrator records root or fill/cap. If both operations are required, root precedes fill/cap. **Mark weld complete** becomes available after the configured operations are recorded. The signed-in employee and server time are recorded for every operation.
 
 ## 4. Submit evidence and obtain acceptance
 
 **Record evidence** accepts an identifiable report or record reference, an HTTP(S) URL, the reported result and explanatory notes. This release stores references and notes; it does not upload or archive the report file. Keep the referenced documents in the company's controlled document location.
+
+Submit evidence assigned to your position. A general Welder may also submit evidence assigned to Fit-up welder or Process welder; those specialists do not inherit general Welder assignments. Supervisors, QA/QC and administrators may coordinate submissions across positions. These submission permissions do not grant QA acceptance.
 
 Submitting evidence produces **Awaiting review**, or **Rejected** for a reported failure. It does not accept the requirement. An inspector or administrator reviews the current evidence, records review notes and accepts or rejects the requirement. Required material and WPS fields must also be complete.
 
@@ -76,7 +78,7 @@ Inspectors, supervisors and administrators can place a weld or spool hold. A rel
 
 Use **Open repair** for additional physical work on a weld. The joint keeps its identity, starts a new work cycle and requires fresh work records and requirement reviews. Earlier failures, evidence and approvals remain visible.
 
-Administrative reopening of a released spool removes its release and reopens verification. Generic item rework also reopens requirements when opened and closed. Those actions preserve recorded weld completion; use the weld repair action when physical rewelding is required.
+Administrative reopening of a released spool removes its release and reopens verification. Generic item rework also reopens requirements when opened and closed. A supervisor or administrator closes these free-text coordination tickets; actual trade work and renewed QA remain separate records. Those actions preserve recorded weld completion; use the weld repair action when physical rewelding is required.
 
 Controlled metadata corrections require a reason and reopen requirements. Changing required production operations starts a new work cycle. Scope or drawing changes can also require new spool dimensional verification.
 
@@ -90,10 +92,10 @@ Template revisions are immutable and apply when creating new welds. Creating a l
 
 ## 8. Track time in each production process
 
-Open a spool from **Projects & welds → Spool register** and find **Production process**. All active employees can record process timing for an enrolled, unreleased spool. The spool register shows the current process and how long the spool has been there.
+Open a spool from **Projects & welds → Spool register** and find **Production process**. Available timers follow your assigned position; supervisors and administrators can coordinate all processes. The spool register shows the current process and how long the spool has been there. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for each position's timer scope.
 
 1. **Start process:** choose the current stage and start its timer when the spool enters that process. Available stages include material preparation, cutting and beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA and ready for dispatch. Use a custom name for another process.
-2. **Move to process:** when the spool enters another stage, this closes the previous visit and starts the selected stage at the same moment. A return to welding, fit-up or another stage creates a new visit and keeps the earlier one.
+2. **Move to process:** when the spool enters another stage, this closes the previous visit and starts the selected stage at the same moment. You need authority over both processes; otherwise an authorized employee finishes the current timer and the next position starts its process, or a supervisor coordinates the move. A return creates a new visit and keeps the earlier one.
 3. **Pause:** record a reason when time in the process should be counted as a delay—for example, waiting for material, an inspection or equipment. **Resume** restarts the running portion. A paused spool remains in that process and its elapsed time continues.
 4. **Finish process:** close the current visit if no new process should begin yet. A later Start begins another visit; the gap between the two is not assigned to a process.
 
@@ -103,7 +105,7 @@ Each visit records its process, start/end timestamps, employee badges and durati
 
 Time begins with the first recorded start. Earlier production is not reconstructed from old weld counts or inspection dates. Timing is a separate production record: starting or finishing a process does not record an individual weld operation or accept a requirement. Placing a quality hold does not pause a timer, and pausing a timer does not create a quality hold. Record both when both are intended.
 
-For manual process timing, final release closes an open visit and administrative reopening does not restart it. Select the actual process and start it when work resumes. A numbered traveler instead controls step changes automatically, including its post-QA handoff/shipping steps and return to QA after a permitted reopen. The manually selected ready-for-dispatch process remains a label; only the numbered shipment action creates a shipment record.
+For manual process timing, final release closes an open visit and administrative reopening does not restart it. Select the actual process and start it when work resumes. A numbered traveler controls step changes automatically: reopening ordinary QA release returns to its QA checkpoint, while returning an administrative release restores its saved prior route position. Pause/resume follows the current step's job permissions, with supervisor/admin coordination access. The manually selected ready-for-dispatch process remains a label; only the numbered shipment action creates a shipment record.
 
 Administrators can use **Export Excel** to download **Process events**, **Process visits** and **Process totals** with the other business records. Visit and total reports include project, subproject and spool IDs, numeric seconds, decimal hours, and the calculation timestamp. In Excel, sum elapsed, active and paused hours by process or use a PivotTable to compare projects and spools. Open visits are a snapshot at export time; download again for newer totals.
 
@@ -142,7 +144,7 @@ Record individual fit-up and welding work in **Projects & welds**. The traveler 
 
 ### QA failures and return visits
 
-Incoming verification at step 2 can be performed by the receiving/management or inspector roles. Steps **11, 15, 19 and 22** require an inspector or administrator. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
+QA steps **2, 11, 15, 19 and 22** require QA/QC or Administrator, including incoming dimensional verification. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
 
 **Record failed inspection** creates an exception with its report reference and reason, then returns to the allowed earlier step:
 
@@ -238,13 +240,20 @@ Administrators also have **Admin controls** for explicit release exceptions, ret
 
 | Role | Tracking responsibilities |
 | --- | --- |
-| Handler | Record fit-up and submit evidence |
-| Welder | Record fit-up and welding operations; submit evidence |
-| Supervisor | Manage projects, scope, templates and requirements; record work; open holds and repairs |
-| Inspector | Review requirements, record dimensional inspections, resolve holds, open repairs and approve final release |
-| Administrator | All tracking capabilities, employee administration and reopening released items |
+| Administrator | All tracking and site controls, including employee assignments and explicit release exceptions |
+| Supervisor | Manage projects, scope, templates and requirements; coordinate timers/evidence; open holds and repairs; close general rework tickets |
+| Material coordinator | Receiving/inventory logistics, parts allocation, numbered handoffs and shipping; assigned material evidence |
+| Welder | Fit-up and production welding, including steps 10 and 14; evidence assigned to welding positions |
+| Fit-up welder | Fit-up/tack work and step 10; specifically assigned fit-up evidence |
+| Process welder | Root, fill/cap, completion and step 14; specifically assigned process-welding evidence |
+| QA/QC | Inspection steps, requirement reviews, hold resolution, repairs and ordinary final QA release |
+| Painter | Combined sandblast/paint step 21, coating timing and assigned coating evidence |
+| Finisher | Component preparation step 7, preparation/cutting timing and assigned finishing evidence |
+| Miscellaneous | General support, custom support timing and explicitly assigned miscellaneous evidence |
 
-All active staff can read production records, submit weld evidence and pause/resume process timing. In Audit readiness, all active staff can read; administrators, supervisors and inspectors submit records, and inspectors/administrators perform reviews. Numbered-step actions follow the displayed responsible roles; QA approval remains restricted. Applicable codes, NDE selection and extent, qualification limits and pressure-test packages rely on approved procedures or separate systems. Shipment and delivery are recorded explicitly through the numbered traveler; neither is inferred from quality approval.
+All active staff can read shared production records and record ordinary dual-badge handoffs. Evidence, work and timer controls follow the assigned position; custody or another employee's scanned badge does not grant additional authority. In Audit readiness, administrators, supervisors and QA/QC submit records, and QA/QC/administrators perform reviews. Existing accounts retain their assignment until an administrator changes it. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the full matrix and assignment instructions.
+
+Applicable codes, NDE selection and extent, qualification limits and pressure-test packages rely on approved procedures or separate systems. Shipment and delivery are recorded explicitly through the numbered traveler; neither is inferred from quality approval.
 
 
 ## 11. Project progress and final Job Packets
