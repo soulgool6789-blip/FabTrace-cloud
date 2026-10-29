@@ -21,6 +21,10 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 
 Existing item registration, bulk CSV import, employee QR badges, item QR labels, and custody handoffs remain available. Item types include **Part**, **Spool**, and **Assembly**.
 
+### Administrator release and site controls
+
+An active administrator can open **Admin controls** (`/?admin=1`) to release any unreleased item by explicit administrator decision, even with incomplete normal requirements. The record is labelled **Administrative release** and retains the administrator, reason, time, outstanding checks and prior route position. Return to work, controlled custody/location corrections, employee name/role/active management, private PIN reset and site-management shortcuts are available in the same workspace. Ordinary QA approval and actual work records remain separately identifiable; an override does not issue a QA Job Packet. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
+
 ### Transfer an item with both employee badges
 
 **Scan & Handoff** now requires the item QR, the current custodian's sending badge and the receiving employee's badge. Select the destination and operational work status from dropdowns, review both employees and the signed-in recorder, and save. Supervisors/administrators can add and maintain actual shop locations. Keeping the same employee in both badge fields supports a location/status change without claiming a new custodian. Stale forms are rejected, and every new move retains its before/after state. Ordinary transfers do not advance a process, change its timer or grant QA approval. Numbered handoff steps use the same checks. See [HANDOFF_GUIDE.md](HANDOFF_GUIDE.md).
@@ -29,7 +33,7 @@ Existing item registration, bulk CSV import, employee QR badges, item QR labels,
 
 Deploying this version does **not** convert existing items, invent individual welds, or turn aggregate weld counts into accepted weld records. Items retain their previous workflow until a supervisor or administrator creates a spool plan for that item.
 
-Enrollment is explicit. It preserves historical records, establishes the planned joint count, and makes individual weld work and requirements authoritative. Old aggregate weld logging and blanket weld inspection are then rejected for that spool. Historical work remains in audit history; displayed completion is calculated from individual records. Prior green inspection flags cannot bypass the new requirements. Released items must be reopened by an administrator before enrollment or other changes.
+Enrollment is explicit. It preserves historical records, establishes the planned joint count, and makes individual weld work and requirements authoritative. Old aggregate weld logging and blanket weld inspection are then rejected for that spool. Historical work remains in audit history; displayed completion is calculated from individual records. Prior green inspection flags cannot bypass the new requirements. Released items must be reopened by an administrator before enrollment or changes to fabrication/inspection records. Administrative custody corrections remain available while released.
 
 See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow, [PARTS_GUIDE.md](PARTS_GUIDE.md) for spool component quantities, [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for progress and completed-project packets, and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
 
@@ -83,7 +87,7 @@ Choose material preparation, cutting/beveling, fit-up, welding, NDE/testing, PWH
 
 Elapsed time includes both running and paused time. These are calendar durations for an item, not employee labor hours or shift-adjusted hours. Timers keep counting across logout and overnight. Timing starts when staff record the first start; earlier work and gaps after finishing are not inferred. Quality holds and timer pauses are separate actions. Finishing a manually selected process does not complete welds or grant quality approval.
 
-For items using manual process timing, final release closes the timer and administrative reopening leaves it stopped. A numbered CLM traveler instead starts the next required post-QA handoff/shipping step after release, and a permitted administrative reopen returns it to the relevant QA checkpoint. Its numbered workflow owns stage transitions; manual pause/resume remains available.
+For items using manual process timing, final release closes the timer and administrative reopening leaves it stopped. A numbered CLM traveler instead starts the next required post-QA handoff/shipping step after an ordinary QA release, and a permitted reopen of that QA release returns it to the relevant QA checkpoint. **Admin controls → Return to work** for an administrative release restores the saved pre-override route position. The numbered workflow owns stage transitions; manual pause/resume remains available while active.
 
 ## Export everything to Excel
 
@@ -162,6 +166,7 @@ node tests/dossier_ui_smoke.cjs
 node tests/guide_ui_smoke.cjs
 node tests/parts_ui_smoke.cjs
 node tests/handoff_ui_smoke.cjs
+node tests/admin_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.

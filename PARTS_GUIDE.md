@@ -50,6 +50,8 @@ For example, the seven-piece list could have six assigned, five received and thr
 
 A documented late starting point keeps earlier steps **Not recorded**. A component started at step 7 can later have preparation records without a receipt record. Starting at step 8 alone does not invent step 7. Current holds, rework, exceptions or a part-number mismatch remain visible and prevent the affected piece from appearing ready for fit-up.
 
+An explicit **Administrative release** also preserves the actual quantities and work records. It does not mark missing parts received/prepared or count skipped process steps as complete. Admin controls displays the exception separately from normal fabrication readiness; see [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
+
 Expand a line to see the actual item IDs, current process, handler and location. Open those records to investigate a shortage or stalled piece.
 
 ## 4. Continue using the QR handoffs

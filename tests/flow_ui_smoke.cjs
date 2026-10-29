@@ -48,7 +48,7 @@ function allowed(){
 function detail(){return {...structuredClone(record),allowed_actions:[...allowed()]}}
 const context={document:{getElementById:id=>elements.get(id)||null},me:{role:'admin',badge:'ADMIN'},current:null,URL,URLSearchParams,Date,console,esc,
   performance:{now:()=>now},setInterval:fn=>{timers.set(++timerId,fn);return timerId},clearInterval:id=>timers.delete(id),
-  history:{replaceState(_a,_b,url){context.url=url}},show(page){context.page=page},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(id){context.openedItem=id},FabTracking:{async open(value){context.openedWelds=value}},FabParts:{async open(value){context.openedParts=value}},
+  history:{replaceState(_a,_b,url){context.url=url}},show(page){context.page=page},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(id){context.openedItem=id},FabTracking:{async open(value){context.openedWelds=value}},FabParts:{async open(value){context.openedParts=value}},FabAdmin:{async open(value){context.openedAdmin=value}},
   qrId(value,kind){const text=String(value||'').trim();if(kind==='badge')return text.startsWith('FABTRACE:EMP:')?text.slice(13):text;try{return new URL(text).searchParams.get('item')||''}catch(_){}return text.startsWith('FABTRACE:ITEM:')?text.slice(14):/^[A-Za-z0-9_-]{3,60}$/.test(text)?text:''},
   FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
   api:async(url,options={})=>{
@@ -134,6 +134,12 @@ const check=number=>({['check_s'+number+'_1']:'on'});
   await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Record delivery receipt/);assert.equal(timers.size,0);
   await click('deliver');await submitDialog({receipt_reference:'POD-25',recipient:'Receiving clerk',notes:'Received'});
   assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,receipt_reference:'POD-25',recipient:'Receiving clerk',notes:'Received'});
+
+  record=detailAt(6);record.flow.status='admin_released';record.flow.current=null;record.flow.current_step=null;record.item.released=true;record.item.release_control={mode:'admin_override',label:'Administrative release'};
+  await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/<h2>Administrative release<\/h2>/);assert.match(html(),/retain their actual status/);assert.doesNotMatch(html(),/<h2>Route complete<\/h2>|This component is ready/);assert.doesNotMatch(html(),/id="flowStepForm"/);
+  await click('admin-controls','ITM-001');assert.equal(context.openedAdmin.item,'ITM-001');
+  context.me.role='handler';await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/data-flow-action="admin-controls"/);context.me.role='admin';
+  await context.FabFlow.open();assert.match(html(),/value="admin_released"/);
 
   record=detailAt(1);record.flow=null;await context.FabFlow.open({item:'ITM-001'});await click('start');
   elements.get('ff-field-start_step').value='5';elements.get('ff-field-start_step').onchange();assert.equal(elements.get('ff-field-baseline_reference').required,true);

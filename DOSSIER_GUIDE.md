@@ -1,5 +1,7 @@
 # FabTrace project progress and final Job Packet guide
 
+An **Administrative release** is an explicit management disposition and remains distinguishable from ordinary QA release. It does not satisfy the final QA release checklist or authorize a QA-issued Job Packet. Existing evidence, physical work and holds keep their actual status; the admin decision and outstanding conditions stay visible. Use **Admin controls → Return to work** to resume the appropriate work/QA path. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
+
 This guide covers the **Project progress** and **Job Packets** screens introduced in `2026.10.29-dossier.1`. Continue using **Projects & welds** for individual joints, **Process flow** for the numbered traveler, and **Audit readiness** for the five audit prompts. The new screens assemble those records into a controlled completion package.
 
 The **Guide & setup** screen, available at `/?guide=1`, also contains searchable operating instructions inside FabTrace. Select a project for its live setup checklist and shortcuts to planning, documents, issued packages and handover records. The checklist uses existing recorded data; it does not save scope, approve evidence or infer missing records. Version `2026.10.29-guide.1` adds this in-app guide and project setup navigation.

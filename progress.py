@@ -50,7 +50,7 @@ def _recorded_steps(plan, events):
     states = {n: 'not_recorded' if n < plan.baseline_step else 'pending'
               for n in range(route['first_step'], route['last_step'] + 1)}
     for event in events:
-        if event.action in ('fail', 'reopen'):
+        if event.action in ('fail', 'reopen', 'admin_return_to_work'):
             target = (event.data or {}).get('return_step', event.step)
             if target is not None:
                 for n in states:
@@ -71,6 +71,7 @@ def project_rows(s, project_id=None):
     This function deliberately has no dependency on dossier.py and can also be
     used by project-package scope validation and the Excel snapshot connection.
     """
+    from administration import release_summary
     with s.no_autoflush:
         projects = s.scalars(select(Project).where(Project.id == project_id) if project_id else select(Project)).all()
         project_ids = {p.id for p in projects}
@@ -100,7 +101,7 @@ def project_rows(s, project_id=None):
         by_id = {item.id: item for item in items}
         flows = {f.item_id: f for f in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(ids))).all()}
         flow_events = _group(s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids),
-            FlowEvent.action.in_(('advance', 'fail', 'reopen'))).order_by(FlowEvent.sequence)).all(), 'item_id')
+            FlowEvent.action.in_(('advance', 'fail', 'reopen', 'admin_return_to_work'))).order_by(FlowEvent.sequence)).all(), 'item_id')
         exceptions = _group(s.scalars(select(FlowException).where(FlowException.item_id.in_(ids),
             FlowException.closed_at.is_(None))).all(), 'item_id')
         reworks = _group(s.scalars(select(Rework).where(Rework.item_id.in_(ids), Rework.closed_at.is_(None))).all(), 'item_id')
@@ -131,6 +132,9 @@ def project_rows(s, project_id=None):
             for item in items:
                 plan, flow = all_plans.get(item.id), flows.get(item.id)
                 errors = []
+                release_control = release_summary(s, item)
+                if release_control['active_override']:
+                    errors.append('Administrative release is recorded; ordinary QA release has not been verified')
                 if item.on_hold:
                     errors.append('Item is on hold')
                 errors.extend('Open hold: ' + hold.reason for hold in holds[item.id] if hold.closed_at is None)
@@ -171,6 +175,8 @@ def project_rows(s, project_id=None):
                     'current_step': flow.current_step if flow else None,
                     'current_title': STEP_BY_NUMBER[flow.current_step]['title'] if flow and flow.current_step else '',
                     'released': bool(item.released), 'location': item.location, 'handler': item.handler,
+                    'release_mode': release_control['mode'], 'release_label': release_control['label'],
+                    'administrative_release': release_control['active_override'],
                     'updated_at': _stamp(item.updated_at)}
                 from parts import parts_summary
                 parts = parts_summary(s, item.id)

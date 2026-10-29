@@ -23,6 +23,7 @@ EMPLOYEE_COLUMNS = ["badge", "name", "role", "active", "created_at"]
 EXCLUDED_COLUMNS = {"Packet issues": {"print_html"}}
 TABLES = {
     "Employees": ("main", "Employee"),
+    "Employee access states": ("administration", "EmployeeAccessState"),
     "Items": ("main", "Item"),
     "Inspections": ("main", "Inspection"),
     "Reworks": ("main", "Rework"),
@@ -373,6 +374,44 @@ def test_empty_tables_keep_their_column_headers(api):
                           ("Spool parts progress", exporter.SPOOL_PARTS_PROGRESS_COLUMNS)):
         assert workbook.headers(name) == list(columns)
         assert not workbook.records(name)
+
+
+def test_admin_release_and_account_changes_export_without_fabricated_qa_or_secrets(api):
+    from test_admin import employee, employee_body, release
+    from test_flow import create_item
+    from tracking_helpers import ok
+
+    item_id = create_item(api, "EXPORT-ADMIN-RELEASE", kind="Spool")
+    released = release(api, item_id)
+    assert released["release"]["mode"] == "admin_override"
+    row = employee(api, BADGES["welder"])
+    ok(api.patch(f"/api/admin/employees/{row['badge']}", employee_body(api, row["badge"], name="Export account revision")))
+    row = employee(api, row["badge"])
+    new_pin = "synthetic-export-pin-never-for-production-123"
+    ok(api.post(f"/api/admin/employees/{row['badge']}/pin", {
+        "expected_version": row["version"], "pin": new_pin, "reason": "Synthetic local export security verification",
+    }))
+    before = snapshot(api)
+    _, workbook = download(api)
+    part = next(row for row in workbook.records("Part progress") if row["item_id"].value == item_id)
+    assert part["released"].value is True
+    assert part["release_mode"].value == "admin_override"
+    assert part["release_label"].value == "Administrative release"
+    assert part["administrative_release"].value is True
+    assert part["fabrication_finished"].value is False
+    assert part["qa_accepted"].value == 0
+    access = workbook.records("Employee access states")[0]
+    assert access["badge"].value == BADGES["welder"]
+    assert access["version"].value == 2 and access["session_version"].value == 1
+    audit_row = next(row for row in workbook.records("Audit events") if row["event"].value == "ADMIN_RELEASE_OVERRIDE")
+    recorded = json.loads(workbook.full_text(audit_row, "details"))
+    assert recorded["bypassed_blockers"]
+    assert recorded["quality_acceptance_recorded"] is False
+    assert new_pin.encode() not in workbook.xml
+    with api.session_factory() as session:
+        for current in session.scalars(select(api.application.Employee)):
+            assert current.pin_hash.encode() not in workbook.xml
+    assert snapshot(api) == before
 
 
 def test_transfer_export_retains_both_badges_status_and_original_location_labels(api):

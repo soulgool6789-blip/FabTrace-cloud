@@ -4,7 +4,9 @@ from typing import Literal
 from urllib.parse import urlencode, urlparse
 import jwt, qrcode
 from fastapi import FastAPI, HTTPException, Depends, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, select, func, text
@@ -35,7 +37,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.29-transfer.1'
+APP_VERSION='2026.10.29-admin.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -105,6 +107,16 @@ app=FastAPI(title='FabTrace Cloud',docs_url=None,redoc_url=None)
 app.mount('/static',StaticFiles(directory=os.path.join(os.path.dirname(__file__),'static')),name='static')
 failed={}
 
+@app.exception_handler(RequestValidationError)
+async def validation_error(request:Request,error:RequestValidationError):
+    path=request.url.path
+    if path in ('/api/login','/api/employees') or (path.startswith('/api/admin/employees/') and path.endswith('/pin')):
+        # Validation diagnostics may identify the field but must not echo a
+        # submitted PIN or password hash in the response or client error UI.
+        return JSONResponse(status_code=422,content={'detail':[
+            {key:row[key] for key in ('type','loc','msg') if key in row} for row in error.errors()]})
+    return await request_validation_exception_handler(request,error)
+
 def db():
     with SessionLocal() as s: yield s
 
@@ -119,6 +131,8 @@ def auth(request:Request,s:Session=Depends(db)):
     except jwt.InvalidTokenError: raise HTTPException(401,'Session expired or invalid')
     user=s.get(Employee,payload['sub'])
     if not user or not user.active: raise HTTPException(401,'Inactive employee')
+    from administration import validate_session
+    validate_session(s,user,payload)
     return user
 
 def permit(user,*roles):
@@ -149,6 +163,8 @@ def item_dict(s,r,user=None):
     d['flow_step']=flow.current_step if flow else None
     d['flow_status']=flow.status if flow else None
     d['transfer']=transfer_snapshot(s,r,user)
+    from administration import release_summary
+    d['release_control']=release_summary(s,r)
     return d
 
 @app.middleware('http')
@@ -174,12 +190,13 @@ def login(data:Login,response:Response,request:Request,s:Session=Depends(db)):
     hits=[v for v in failed.get(k,[]) if time.time()-v<900]
     failed[k]=hits
     if len(hits)>=8: raise HTTPException(429,'Too many attempts; try again later')
-    u=s.get(Employee,data.badge)
+    u=s.scalar(select(Employee).where(Employee.badge==data.badge).with_for_update().execution_options(populate_existing=True))
     if not u or not u.active or not password_hash.verify(data.pin,u.pin_hash):
         failed[k].append(time.time())
         raise HTTPException(401,'Invalid badge or PIN')
     failed.pop(k,None)
-    token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow()},JWT_SECRET,algorithm='HS256')
+    from administration import session_version
+    token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow(),'sv':session_version(s,u.badge)},JWT_SECRET,algorithm='HS256')
     response.set_cookie('fabtrace_session',token,httponly=True,secure=os.environ.get('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=8*3600,path='/')
     audit(s,None,u.badge,'LOGIN',{'result':'success'});s.commit()
     return {'badge':u.badge,'name':u.name,'role':u.role}
@@ -219,7 +236,8 @@ def employee_badge_qr(badge:str,u:Employee=Depends(auth),s:Session=Depends(db)):
 
 @app.post('/api/employees',status_code=201)
 def employee_create(data:EmployeeIn,u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'admin')
+    from administration import locked_admin
+    u=locked_admin(s,u)
     if s.get(Employee,data.badge):raise HTTPException(409,'Badge already exists')
     s.add(Employee(badge=data.badge,name=data.name,pin_hash=password_hash.hash(data.pin),role=data.role))
     audit(s,None,u.badge,'EMPLOYEE_CREATED',{'badge':data.badge,'role':data.role});s.commit()
@@ -233,7 +251,9 @@ def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Se
     count=s.scalar(select(func.count()).select_from(q.subquery()))
     rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
     tracked_ids=set(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.item_id.in_([r.id for r in rows])))) if rows else set()
-    return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids} for r in rows]}
+    from administration import release_summary
+    return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids,
+        'release_control':release_summary(s,r)} for r in rows]}
 class ItemIn(BaseModel):
     id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')
     description:str=Field(min_length=2,max_length=300)
@@ -393,11 +413,11 @@ def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(a
 class ReleaseIn(BaseModel):
     reference:str=Field(min_length=3,max_length=250)
 
-def finalize_release(s,r,actor,reference,at=None,flow_step=None):
-    """Validate and record QA release inside the caller's locked transaction."""
-    require_unreleased(r)
-    from parts import lock_parts_for_release
-    lock_parts_for_release(s,r.id)
+def release_blockers(s,r,flow_step=None,for_update=False):
+    """Current technical checks; reads must not take production write locks."""
+    if for_update:
+        from parts import lock_parts_for_release
+        lock_parts_for_release(s,r.id)
     if is_tracked(s,r):
         reasons=tracking_release_errors(s,r)
     else:
@@ -409,7 +429,13 @@ def finalize_release(s,r,actor,reference,at=None,flow_step=None):
         if not r.dimension_at or not r.weld_at:reasons.append('Inspection timestamps missing')
         if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
         if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
-    reasons.extend(flow_release_errors(s,r,approving_step=flow_step))
+    reasons.extend(flow_release_errors(s,r,approving_step=flow_step,for_update=for_update))
+    return list(dict.fromkeys(reasons))
+
+def finalize_release(s,r,actor,reference,at=None,flow_step=None):
+    """Validate and record QA release inside the caller's locked transaction."""
+    require_unreleased(r)
+    reasons=release_blockers(s,r,flow_step=flow_step,for_update=True)
     if reasons:raise HTTPException(409,{'release_blockers':reasons})
     r.released=True;r.released_at=at or utcnow();r.released_by=actor
     finish_on_release(s,r,actor,r.released_at)
@@ -428,6 +454,9 @@ def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     lock_flow_topology(s)
     r=lock_item(s,item_id)
     if not r.released:raise HTTPException(409,'Not released')
+    from administration import active_override
+    if active_override(s,r):
+        raise HTTPException(409,'Use Return to work in Admin controls to restore this administrative release with a recorded reason.')
     guard_flow_reopen(s,r)
     r.released=False;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.released_at=None;r.released_by=None
     if is_tracked(s,r):
@@ -438,7 +467,7 @@ def reopen(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
 def item_custody(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     if not s.get(Item,item_id):raise HTTPException(404,'Item not found')
     entries=s.scalars(select(Audit).where(Audit.item_id==item_id,
-        Audit.event=='TRANSFER').order_by(Audit.id.desc()).limit(500)).all()
+        Audit.event.in_(('TRANSFER','ADMIN_CUSTODY_CORRECTION'))).order_by(Audit.id.desc()).limit(500)).all()
     return [asdict(x,'id item_id actor event details at'.split()) for x in entries]
 
 @app.get('/api/items/{item_id}/audit')
@@ -474,6 +503,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(PartEvent.id).limit(1))
     s.execute(select(ItemTransferState.item_id).limit(1))
     s.execute(select(TransferLocation.id).limit(1))
+    s.execute(select(EmployeeAccessState.badge).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -507,6 +537,9 @@ app.include_router(progress_router)
 
 from transfers import router as transfers_router, ItemTransferState, TransferLocation, transfer_snapshot
 app.include_router(transfers_router)
+
+from administration import router as administration_router, EmployeeAccessState
+app.include_router(administration_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)
