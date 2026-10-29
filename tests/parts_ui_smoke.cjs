@@ -93,7 +93,7 @@ const checks=[];async function check(name,fn){await fn();checks.push(name);}
   await check('mirrored shell, authenticated links, navigation and guide integrate the workspace',async()=>{
     const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));
     for(const value of ['id="navParts"','id="partsPage"','id="partsContent"','id="itemPartsBtn"','/static/parts.js','/static/parts.css','FabParts.cancelPending'])assert.ok(index.includes(value),value);
-    assert.match(index,/params\.has\('parts'\)[\s\S]*FabParts\.open/);assert.match(index,/params\.has\('badge'\)[\s\S]*findHandoffBadge/);assert.match(index,/else if\(params\.get\('item'\)\)[\s\S]*\/scan/);
+    assert.match(index,/params\.has\('parts'\)[\s\S]*FabParts\.open/);assert.match(index,/params\.has\('badge'\)[\s\S]*FabHandoff\.openBadge/);assert.match(index,/else if\(params\.get\('item'\)\)[\s\S]*\/scan/);
     for(const name of ['tracking','flow','progress'])assert.match(fs.readFileSync(path.join(__dirname,'../static/'+name+'.js'),'utf8'),/FabParts\.open/);
     const guide=fs.readFileSync(path.join(__dirname,'../static/guide.js'),'utf8');assert.match(guide,/id:'parts'/);assert.match(guide,/Required quantities do not create inventory/);assert.match(guide,/prepared|Prepared/);
   });

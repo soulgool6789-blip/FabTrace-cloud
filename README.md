@@ -21,6 +21,10 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 
 Existing item registration, bulk CSV import, employee QR badges, item QR labels, and custody handoffs remain available. Item types include **Part**, **Spool**, and **Assembly**.
 
+### Transfer an item with both employee badges
+
+**Scan & Handoff** now requires the item QR, the current custodian's sending badge and the receiving employee's badge. Select the destination and operational work status from dropdowns, review both employees and the signed-in recorder, and save. Supervisors/administrators can add and maintain actual shop locations. Keeping the same employee in both badge fields supports a location/status change without claiming a new custodian. Stale forms are rejected, and every new move retains its before/after state. Ordinary transfers do not advance a process, change its timer or grant QA approval. Numbered handoff steps use the same checks. See [HANDOFF_GUIDE.md](HANDOFF_GUIDE.md).
+
 ## Existing records and enrollment
 
 Deploying this version does **not** convert existing items, invent individual welds, or turn aggregate weld counts into accepted weld records. Items retain their previous workflow until a supervisor or administrator creates a spool plan for that item.
@@ -51,7 +55,7 @@ Download an issued **ZIP** for digital transfer or open its **Print** view for p
 
 Open **Process flow** in the navigation or from an item's record. An administrator or supervisor starts its route: individual components use steps 1–8, tracked spools use 9–16, and tracked assemblies use 17–24. The full map retains all 24 numbered steps, while each physical item's traveler highlights its own current, completed, pending and unrecorded steps. Parent/child links let staff follow the work across those records.
 
-Declare the required component or child-spool count, link the actual item IDs, and complete each current step's checklist and required scan/entered ID, receiving badge, location or document reference. The app records the employee and time. Spools and assemblies need their existing project/weld plans first. An assembly cannot advance with missing or unreleased child spools, or unresolved issues in their component records.
+Declare the required component or child-spool count, link the actual item IDs, and complete each current step's checklist and required scan/entered ID or document reference. Handoff steps require the current custodian's sending badge, the receiving badge and selected location/work status. The app records both employee identities separately from the signed-in recorder and server time. Spools and assemblies need their existing project/weld plans first. An assembly cannot advance with missing or unreleased child spools, or unresolved issues in their component records.
 
 Incoming verification and the four QA checkpoints have controlled failure returns. A failed inspection creates an exception, sends the traveler to its selected rework step and preserves earlier attempts. Passing the failed checkpoint again requires current quality records and an explicit resolution. Individual weld operations and acceptance still belong to **Projects & welds**. Checkbox confirmations cannot substitute for them.
 
@@ -86,6 +90,8 @@ For items using manual process timing, final release closes the timer and admini
 Sign in as an **administrator** and click **Export Excel** in the top navigation. The button shows **Preparing Excel…** while the workbook is generated, then the browser downloads an `.xlsx` file.
 
 The workbook includes the current business records and their histories on separate worksheets, plus export information. It excludes private PINs and PIN hashes. Evidence/report references are included; linked report files are not embedded. This is a snapshot for review and analysis: editing the workbook does not update FabTrace, and the workbook is not a database restore format. Keep database backups separately.
+
+**Item transfer states** and **Transfer locations** retain current operational statuses and custom location choices. **Items**, **Audit events** and **Flow events** provide current custody and the recorded before/after transfer history, including both scanned employees and the recorder for new handoffs.
 
 **Process events** contains every timing action. **Process visits** contains each visit's start/end, actor, and elapsed/running/paused time. **Process totals** combines repeated visits by spool and process. Both reports include project and subproject IDs and numeric seconds/decimal hours for Excel analysis. Open visits are calculated as of their report timestamp. Spools without a recorded start have no fabricated timing rows.
 
@@ -155,6 +161,7 @@ node tests/progress_ui_smoke.cjs
 node tests/dossier_ui_smoke.cjs
 node tests/guide_ui_smoke.cjs
 node tests/parts_ui_smoke.cjs
+node tests/handoff_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.

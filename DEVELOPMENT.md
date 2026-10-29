@@ -10,6 +10,8 @@ This guide describes the implemented tracking extension and the constraints that
 | `tracking.py` | Tracking tables, validated request models, project/spool/weld APIs, authoritative work and acceptance checks, versions, holds, repairs, and rollups. |
 | `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
+| `transfers.py` | Shared sender/receiver validation, versioned custody/location/status state, managed location catalog and ordinary transfer API. |
+| `static/handoff.js`, `static/handoff.css`, `HANDOFF_GUIDE.md` | Shared badge/location/status controls, camera lifecycle, ordinary handoff page and operating instructions. |
 | `parts.py` | Optional spool parts plans, whole-piece requirement lines, unique physical allocations, quantity projections and audited scope controls. |
 | `static/parts.js`, `static/parts.css`, `PARTS_GUIDE.md` | Parts-list editor, QR allocation, current quantity progress and operating instructions. |
 | `quality.py`, `quality_templates.py` | Audit workspaces, draft customer matrix, controlled document revisions, actual evidence, corrective actions, signed reviews and optional project gates. |
@@ -31,7 +33,7 @@ This guide describes the implemented tracking extension and the constraints that
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow, quality, dossier, progress and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
 
 ## Data relationships
 
@@ -142,6 +144,8 @@ These triggers prevent ordinary mutation, not deliberate removal by a database o
 
 ## Required component quantities per spool
 
+See the separate handoff contract below when a quantity-tracked component changes custody. Allocation alone never supplies a badge scan, location change or work-status record.
+
 The optional `parts.py` extension adds four tables: `spool_parts_plans`, `spool_part_lines`, `spool_part_allocations` and immutable `spool_parts_events`. A plan belongs to one existing individual spool plan; a Part allocation belongs to one active line, and its component ID is globally unique. `flow_component_links` remains the physical component-to-spool relationship. No existing columns are changed and no plan is created by a read.
 
 | Route | Behavior |
@@ -159,6 +163,28 @@ Receipt counts actual current step-1 completion. Preparation requires current-pa
 Writes take the existing topology advisory lock before item locks, refresh the parts version and keep validation, component links, flow-version changes and audit records atomic. Scope edits reconcile `FlowPlan.expected_children`; old traveler start/scope/assignment endpoints cannot bypass a configured parts list. The scope locks after spool step 9, real weld work, release or applicable parent progression. Generic final release locks configured child components before testing current readiness.
 
 Configured lists expose a compact `parts` summary in tracking, flow and progress. Dossier fingerprints include stable recorded plan/line/allocation facts and actual component identity; no permissions, candidates or elapsed clocks enter the fingerprint. The parts key is omitted entirely for an unconfigured spool, preserving legacy issue fingerprints. Frozen issues retain the original snapshot and printable evidence. Four raw Excel sheets and `Spool parts progress` share the existing read-only export snapshot.
+
+## Badge handoff, location and work-status contract
+
+`transfers.py` adds two current-state tables: `item_transfer_states` (one row per item after the first explicit update) and `transfer_locations` (managed custom choices). There is no existing-column migration and no initialization/read-time seeding. An item with no transfer-state row projects `version: 0`, `operational_status: null` and its actual existing custodian/location. Built-in location/status choices are code definitions. Immutable `Audit` and existing `FlowEvent` rows retain historical snapshots; earlier records are not backfilled with missing sender or status data.
+
+| Method and route | Contract |
+| --- | --- |
+| `GET /api/transfers/options` | Authenticated location/status catalog with built-in/custom kind, active flag, version and `can_manage_locations`. Inactive custom records remain visible for management; destination selectors filter them. |
+| `GET /api/transfers/items/{id}` | Read-only current custodian/name/active state, recorded location, operational status, transfer version, update metadata and role/release-derived `can_transfer`. |
+| `POST /api/items/{id}/transfer` | Handler/welder/supervisor/admin submits `sender_badge`, receiving `handler`, `location_id`, `operational_status`, strict integer `expected_transfer_version`, and optional notes/scan method. |
+| `POST /api/transfers/locations` | Supervisor/admin creates a custom location with `label`; returns 201. |
+| `PATCH /api/transfers/locations/{id}` | Supervisor/admin supplies `label`, `active` and current `expected_version`. Rename/deactivate/reactivate retains historical labels. There is no delete route. |
+
+Item detail and flow detail embed the same snapshot as `transfer`. The `current` location ID retains the item's actual recorded label, including a legacy value or a now-deactivated custom location. Other IDs must select an active built-in/custom destination. Labels are normalized for duplicate detection; built-in names are reserved. Catalog edits do not rename current item locations or prior audit history.
+
+Operational statuses are `queued`, `in_progress`, `awaiting_inspection`, `waiting_material`, `paused` and `ready_next_operation`. They cannot approve QA, release holds, complete physical work, advance a numbered step, change a process timer or issue/dispatch a packet. In particular, operational `paused` and the process clock's paused state have separate explicit actions.
+
+Every transfer locks topology before the refreshed Item row, then validates transfer version, destination and both active employees. The sending badge must equal the locked current `Item.handler`; it need not equal the authenticated recorder. Both badge identities identify records, not login sessions or independent signatures. The audit retains sender, receiver, recorder, before/after location/status, change flags, timestamp, versions and `recipient_acknowledged: false`. Same-custodian updates are permitted when the location or status changes. A complete no-op ordinary transfer is rejected. Optimistic versions catch same-custodian races and A-to-B-to-A changes, not just a different handler.
+
+Numbered handoff steps 6/8/9/12/13/16/20/23 share this validation and record within the same transaction as their checks and step/timer transition. They add `sender_badge`, `receiver_badge`, `location_id`, `operational_status` and `expected_transfer_version` to the ordinary flow form. Step 3 uses only `location_id` and transfer version for its location capture. Other steps reject supplied transfer fields. An ordinary handoff on a routed item appends `custody_transfer` and increments `FlowPlan.version` without changing its current step, status, entry time or process history. This invalidates stale traveler forms without claiming physical progress. Generic transfers remain prohibited after QA release; permitted numbered post-QA movements keep their existing controls.
+
+`static/handoff.js` supplies shared badge confirmation/location/status controls and camera cleanup for both ordinary and flow forms. Displaying the current custodian never preconfirms a sender scan. Item changes, successful saves and stale-state recovery clear both badge confirmations. Existing item/badge QR labels remain valid, and badge-link continuation retains the explicitly selected role. Read-only projections take no write/advisory locks. The two raw transfer sheets share the existing read-only Excel snapshot.
 
 ## Production process timing
 
@@ -203,7 +229,7 @@ Each numbered step uses the existing `SpoolProcessEvent` clock under `clm_01` th
 
 Failures at 11 invalidate before-welding requirement approvals; failures at 15 invalidate post-weld/release approvals. Other QA failures require fresh dimensional verification where relevant. Physical repair cycles remain explicit individual-weld actions. Fit-up is allowed at spool 10 or 14, welding at spool 14, and assembly joining operations at 18. Completing assembly work at 18 and coating at 21 requires fresh dimensions afterward. Material holds/open rework are checked recursively through components, spools and assemblies through shipment.
 
-`shipped` requires the current step 24, item verification, checklist, carrier, shipment reference and destination; it stores `shipped_at`. Only a later delivery action sets `delivered_at`, `receipt_reference`, `recipient` and status `delivered`. Document references do not imply generated/archived PDFs or carrier-system integration. The recorded handoff identifies the recorder and receiving badge but does not fabricate the recipient's independent acknowledgment.
+`shipped` requires the current step 24, item verification, checklist, carrier, shipment reference and destination; it stores `shipped_at`. Only a later delivery action sets `delivered_at`, `receipt_reference`, `recipient` and status `delivered`. Document references do not imply generated/archived PDFs or carrier-system integration. A recorded handoff identifies the scanned sender and receiver separately from the signed-in recorder. It does not fabricate either employee's independent acknowledgment.
 
 Excel exports explicitly allowlist all four flow tables, plus a `Flow steps` definition sheet. Flow event JSON retains its captured checklist definition. The process reports join a component through `ComponentLink` to its parent's current project/subproject; unassigned component report project IDs are blank and the original free-text Item project remains in the Items sheet. Definition/report rows are distinguished from raw database records in Export info.
 
@@ -240,6 +266,11 @@ node tests/export_ui_smoke.cjs
 node tests/process_ui_smoke.cjs
 node tests/flow_ui_smoke.cjs
 node tests/quality_ui_smoke.cjs
+node tests/progress_ui_smoke.cjs
+node tests/dossier_ui_smoke.cjs
+node tests/guide_ui_smoke.cjs
+node tests/parts_ui_smoke.cjs
+node tests/handoff_ui_smoke.cjs
 ```
 
 API fixtures use temporary SQLite databases, override imported database settings, and create synthetic employees and authenticated sessions. They cover legacy behavior, roles, stale decisions, evidence, scope, operations, repairs, holds, hierarchy, and release. SQLite tests do not establish PostgreSQL locking or trigger behavior.
@@ -253,7 +284,7 @@ python tests/verify_postgres.py --help
 python tests/verify_postgres.py --dsn 'postgresql+psycopg://USER@localhost/fabtrace_test_upgrade'
 ```
 
-Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all eighteen history/file triggers, competing weld-evidence/process/flow/quality/dossier writes, lock-free quality/flow/dossier/progress GET projections, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
+Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all nineteen history/file triggers, competing weld-evidence/process/flow/quality/dossier/parts/transfer writes, lock-free GET projections, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
 
 ## Adding the next feature
 
@@ -284,7 +315,7 @@ Uploads read at most 8 MiB + 1 byte, check extension/content signature, sanitize
 
 Handover records are declarations of actual dispatch and separate receipt, not integrations that send messages. A dispatch must reference a current completed-project issue. A later receipt can acknowledge an older dispatched issue and does not grant new release. Printed acknowledgement blanks remain blank until an actual event.
 
-Excel explicitly allowlists seven dossier metadata tables, including immutable JSON issue/review snapshots and print hashes. It excludes `dossier_files` and retained HTML content. `Project progress`, `Part progress` and `Job Packet readiness` are calculated inside the same PostgreSQL REPEATABLE READ READ ONLY snapshot as the raw tables. Long snapshots use the existing lossless Text overflow mechanism; worksheets may exceed the base 43-sheet count when continuation or overflow is needed.
+Excel explicitly allowlists seven dossier metadata tables, including immutable JSON issue/review snapshots and print hashes. It excludes `dossier_files` and retained HTML content. `Project progress`, `Part progress` and `Job Packet readiness` are calculated inside the same PostgreSQL REPEATABLE READ READ ONLY snapshot as the raw tables. Long snapshots use the existing lossless Text overflow mechanism; continuation/overflow worksheets can extend the current base workbook of 41 raw sheets, eight report/definition sheets and Export info.
 
 ## Read-only project progress
 

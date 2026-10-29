@@ -64,9 +64,11 @@ def action_body(api, item_id, **values):
     if current["requires_reference"]:
         body["reference"] = f"TEST-REPORT-STEP-{current['number']}"
     if current["requires_handoff"]:
-        body.update({"receiver_badge": BADGES["handler"], "location": f"Station after step {current['number']}"})
+        body.update({"sender_badge": record["item"]["handler"], "receiver_badge": BADGES["handler"],
+                     "location_id": "production_staging", "operational_status": "queued",
+                     "expected_transfer_version": record["transfer"]["version"]})
     if current["number"] == 3:
-        body["location"] = "Test material storage rack"
+        body.update({"location_id": "material_storage", "expected_transfer_version": record["transfer"]["version"]})
     if current["number"] == 24:
         body.update({"carrier": "Test carrier", "shipment_reference": "TEST-BOL-123", "destination": "Test customer delivery site"})
     if current["number"] == 17:
@@ -284,23 +286,24 @@ def test_handoff_requires_active_recipient_and_records_custody_and_location(api)
     current = enroll(api, item_id, "component", start_step=6)
     route = f"{ROOT}/items/{item_id}/advance"
     for values in (
-        {"receiver_badge": ""}, {"receiver_badge": "MISSING-BADGE"}, {"location": " "},
+        {"receiver_badge": ""}, {"receiver_badge": "MISSING-BADGE"}, {"location_id": " "},
     ):
         response = api.post(route, action_body(api, item_id, **values))
-        assert response.status_code in (409, 422), response.text
+        assert response.status_code in (404, 409, 422), response.text
     with api.session_factory() as session:
         session.get(api.application.Employee, BADGES["welder"]).active = False
         session.commit()
-    assert api.post(route, action_body(api, item_id, receiver_badge=BADGES["welder"])).status_code == 422
-    after = advance(api, item_id, receiver_badge=BADGES["handler"], location="Fabrication prep station")
+    assert api.post(route, action_body(api, item_id, receiver_badge=BADGES["welder"])).status_code == 404
+    after = advance(api, item_id, receiver_badge=BADGES["handler"], location_id="fabrication_prep")
+    location = next(row["label"] for row in ok(api.get("/api/transfers/options"))["locations"] if row["id"] == "fabrication_prep")
     assert after["flow"]["version"] == current["flow"]["version"] + 1
     assert after["item"]["handler"] == BADGES["handler"]
-    assert after["item"]["location"] == "Fabrication prep station"
+    assert after["item"]["location"] == location
     history = ok(api.get(f"/api/items/{item_id}/custody"))
     assert len(history) == 1
     assert history[0]["actor"] == BADGES["admin"]
     assert history[0]["details"]["to"]["handler"] == BADGES["handler"]
-    assert history[0]["details"]["to"]["location"] == "Fabrication prep station"
+    assert history[0]["details"]["to"]["location"] == location
 
 
 def test_stale_step_submit_is_atomic_and_does_not_create_second_visit(api):

@@ -37,6 +37,7 @@ from dossier import (DossierProject, DossierEntry, DossierDocument, DossierRevie
                      DossierIssue, DossierHandover, DossierEvent, item_detail)
 from progress import project_rows, summarize as progress_summary
 from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_snapshot
+from transfers import ItemTransferState, TransferLocation
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -79,6 +80,8 @@ TABLE_SPECS = (
     _spec(Inspection, 'Inspections', 'id item_id kind result inspector report measurements at'),
     _spec(Rework, 'Reworks', 'id item_id kind reason assigned opened_at closed_at closed_by close_notes'),
     _spec(Audit, 'Audit events', 'id item_id actor event details at'),
+    _spec(ItemTransferState, 'Item transfer states', 'item_id version location_id operational_status created_at updated_by updated_at', 'item_id'),
+    _spec(TransferLocation, 'Transfer locations', 'id label normalized_label active version created_by created_at updated_by updated_at'),
     _spec(Project, 'Projects', 'id name client description created_by created_at'),
     _spec(Subproject, 'Subprojects', 'id project_id name description created_by created_at'),
     _spec(SpoolPlan, 'Spool plans', 'item_id project_id subproject_id assembly_id planned_welds drawing_revision due_date notes zero_weld_reason version created_by created_at updated_at', 'item_id'),
@@ -172,6 +175,10 @@ OVERFLOW_COLUMNS = (
 )
 
 RELATIONSHIPS = (
+    'item_transfer_states.item_id -> items.id; version is the current handoff/location edit revision. An absent row means no new-format transfer has been recorded; historical badges and statuses are not invented.',
+    'transfer_locations stores managed custom destination choices; built-in work centers are application definitions. location_id may reference a built-in or custom choice, or be blank for a preserved legacy location. items.location retains the actual last recorded label, so renaming a catalog choice does not rewrite history.',
+    'Audit TRANSFER details retain both scanned badge identities, before/after location and operational status, custody_changed and the authenticated recorder. Badge identification is not independent sender or recipient acknowledgement.',
+    'Operational transfer status does not change numbered process steps, timers, holds, inspection acceptance or release. A custody_transfer Flow event invalidates stale traveler forms without advancing their step.',
     'spool_parts_plans.spool_id -> the tracked spool items.id; spool_part_lines.spool_id -> its optional controlled parts plan. Quantities are whole physical pieces, not weld counts or length.',
     'spool_part_allocations.component_id -> one individual Part items.id and line_id -> spool_part_lines.id. Each allocation must also match the existing flow_component_links parent; a QR identity is counted once.',
     'spool_parts_events preserves versioned parts-list edits, allocations and removals. Spool parts progress derives actual receipt step1 and current prepared steps7+8; historical baselines are not invented.',

@@ -16,7 +16,7 @@
     {id:'paint',label:'Sandblast & paint',first:20,last:22},
     {id:'shipping',label:'Shipment',first:23,last:24},
   ];
-  const state={catalog:null,board:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,saving:false,dialogAction:null,dialogStale:false,notice:''};
+  const state={catalog:null,handoffOptions:null,handoffControl:null,board:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,saving:false,dialogAction:null,dialogStale:false,notice:''};
   const clocks=new WeakMap();
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
@@ -93,16 +93,17 @@
     await load();
   }
   async function load(){
-    const sequence=++state.sequence;stopClocks();
+    const sequence=++state.sequence;stopClocks();state.handoffControl?.destroy();state.handoffControl=null;
     node('flowContent').innerHTML='<div class="ff-state" role="status">Loading fabrication process records…</div>';
     node('flowContent').setAttribute('aria-busy','true');
     try{
-      const [catalog,board,detail]=await Promise.all([
+      const [catalog,board,detail,handoffOptions]=await Promise.all([
         state.catalog?Promise.resolve(state.catalog):api(ROOT+'/catalog'),
         api(ROOT+'/items'),state.item?api(ROOT+'/items/'+encode(state.item)):Promise.resolve(null),
+        api('/api/transfers/options'),
       ]);
       if(sequence!==state.sequence)return;
-      state.catalog=catalog;state.board=arr(board.items);state.detail=markTimes(detail);
+      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=arr(board.items);state.detail=markTimes(detail);
       for(const row of state.board)markTimes(row);
       render();updateUrl();
     }catch(error){
@@ -174,8 +175,13 @@
     let content='';
     if(step.requires_scan)content+=field('scanned_item_id','Scan or enter this item ID again','',{required:true,maxlength:500,help:'Verify the physical item being processed: '+state.detail.item.id});
     if(step.number===17)content+=field('scanned_child_ids','Scan or enter each linked spool ID','',{required:true,type:'textarea',full:true,rows:4,help:'One spool ID or FabTrace QR link per line. Every linked spool must be verified.'});
-    if(step.requires_handoff)content+=field('receiver_badge','Receiving employee badge ID','',{required:true,maxlength:500,help:'Scan the receiving employee’s badge or type its ID.'});
-    if(step.requires_location||step.requires_handoff||step.number===3)content+=field('location',step.number===3?'Storage location':'Receiving location / work center','',{required:true,maxlength:160});
+    if(step.requires_handoff){
+      const transfer=state.detail.transfer||state.detail.item.transfer;
+      content+=`<div class="ff-span"><h3>Identify both employees for this handoff</h3><p class="fh-help">Current recorded custodian: <strong>${esc(transfer?.handler_name||transfer?.handler||state.detail.item.handler)}</strong>${transfer?.handler_name?' ('+esc(transfer.handler)+')':''}. Scan the sending badge and receiving badge in their separate fields. The signed-in employee records the step.</p>${window.FabHandoff.controlHtml('flowHandoff',{transfer,options:state.handoffOptions,heading:false})}<div id="flowHandoffReview" class="fh-review" aria-live="polite"></div><p class="fh-record-note">Badges identify the parties; no independent acceptance signature is recorded. Completing this numbered step applies its existing process and QA checks.</p></div>`;
+    }else if(step.requires_location||step.number===3){
+      const transfer=state.detail.transfer||state.detail.item.transfer;
+      content+=`<div class="field"><label for="ff-field-location_id">${step.number===3?'Storage location':'Receiving location / work center'} *</label><select id="ff-field-location_id" name="location_id" required>${window.FabHandoff.locationOptions(state.handoffOptions,transfer,transfer?.location?'current':'')}</select><span class="ff-form-help">Choose an active work center or retain the actual recorded location.</span></div>`;
+    }
     if(step.number===5)content+=field('target_spool_id','Assigned spool ID',state.detail.parent?.item_id||'',{required:true,maxlength:500,help:'This must match the spool linked to this component.'});
     if(step.requires_reference)content+=field('reference',step.qa?'Inspection report / approval reference':'PO, BOM, drawing, or record reference','',{required:true,maxlength:500,full:true});
     if(step.number===24)content+=field('carrier','Carrier','',{required:true,maxlength:160})+field('shipment_reference','Shipping document / tracking reference','',{required:true,maxlength:500})+field('destination','Destination / customer','',{required:true,maxlength:500,full:true});
@@ -253,12 +259,13 @@
     html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${route(flow.route)?.first_step}–${route(flow.route)?.last_step}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
     if(detail.parts?.configured){const t=detail.parts.totals||{},required=num(t.required_qty),prepared=num(t.prepared_qty);html+=`<section class="card"><div class="ff-section-head"><h2>Required component pieces</h2>${action('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${num(t.assigned_qty)} assigned · ${num(t.received_qty)} receipt recorded · ${num(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}</section>`;}
     const boardRow=state.board.find(row=>row.item_id===item.id);
-    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',boardRow?.project_id||flow.project_id||item.project],['Subproject',boardRow?.subproject_id||flow.subproject_id],['Location',item.location],['Current handler',item.handler],['Drawing',item.drawing],['Quality release',item.released?'Released':'Not released']])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
+    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',boardRow?.project_id||flow.project_id||item.project],['Subproject',boardRow?.subproject_id||flow.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Quality release',item.released?'Released':'Not released']])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
     html+=`<section class="card"><details class="ff-fold"><summary>View the complete 24-step flow</summary><p class="ff-footer-note">Highlighted steps belong to this ${esc(routeNames[flow.route].toLowerCase())}. Other stages belong to its linked component, spool, or assembly records.</p>${renderMap(true)}</details></section>`;
     return html+timingHistory()+eventHistory();
   }
   function render(){
     if(!state.catalog)return;
+    state.handoffControl?.destroy();state.handoffControl=null;
     node('flowContent').innerHTML=state.detail?renderDetail():renderBoard();
     node('flowContent').setAttribute('aria-busy','false');wire();startClocks();
   }
@@ -270,16 +277,23 @@
     }
     const search=node('flowSearch');if(search)search.oninput=()=>{state.query=search.value;const start=search.selectionStart,end=search.selectionEnd;render();node('flowSearch').focus();node('flowSearch').setSelectionRange(start,end)};
     const form=node('flowStepForm');if(form)form.onsubmit=submitStep;
+    if(node('flowHandoffSender')){
+      const transfer=state.detail.transfer||state.detail.item.transfer;
+      const update=control=>{if(node('flowHandoffReview'))node('flowHandoffReview').innerHTML=window.FabHandoff.reviewHtml(control,transfer,state.handoffOptions,state.detail.item)};
+      state.handoffControl=window.FabHandoff.bindControls('flowHandoff',{transfer,options:state.handoffOptions,onChange:update});update(state.handoffControl);
+    }
   }
   async function save(path,payload){
     if(state.saving)return false;
-    state.saving=true;const itemId=state.item;
+    state.saving=true;const itemId=state.item,sequence=state.sequence;
     try{
       await api(path,{method:'POST',body:JSON.stringify(payload)});
+      if(state.item!==itemId||state.sequence!==sequence)return false;
       state.notice='';notify('Process record saved.');
-      if(state.item===itemId)await load();
+      await load();
       return true;
     }catch(error){
+      if(state.item!==itemId||state.sequence!==sequence)return false;
       if(error.status===409){
         state.notice=errorText(error)+' The record has been refreshed. Review the current step before trying again.';
         state.dialogStale=true;
@@ -290,7 +304,7 @@
   }
   async function submitStep(event){
     event.preventDefault();if(state.saving)return;
-    const detail=state.detail,step=detail.flow.current;if(!can('advance')||!step)return;
+    const detail=state.detail,step=detail.flow.current,sequence=state.sequence;if(!can('advance')||!step)return;
     const values=Object.fromEntries(new FormData(event.target)),button=node('flowAdvance'),errorNode=node('flowStepError');
     button.disabled=true;errorNode.classList.add('hidden');
     try{
@@ -303,16 +317,22 @@
         if(!payload.scanned_child_ids.length)throw Error('Scan or enter each linked spool ID on its own line.');
       }
       if(step.requires_handoff){
-        payload.receiver_badge=typeof qrId==='function'?qrId(values.receiver_badge,'badge'):String(values.receiver_badge||'').trim();
-        if(!payload.receiver_badge)throw Error('Enter the receiving employee badge ID.');
+        if(!state.handoffControl)throw Error('Refresh this handoff before identifying both employees.');
+        Object.assign(payload,await state.handoffControl.read(values));
       }
-      if(step.requires_location||step.requires_handoff||step.number===3){payload.location=String(values.location||'').trim();if(!payload.location)throw Error('Enter the receiving or storage location.');}
+      else if(step.requires_location||step.number===3){
+        const transfer=detail.transfer||detail.item.transfer,location_id=String(values.location_id||'').trim();
+        if(!transfer||!Number.isInteger(transfer.version))throw Error('Refresh the current location before completing this step.');
+        if(!(location_id==='current'&&transfer.location)&&!arr(state.handoffOptions?.locations).some(row=>row.id===location_id&&row.active))throw Error('Choose an active storage or receiving location.');
+        payload.location_id=location_id;payload.expected_transfer_version=transfer.version;
+      }
       if(step.number===5)payload.target_spool_id=readId(values.target_spool_id,'Assigned spool ID');
       if(step.requires_reference){payload.reference=String(values.reference||'').trim();if(!payload.reference)throw Error('Enter the required record or inspection reference.');}
       if(step.number===24)for(const key of ['carrier','shipment_reference','destination']){payload[key]=String(values[key]||'').trim();if(!payload[key])throw Error('Enter the carrier, shipping reference, and destination.');}
       if(step.qa&&openExceptions().some(row=>Number(row.step)===Number(step.number))){payload.resolution=String(values.resolution||'').trim();if(!payload.resolution)throw Error('Record the rework resolution and reinspection findings.');}
       await save(ROOT+'/items/'+encode(detail.item.id)+'/advance',payload);
     }catch(error){
+      if(state.sequence!==sequence)return;
       const target=node('flowStepError');if(target){target.textContent=errorText(error);target.classList.remove('hidden');target.scrollIntoView({block:'nearest'})}else notify(errorText(error));
     }finally{button.disabled=arr(state.detail?.flow?.blockers).length>0}
   }
@@ -428,5 +448,5 @@
   node('flowDialogCancel').onclick=()=>node('flowDialog').close();
   node('navFlow').onclick=()=>open();
   node('itemFlowBtn').onclick=()=>{if(current)open({item:current.id})};
-  window.FabFlow={open,refresh,cancelPending(){state.sequence++;stopClocks()}};
+  window.FabFlow={open,refresh,cancelPending(){state.sequence++;stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
 })();

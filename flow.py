@@ -179,8 +179,11 @@ class AdvanceIn(VersionIn):
     scanned_child_ids: list[str] = Field(default_factory=list, max_length=10000)
     reference: str = Field(default='', max_length=500)
     notes: str = Field(default='', max_length=3000)
+    sender_badge: str = Field(default='', max_length=80)
     receiver_badge: str = Field(default='', max_length=80)
-    location: str = Field(default='', max_length=160)
+    location_id: str = Field(default='', max_length=80)
+    operational_status: str = Field(default='', max_length=40)
+    expected_transfer_version: int | None = Field(default=None, ge=0, strict=True)
     target_spool_id: str = Field(default='', max_length=60)
     carrier: str = Field(default='', max_length=200)
     shipment_reference: str = Field(default='', max_length=500)
@@ -229,7 +232,9 @@ def lock_topology(s):
 
 def _locked(s, item_id):
     lock_topology(s)
-    item = lock_item(s, item_id)
+    item = s.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
+    if item is None:
+        raise HTTPException(404, 'Item not found')
     plan = s.scalar(select(FlowPlan).where(FlowPlan.item_id == item_id).execution_options(populate_existing=True))
     return item, plan
 
@@ -535,6 +540,7 @@ def _summary(s, item, plan=None):
 def detail(s, item, user):
     from production import process_snapshot
     from parts import parts_summary
+    from transfers import transfer_snapshot
     parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
     process = process_snapshot(s, item.id)
@@ -567,6 +573,7 @@ def detail(s, item, user):
     return {
         **({'parts': parts} if parts else {}),
         'item': _dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
+        'transfer': transfer_snapshot(s, item, user),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
         'flow': {**_dict(plan, PLAN_KEYS), 'steps': _step_states(s, plan),
             'current': STEP_BY_NUMBER[plan.current_step] if plan.current_step else None,
@@ -664,6 +671,7 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
 
 
 def _verify_form(s, item, plan, data):
+    from transfers import validate_location, validate_transfer
     step = STEP_BY_NUMBER[plan.current_step]
     expected = {row['id'] for row in step['checks']}
     if len(data.confirmations) != len(set(data.confirmations)) or set(data.confirmations) != expected:
@@ -672,13 +680,17 @@ def _verify_form(s, item, plan, data):
         raise HTTPException(422, 'Scan or enter the exact current item ID to verify this step')
     if step['requires_reference'] and len(data.reference) < 2:
         raise HTTPException(422, 'An inspection, material or document reference is required for this step')
-    if step['requires_location'] and not data.location:
-        raise HTTPException(422, 'Record the receiving / storage location')
-    receiver = None
+    selected = None
     if step['requires_handoff']:
-        receiver = s.get(Employee, data.receiver_badge)
-        if not receiver or not receiver.active:
-            raise HTTPException(422, 'The receiving employee badge is missing or inactive')
+        selected = validate_transfer(s, item, sender_badge=data.sender_badge, receiver_badge=data.receiver_badge,
+            location_id=data.location_id, operational_status=data.operational_status,
+            expected_transfer_version=data.expected_transfer_version, allow_no_change=True)
+    elif step['number'] == 3:
+        if data.sender_badge or data.receiver_badge or data.operational_status:
+            raise HTTPException(422, 'This storage-location step does not record a badge handoff or operational status')
+        selected = validate_location(s, item, expected_transfer_version=data.expected_transfer_version, location_id=data.location_id)
+    elif data.sender_badge or data.receiver_badge or data.location_id or data.operational_status or data.expected_transfer_version is not None:
+        raise HTTPException(422, 'Badge handoff and location fields are only accepted at the applicable process steps')
     if step['number'] == 5:
         link = s.get(ComponentLink, item.id)
         if not link or data.target_spool_id != link.spool_id:
@@ -692,7 +704,7 @@ def _verify_form(s, item, plan, data):
     matching = [row for row in _exceptions(s, item.id, True) if row.step == step['number']]
     if matching and len(data.resolution) < 4:
         raise HTTPException(422, 'Record the corrective disposition / resolution for the open exception before passing reinspection')
-    return receiver, matching
+    return selected, matching
 
 
 def _fresh_dimensions_after_work(item, at):
@@ -713,7 +725,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     if item.released and step['number'] not in (16, 23, 24):
         raise HTTPException(409, 'Only post-QA handoff and shipping steps may change a released item')
     _lock_children(s, item, plan)
-    receiver, matching = _verify_form(s, item, plan, data)
+    selected, matching = _verify_form(s, item, plan, data)
     errors = _step_errors(s, item, plan, quality_for_update=True)
     if errors:
         raise HTTPException(409, {'flow_blockers': errors})
@@ -728,17 +740,14 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     if step['number'] in (15, 22):
         from main import finalize_release
         finalize_release(s, item, u.badge, data.reference, at=now, flow_step=step['number'])
-    if receiver:
-        before = {'location': item.location, 'handler': item.handler}
-        item.handler = receiver.badge
-        item.location = data.location
-        audit(s, item.id, u.badge, 'TRANSFER', {
-            'from': before, 'to': {'location': item.location, 'handler': receiver.badge, 'name': receiver.name},
-            'notes': data.notes, 'scan_method': 'flow_item_verification', 'scanned_item_id': data.scanned_item_id,
-            'handoff_recorded_by': u.badge, 'recipient_acknowledged': False, 'flow_step': step['number'],
-        })
+    handoff_data = None
+    if step['requires_handoff']:
+        from transfers import record_transfer
+        handoff_data = record_transfer(s, item, selected, u, now, notes=data.notes,
+            scan_method='flow_item_verification', scanned_item_id=data.scanned_item_id, flow_step=step['number'])
     elif step['number'] == 3:
-        item.location = data.location
+        from transfers import record_location
+        handoff_data = record_location(s, item, selected, u, now)
     if step['number'] in (7, 18, 21):
         _fresh_dimensions_after_work(item, now)
     completed_step = step['number']
@@ -758,6 +767,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
         plan.step_entered_at = now
     _event(s, item, plan, u.badge, 'advance', completed_step, now, data.reference, data.notes,
         {**data.model_dump(exclude={'expected_version', 'reference', 'notes'}),
+         **({'handoff': handoff_data} if handoff_data else {}),
          'closed_exception_ids': [row.id for row in matching], 'next_step': plan.current_step})
     _sync(s, item, u.badge, plan.current_step, now, f'CLM step {completed_step} completed')
     _commit(s)

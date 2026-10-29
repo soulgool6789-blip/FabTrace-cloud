@@ -27,6 +27,8 @@ TABLES = {
     "Inspections": ("main", "Inspection"),
     "Reworks": ("main", "Rework"),
     "Audit events": ("main", "Audit"),
+    "Item transfer states": ("transfers", "ItemTransferState"),
+    "Transfer locations": ("transfers", "TransferLocation"),
     "Projects": ("tracking", "Project"),
     "Subprojects": ("tracking", "Subproject"),
     "Spool plans": ("tracking", "SpoolPlan"),
@@ -371,6 +373,45 @@ def test_empty_tables_keep_their_column_headers(api):
                           ("Spool parts progress", exporter.SPOOL_PARTS_PROGRESS_COLUMNS)):
         assert workbook.headers(name) == list(columns)
         assert not workbook.records(name)
+
+
+def test_transfer_export_retains_both_badges_status_and_original_location_labels(api):
+    from tracking_helpers import ok
+
+    item_id = "EXPORT-HANDOFF"
+    api.item(item_id, welds_required=0)
+    created = ok(api.post("/api/transfers/locations", {"label": "North fabrication bay"}), 201)
+    record = ok(api.get(f"/api/items/{item_id}"))
+    updated = ok(api.post(f"/api/items/{item_id}/transfer", {
+        "sender_badge": record["handler"], "handler": BADGES["welder"],
+        "location_id": created["id"], "operational_status": "waiting_material",
+        "expected_transfer_version": record["transfer"]["version"], "notes": "Awaiting the identified fitting",
+    }))
+    ok(api.patch(f"/api/transfers/locations/{created['id']}", {
+        "label": "North fabrication bay 2", "active": False, "expected_version": created["version"],
+    }))
+    before = snapshot(api)
+    _, workbook = download(api)
+    state = workbook.records("Item transfer states")[0]
+    assert state["item_id"].value == item_id
+    assert state["version"].value == updated["transfer"]["version"] == 1
+    assert state["operational_status"].value == "waiting_material"
+    assert state["updated_by"].value == BADGES["admin"]
+    location = workbook.records("Transfer locations")[0]
+    assert location["label"].value == "North fabrication bay 2"
+    assert location["active"].value is False and location["version"].value == 2
+    item = workbook.records("Items")[0]
+    assert item["handler"].value == BADGES["welder"]
+    assert item["location"].value == "North fabrication bay"
+    event = next(row for row in workbook.records("Audit events") if row["event"].value == "TRANSFER")
+    details = json.loads(workbook.full_text(event, "details"))
+    assert details["sender_badge"] == record["handler"]
+    assert details["receiver_badge"] == BADGES["welder"]
+    assert details["handoff_recorded_by"] == BADGES["admin"]
+    assert details["to"]["location"] == "North fabrication bay"
+    assert details["to"]["operational_status"] == "waiting_material"
+    assert details["recipient_acknowledged"] is False
+    assert snapshot(api) == before
 
 
 def test_spool_parts_export_uses_required_quantities_and_actual_recorded_component_progress(api):
