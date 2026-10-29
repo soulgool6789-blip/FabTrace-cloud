@@ -89,6 +89,7 @@
     show('flowPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;
     state.item=options.item||'';state.detail=null;state.notice='';
     if(Object.prototype.hasOwnProperty.call(options,'project'))state.project=options.project||'';
+    if(options.resetFilters===true){state.subproject='';state.query='';state.status='';state.step='';}
     await load();
   }
   async function load(){

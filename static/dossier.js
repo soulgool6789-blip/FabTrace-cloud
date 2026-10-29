@@ -26,7 +26,7 @@
   function head(title,description,actions=''){return `<div class="fd-head"><div><div class="fd-eyebrow">CLM · Kelvion Job Packet / Final Dossier</div><h1>${esc(title)}</h1><p>${esc(description)}</p></div><div class="actions">${actions}${button('refresh','Refresh')}</div></div>`;}
   function reviewLine(review){return review?`<p class="fd-reference">${esc(labels[review.decision]||human(review.decision||'Review'))} · ${esc(review.actor||'Reviewer')} · ${esc(date(review.at))}${review.reference?' · '+esc(review.reference):''}${review.notes?'<br>'+esc(review.notes):''}</p>`:'';}
   function link(path,label,download=false){return `<a class="fd-download" href="${ROOT+path}"${download?' download':' target="_blank" rel="noopener"'}>${esc(label)}</a>`;}
-  function updateUrl(){const q=new URLSearchParams({dossier:'1'});if(state.project)q.set('project',state.project);if(state.item)q.set('item',state.item);history.replaceState(null,'','/?'+q.toString());}
+  function updateUrl(){const q=new URLSearchParams({dossier:'1'});if(state.project)q.set('project',state.project);if(state.item)q.set('item',state.item);if(state.tab!=='items')q.set('tab',state.tab);history.replaceState(null,'','/?'+q.toString());}
 
   function home(){
     const query=state.query.toLowerCase().trim(),rows=state.projects.filter(p=>!query||[p.id,p.name,p.client].some(v=>text(v).toLowerCase().includes(query)));
@@ -45,7 +45,7 @@
   function projectItems(){
     const rows=arr(state.detail.items).filter(p=>(state.filter==='all'||p.status===state.filter)&&(!state.query||[p.item_id,p.description].some(v=>text(v).toLowerCase().includes(state.query.toLowerCase()))));
     let html=`<div class="fd-filters"><div class="field"><label for="dossierItemSearch">Find a spool or assembly</label><input id="dossierItemSearch" type="search" value="${esc(state.query)}" placeholder="Tracking ID or description"></div><div class="field"><label for="dossierItemStatus">Dossier status</label><select id="dossierItemStatus">${[['all','All statuses'],['not_configured','Project setup needed'],['in_progress','In progress'],['ready_for_issue','Ready for issue'],['issued','Issued · current'],['stale','Changed · review again']].map(([v,l])=>option(v,l,state.filter)).join('')}</select></div></div>`;
-    if(!rows.length)return html+empty('No item packets match','Use Projects & welds to assign spools and assemblies to this project, or clear these filters.');
+    if(!rows.length)return html+empty('No item packets match','Use Projects & welds to assign spools and assemblies to this project, or clear these filters.')+button('tracking-project','Open project spool register',state.project);
     return html+`<div class="fd-card tablewrap"><table class="fd-table"><thead><tr><th>Spool / assembly</th><th>Checklist review</th><th>Current dossier</th><th>Next action</th></tr></thead><tbody>${rows.map(p=>`<tr><td><strong>${esc(p.item_id)}</strong><small>${esc(p.description)}</small><small>${esc(human(p.kind))}</small></td><td>${meter(p.percent,'Requirements reviewed')}${tag(p.status)}</td><td>${p.latest_issue?`Revision ${num(p.latest_issue.revision)} · ${tag(p.latest_issue.current?'current':'stale')}`:'Not issued'}${arr(p.blockers).length?`<small>${esc(p.blockers[0])}</small>`:''}</td><td><div class="actions">${button('packet','Open checklist',p.item_id,'primary')}${button('flow','Process flow',p.item_id)}</div></td></tr>`).join('')}</tbody></table></div>`;
   }
   function documentRows(documents,compact=false){
@@ -69,7 +69,7 @@
   function historyView(){const events=arr(state.detail.events);return `<details class="fd-card"><summary>Document-control history (${events.length})</summary>${events.length?'<ol class="fd-history">'+events.slice().sort((a,b)=>num(b.sequence||b.id)-num(a.sequence||a.id)).map(e=>`<li><strong>${esc(human(e.action||e.event||'Record'))}</strong> · ${esc(e.actor)} · ${esc(date(e.at))}${e.reference?' · '+esc(e.reference):''}${e.notes?'<p>'+esc(e.notes)+'</p>':''}</li>`).join('')+'</ol>':'<p>No document-control events recorded.</p>'}</details>`;}
   function board(){
     const d=state.detail,p=d.project;
-    let html=head(p.name||p.id,`${p.id}${p.client?' · '+p.client:''}`,button('home','All projects')+button('progress-project','Parts progress',p.id));
+    let html=head(p.name||p.id,`${p.id}${p.client?' · '+p.client:''}`,button('home','All projects')+button('progress-project','Parts progress',p.id)+button('guide-project','Guide & setup',p.id));
     html+=projectMetrics()+configSummary()+`<div class="fd-tabs" role="group" aria-label="Project Job Packet views">${[['items','Spool & assembly checklists'],['documents','Shared & item files'],['issues','Issued project packages'],['handovers','Handover & receipts']].map(([id,label])=>`<button type="button" data-dossier-action="tab" data-dossier-id="${id}" aria-pressed="${state.tab===id}">${label}</button>`).join('')}</div>`;
     html+=state.tab==='documents'?documentsView():state.tab==='issues'?issuesView():state.tab==='handovers'?handoversView():projectItems();
     return html+historyView()+sourceNote();
@@ -114,7 +114,7 @@
     }catch(error){if(!state.active||sequence!==state.sequence)return;node('dossierContent').innerHTML=`<div class="fd-state fd-error" role="alert"><strong>The Job Packet view could not be loaded.</strong><p>${esc(errorText(error))}</p><div class="actions">${button('refresh','Try again')}${button('home','All projects')}</div></div>`;}
     finally{if(sequence===state.sequence)node('dossierContent').setAttribute('aria-busy','false');}
   }
-  async function open(options={}){if(!me)return;show('dossierPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;closeDialog();state.active=true;state.project=text(options.project||'');state.item=text(options.item||'');state.detail=null;state.packet=null;state.tab=options.tab||'items';state.query='';state.filter='all';state.section='';await load();}
+  async function open(options={}){if(!me)return;show('dossierPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;closeDialog();state.active=true;state.project=text(options.project||'');state.item=text(options.item||'');state.detail=null;state.packet=null;state.tab=['items','documents','issues','handovers'].includes(options.tab)?options.tab:'items';state.query='';state.filter='all';state.section='';await load();}
 
   function field(name,label,value='',type='text',required=false,help='',options=null,disabled=false){
     const minimum={reference:3,source_reference:3,notes:4,manufacturer_name:2,manufacturer_contact:4,purchase_order:2,recipient:2,organization:2}[name],id='fd-field-'+name,attrs=`id="${esc(id)}" name="${esc(name)}"${required?' required':''}${required&&minimum?` minlength="${minimum}"`:''}${disabled?' disabled':''}`,wide=type==='textarea'||type==='file';
@@ -193,7 +193,9 @@
   }
   async function act(action,id){
     if(action==='refresh')return load();if(action==='home')return open();if(action==='project')return open({project:id});if(action==='packet')return open({project:state.project,item:id});if(action==='back-project')return open({project:state.project});
-    if(action==='tab'){state.tab=id;state.query='';state.filter='all';render();return;}
+    if(action==='tab'){if(!['items','documents','issues','handovers'].includes(id))return;state.tab=id;state.query='';state.filter='all';render();updateUrl();return;}
+    if(action==='guide-project')return window.FabGuide.open({project:id});
+    if(action==='tracking-project')return window.FabTracking.open({project:id,subproject:'',view:'spools',resetFilters:true});
     if(action==='progress')return window.FabProgress.open();if(action==='progress-project')return window.FabProgress.open({project:id});if(action==='tracking')return window.FabTracking.open();if(action==='flow')return window.FabFlow.open({item:id,project:state.project});if(action==='weld')return window.FabTracking.open({spool:id});if(action==='physical-item')return openItem(id);
     if(state.saving){notify('The current Job Packet record is still being saved.');return;}
     if(action==='config')return configDialog();if(action==='upload')return uploadDialog();if(action==='new-document-revision')return uploadDialog(currentDocs().find(d=>text(d.id)===text(id)));if(action==='edit-check')return editCheck(id);if(action==='review-check')return reviewCheck(id);

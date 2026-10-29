@@ -30,6 +30,8 @@ See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow, [DOSSIER_GUIDE
 
 ## Track project progress and assemble the final Job Packet
 
+Open **Guide & setup** or `/?guide=1` for the searchable operating guide and a read-only checklist of each project's recorded setup. Select a project to see its actual structured plans, declared packet scope, source review, files, physical completion, issued packets and separate handover records. The checklist links directly to the existing planning and evidence screens; it does not create records or grant approval. Empty projects stay incomplete until their actual parts and plans are entered.
+
 Open **Project progress** or `/?progress=1`. Each project shows registered parts finished, WIP and shipping milestones. Open a project to sort **WIP to finished**, filter by work package or type, and inspect each part's recorded route/weld progress and actual blockers. A documented late starting point leaves earlier steps **Not recorded**. A progress bar does not invent missing BOM items or certify a dossier.
 
 Open **Job Packets** or `/?dossier=1`. Explicitly configure the project's manufacturer contact, PO, source/applicability reference and expected spool/assembly packet count. Upload shared approved project records once and item-specific reports under their own item IDs. Each check links the exact file revisions and relevant FabTrace weld, inspection, rework, release and traveler records. QA records a separate decision on evidence and non-applicability after submission.
@@ -144,6 +146,7 @@ node tests/flow_ui_smoke.cjs
 node tests/quality_ui_smoke.cjs
 node tests/progress_ui_smoke.cjs
 node tests/dossier_ui_smoke.cjs
+node tests/guide_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.

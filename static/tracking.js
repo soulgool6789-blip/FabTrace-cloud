@@ -135,6 +135,7 @@
     current = null;
     if(Object.prototype.hasOwnProperty.call(options,'project')) state.project = options.project || '';
     if(Object.prototype.hasOwnProperty.call(options,'subproject')) state.subproject = options.subproject || '';
+    if(options.resetFilters===true){state.query='';state.status='';state.processFilter='';}
     state.view = options.weld?'weld':options.spool?'spool':(options.view||'overview');
     if(!['overview','spools','exceptions','templates','spool','weld'].includes(state.view)) state.view='overview';
     state.spool=null; state.weld=null;

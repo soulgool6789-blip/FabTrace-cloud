@@ -23,6 +23,7 @@ This guide describes the implemented tracking extension and the constraints that
 | `static/flow.js`, `static/flow.css` | Numbered process map, production board, route forms, hierarchy links, timer controls and mobile layout. |
 | `static/quality.js`, `static/quality.css` | Five-prompt audit workspace, role-aware forms, evidence and document registers, corrective actions, printable audit view and Excel shortcut. |
 | `static/progress.js`, `static/progress.css`, `static/dossier.js`, `static/dossier.css` | Registered-parts dashboard and Job Packet preparation, review, upload, issue, print/download and handover forms. |
+| `static/guide.js`, `static/guide.css` | Searchable/printable operating instructions and read-only project setup checklist using the existing progress/dossier APIs. |
 | `index.html` | Distribution copy of the shell. Keep synchronized with `static/index.html`; the server serves the latter. |
 | `migrate_google_part_numbers.py` | Earlier explicit migration for the Google part-number column. Review the actual schema before using an older migration. |
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
@@ -271,3 +272,12 @@ Excel explicitly allowlists seven dossier metadata tables, including immutable J
 `project_rows(session, project_id=None)` is the shared no-write helper used by the dashboard, completed-project eligibility and Excel. Membership precedence is SpoolPlan, linked component's parent plan, then exact Item.project project ID. Never fuzzy-match a project label or invent BOM entries. Components, spools and assemblies count as separate physical records.
 
 A row records `id`, `kind`, scope/source IDs, `status`, `fabrication_finished`, `blockers`, `progress_percent`, `progress_basis`, actual step counters, planned/completed/accepted weld counters, current route step and custody details. Recorded-route percentages replay successful advances and controlled failure/reopen returns. Earlier baseline steps remain `not_recorded`. Unrouted planned welds use actual current-cycle completion; a zero-weld plan uses current QA release. The percentage alone never issues a packet or creates shipment evidence.
+
+
+## In-app guide and project setup
+
+`static/guide.js` renders authenticated operating instructions and a read-only project setup checklist. It reuses the progress and dossier GET endpoints; it adds no database tables, accepted statuses, background writes or approval rules. Zero registered plans cannot imply completed scope, an uploaded file cannot imply acceptance, and an older transfer cannot imply completion of a newer or stale project issue. The existing server projections remain authoritative.
+
+Project-planning shortcuts pass explicit project/subproject scope and `resetFilters:true` to `FabTracking.open`. This clears old search/status/process filters only when requested by those shortcuts; ordinary tracking navigation preserves existing behavior. Dossier tab links retain a whitelisted `tab` query parameter across reload/login. Main-shell startup routing and cancellation include the guide workspace, while `index.html` remains identical to `static/index.html`.
+
+Static instructions remain readable when an API read fails; the setup state must show the error rather than present stale or invented completion. Dynamic identifiers, descriptions and API messages are escaped. Read-only item shortcuts call `openItem(id)` rather than the QR landing route, which deliberately records a scan. The guide's print output is operating guidance, not an issued customer Job Packet.

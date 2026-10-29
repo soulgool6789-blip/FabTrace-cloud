@@ -32,7 +32,7 @@
   }
   function board(){
     const d=state.detail,c=d.counts||{},project=d.project;
-    let html=head(project.name,`${project.id}${project.client?' · '+project.client:''}`,button('home','All projects')+button('dossier-project','Project Job Packets',project.id));
+    let html=head(project.name,`${project.id}${project.client?' · '+project.client:''}`,button('home','All projects')+button('dossier-project','Project Job Packets',project.id)+button('guide-project','Guide & setup',project.id));
     html+=metrics(c)+`<section class="fp-card">${meter(c.finished_percent,'Registered parts finished',`${num(c.finished)} of ${num(c.total_parts)} known physical items`,true)}<div class="fp-tags">${tag('shipped',`${num(c.shipped)} shipped`)}${tag('delivered',`${num(c.delivered)} delivered`)}${num(c.planning_needed)?tag('pending',`${num(c.planning_needed)} need planning`):''}</div>${note()}</section>`+filters();
     const rows=arr(d.items);
     html+=`<p class="fp-note">${rows.length} matching part${rows.length===1?'':'s'}${d.as_of?' · Calculated '+esc(new Date(d.as_of).toLocaleString()):''}. Finished includes items subsequently shipped or delivered. Route history can remain below 100% when earlier work was adopted with a documented baseline.</p>`;
@@ -61,6 +61,7 @@
     if(action==='refresh')return load();if(action==='home')return open();if(action==='project')return open({project:id});
     if(action==='search'){state.query=node('progressSearch')?.value||'';return load();}
     if(action==='dossier-project')return window.FabDossier.open({project:id});
+    if(action==='guide-project')return window.FabGuide.open({project:id});
     if(action==='dossier-item')return window.FabDossier.open({project:state.project,item:id});
     if(action==='item')return openItem(id);if(action==='flow')return window.FabFlow.open({item:id,project:state.project});
     if(action==='weld')return window.FabTracking.open({spool:id});if(action==='tracking')return window.FabTracking.open();

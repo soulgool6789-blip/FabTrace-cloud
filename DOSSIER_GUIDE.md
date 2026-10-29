@@ -2,6 +2,8 @@
 
 This guide covers the **Project progress** and **Job Packets** screens introduced in `2026.10.29-dossier.1`. Continue using **Projects & welds** for individual joints, **Process flow** for the numbered traveler, and **Audit readiness** for the five audit prompts. The new screens assemble those records into a controlled completion package.
 
+The **Guide & setup** screen, available at `/?guide=1`, also contains searchable operating instructions inside FabTrace. Select a project for its live setup checklist and shortcuts to planning, documents, issued packages and handover records. The checklist uses existing recorded data; it does not save scope, approve evidence or infer missing records. Version `2026.10.29-guide.1` adds this in-app guide and project setup navigation.
+
 Kelvion calls the deliverable a **Job Packet**. CLM uses **Final Dossier** for the consolidated quality records. FabTrace displays both terms. The master reference is **QF-QAS-100, Revision B, page 8 of 9**. The ten sections below are CLM's organization, not a ten-section format mandated by Kelvion.
 
 ## 1. Understand the four completion measures
@@ -24,6 +26,8 @@ These measures answer different questions. A finished spool may still need its M
 5. Open an item's **Process flow**, **Weld records**, **Item & QR**, or **Job Packet** to resolve the next action.
 
 The scope uses the structured spool plan first, then a component's linked parent spool, then an exact project ID on a legacy item. A free-text project name is not guessed. Legacy items needing a plan remain visible when their project ID is explicit. Register and link the real BOM scope; the bar cannot count parts that have never been entered.
+
+Registering an item and assigning its structured project/weld plan are separate steps. The registration form's free-text Job / project value does not create a spool plan. If a project is empty, use **Open project planning**, choose **Add / assign spool**, and identify the actual registered item and approved scope. The Guide & setup shortcut clears unrelated old planning filters so the selected project's records are visible.
 
 The project bar counts each registered physical component, spool and assembly as its own record. It is not a weighted estimate of labor, tonnage or contract value. The **Finished** filter includes currently finished items that have subsequently shipped or been delivered; shipping milestones are also available as separate filters.
 
