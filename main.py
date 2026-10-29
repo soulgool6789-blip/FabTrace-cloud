@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.29-permissions.1'
+APP_VERSION='2026.10.29-employees.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -196,16 +196,16 @@ class Login(BaseModel):
     pin:str=Field(min_length=6,max_length=128)
 @app.post('/api/login')
 def login(data:Login,response:Response,request:Request,s:Session=Depends(db)):
+    from administration import employee_is_removed, session_version
     k=(request.client.host if request.client else 'unknown')+':'+data.badge
     hits=[v for v in failed.get(k,[]) if time.time()-v<900]
     failed[k]=hits
     if len(hits)>=8: raise HTTPException(429,'Too many attempts; try again later')
     u=s.scalar(select(Employee).where(Employee.badge==data.badge).with_for_update().execution_options(populate_existing=True))
-    if not u or not u.active or not password_hash.verify(data.pin,u.pin_hash):
+    if not u or not u.active or employee_is_removed(s,u.badge) or not password_hash.verify(data.pin,u.pin_hash):
         failed[k].append(time.time())
         raise HTTPException(401,'Invalid badge or PIN')
     failed.pop(k,None)
-    from administration import session_version
     token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow(),'sv':session_version(s,u.badge)},JWT_SECRET,algorithm='HS256')
     response.set_cookie('fabtrace_session',token,httponly=True,secure=os.environ.get('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=8*3600,path='/')
     audit(s,None,u.badge,'LOGIN',{'result':'success'});s.commit()
@@ -230,18 +230,22 @@ class EmployeeIn(BaseModel):
     role:Role
 @app.get('/api/employees')
 def employees(u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'admin');return [asdict(x,'badge name role active'.split()) for x in s.scalars(select(Employee).order_by(Employee.name)).all()]
+    from administration import employee_not_removed
+    permit(u,'admin');return [asdict(x,'badge name role active'.split()) for x in s.scalars(
+        select(Employee).where(employee_not_removed()).order_by(Employee.name)).all()]
 @app.get('/api/employees/directory')
 def employee_directory(u:Employee=Depends(auth),s:Session=Depends(db)):
+    from administration import employee_not_removed
     # Public-to-staff identity lookups expose only active badge, name and role.
     return [asdict(x,'badge name role'.split()) for x in s.scalars(
-        select(Employee).where(Employee.active.is_(True)).order_by(Employee.name)).all()]
+        select(Employee).where(Employee.active.is_(True),employee_not_removed()).order_by(Employee.name)).all()]
 
 @app.get('/api/employees/{badge}/qr.png')
 def employee_badge_qr(badge:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    from administration import employee_is_removed
     permit(u,'admin')
     employee=s.get(Employee,badge)
-    if not employee or not employee.active: raise HTTPException(404,'Active employee badge not found')
+    if not employee or not employee.active or employee_is_removed(s,badge): raise HTTPException(404,'Active employee badge not found')
     # An HTTPS link is recognized by normal phone cameras; login is still required.
     require_phone_qr_ready()
     image=qrcode.make(phone_link('badge',employee.badge))
@@ -281,10 +285,12 @@ class ItemIn(BaseModel):
     welds_required:int=Field(default=0,ge=0)
 @app.post('/api/items',status_code=201)
 def create_item(data:ItemIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    from administration import employee_is_removed
     lock_flow_topology(s)
     permit(u,'admin','supervisor')
     if s.get(Item,data.id):raise HTTPException(409,'Item ID already exists')
-    if not s.get(Employee,data.handler):raise HTTPException(422,'Unknown handler badge')
+    employee=s.get(Employee,data.handler)
+    if not employee or not employee.active or employee_is_removed(s,data.handler):raise HTTPException(422,'Choose an active employee handler badge')
     r=Item(**data.model_dump());s.add(r)
     audit(s,r.id,u.badge,'ITEM_CREATED',data.model_dump());s.commit()
     return item_dict(s,r,u)
@@ -322,14 +328,15 @@ class BulkImport(BaseModel):
 @app.post('/api/items/bulk',status_code=201)
 def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends(db)):
     """Atomic import: each quantity makes a separately traceable physical item."""
+    from administration import employee_is_removed
     lock_flow_topology(s)
     permit(u,'admin','supervisor')
     if sum(row.quantity for row in data.rows)>500:
         raise HTTPException(422,'Maximum 500 individual items per request; import in batches')
     seen=set()
     handlers={row.handler for row in data.rows}
-    missing=[badge for badge in handlers if not s.get(Employee,badge)]
-    if missing:raise HTTPException(422,{'unknown_handler_badges':sorted(missing)})
+    missing=[badge for badge in handlers if not (employee:=s.get(Employee,badge)) or not employee.active or employee_is_removed(s,badge)]
+    if missing:raise HTTPException(422,{'inactive_or_unknown_handler_badges':sorted(missing)})
     new_items=[]
     for index,row in enumerate(data.rows,start=1):
         base=row.id.strip()
@@ -361,6 +368,7 @@ def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends
 
 @app.post('/api/items/{item_id}/scan')
 def scan_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    lock_flow_topology(s)
     r=lock_item(s,item_id)
     audit(s,r.id,u.badge,'QR_SCAN',{'location':r.location,'current_handler':r.handler})
     s.commit()
@@ -410,9 +418,11 @@ class ReworkIn(BaseModel):
     assigned:str=Field(min_length=2,max_length=80)
 @app.post('/api/items/{item_id}/rework',status_code=201)
 def open_rework(item_id:str,data:ReworkIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    from administration import employee_is_removed
     lock_flow_topology(s)
     permit(u,'inspector','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
-    if not s.get(Employee,data.assigned):raise HTTPException(422,'Unknown employee badge')
+    employee=s.get(Employee,data.assigned)
+    if not employee or not employee.active or employee_is_removed(s,data.assigned):raise HTTPException(422,'Choose an active employee badge for rework')
     r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.last_work_at=utcnow()
     s.add(Rework(item_id=r.id,**data.model_dump()))
     if is_tracked(s,r):
@@ -526,6 +536,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(ItemTransferState.item_id).limit(1))
     s.execute(select(TransferLocation.id).limit(1))
     s.execute(select(EmployeeAccessState.badge).limit(1))
+    s.execute(select(EmployeeRemovalState.badge).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -560,7 +571,7 @@ app.include_router(progress_router)
 from transfers import router as transfers_router, ItemTransferState, TransferLocation, transfer_snapshot
 app.include_router(transfers_router)
 
-from administration import router as administration_router, EmployeeAccessState
+from administration import router as administration_router, EmployeeAccessState, EmployeeRemovalState
 app.include_router(administration_router)
 
 from exports import router as exports_router

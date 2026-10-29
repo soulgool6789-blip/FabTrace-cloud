@@ -61,6 +61,19 @@ Badge IDs stay permanent so existing work, custody and audit records remain link
 
 At least one active administrator must remain. Before demoting or deactivating the last administrator, create or promote another appropriate administrator. When your own role/access changes, you must sign in again with your current permissions.
 
+### Remove an employee
+
+1. Open **Admin controls → Employee accounts** and find the employee.
+2. Select **Account controls → Remove employee**.
+3. Review the employee's name, permanent badge and any items still assigned to them.
+4. Enter the reason, then select **Remove employee** to save the decision.
+
+Removal hides the employee from the normal employee roster, disables their account and revokes existing sign-in sessions. Their badge cannot be used for normal handoffs or printed as an active employee badge. The employee identity and past weld, inspection, transfer and audit records remain available for traceability; their badge cannot be reused for a different person. The Activity log records who removed the employee, when and why.
+
+Assigned items stay with their recorded custodian until an administrator explicitly uses **Correct custodian / location** on each affected item. Removal does not invent a handoff or change manufacturing progress. The last active administrator cannot be removed.
+
+To find an employee after removal, turn on **Show removed employees**. Open the employee's account and select **Restore employee**, enter a reason and save. Restoration returns the employee to the roster **as inactive**. Use **Edit account** to review the job position and enable **Employee account is active** when access should resume. Existing sessions stay revoked after restoration; the employee must sign in again after access is enabled.
+
 ### Reset a private PIN
 
 Select **Reset private PIN**, enter and repeat the new PIN, record the reason, and save. PINs must contain 8–128 characters. Provide the new PIN to the employee through your normal private channel; the application does not send it to anyone automatically.
@@ -71,7 +84,7 @@ Existing sessions for that employee are revoked. The employee must sign in with 
 
 ## Review changes and resolve conflicts
 
-The Admin controls item view contains the administrative release/return/correction history. The broader **Activity log** also includes employee access and PIN-reset events, with responsible employee and reason. Excel includes the same audit history, the **Employee access states** worksheet, and release-mode columns in **Part progress**. The raw Items `released` flag can represent either QA or administrative release; consult the release mode and audit event before interpreting it as QA acceptance.
+The Admin controls item view contains the administrative release/return/correction history. The broader **Activity log** also includes employee access, removal, restoration and PIN-reset events, with responsible employee and reason. Excel includes the same audit history, the **Employee access states** and **Employee removal states** worksheets, and release-mode columns in **Part progress**. The **Employees** worksheet retains all identities, including removed employees, so historical badge references remain usable. The raw Items `released` flag can represent either QA or administrative release; consult the release mode and audit event before interpreting it as QA acceptance.
 
 If someone changes an item or account while your form is open, the application rejects the stale submission. Refresh, review the current record and submit a new decision. Failed or stale decisions do not partially change the record.
 

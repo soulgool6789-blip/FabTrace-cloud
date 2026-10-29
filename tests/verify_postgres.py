@@ -901,7 +901,7 @@ def verify_queued_permission_revocation(application, api):
     from administration import EmployeeAccessState
 
     outcomes = {}
-    for change in ('role', 'pin'):
+    for change in ('role', 'pin', 'remove'):
         badge = 'PG-QUEUED-' + change.upper()
         item_id = 'PG-QUEUED-ITEM-' + change.upper()
         ok(api.post('/api/employees', {'badge': badge, 'name': 'Isolated queued ' + change,
@@ -914,10 +914,15 @@ def verify_queued_permission_revocation(application, api):
             change_body = {'expected_version': account['version'], 'name': account['name'],
                 'role': 'painter', 'active': True, 'reason': 'Reassign the queued local test employee'}
             change_method = 'patch'
-        else:
+        elif change == 'pin':
             change_path = '/api/admin/employees/' + badge + '/pin'
             change_body = {'expected_version': account['version'], 'pin': 'queued-local-replacement-123456',
                 'reason': 'Revoke the queued local test session'}
+            change_method = 'post'
+        else:
+            change_path = '/api/admin/employees/' + badge + '/remove'
+            change_body = {'expected_version': account['version'],
+                'reason': 'Remove the queued local test employee'}
             change_method = 'post'
 
         administrator_locked, writer_waiting = Event(), Event()
@@ -1031,8 +1036,51 @@ def verify_last_admin_concurrency(application, api):
             application.Employee.active.is_(True), application.Employee.role == "admin")) == 1
         assert session.get(EmployeeAccessState, demoted).session_version == 1
         assert session.get(EmployeeAccessState, BADGES["welder"]).session_version == 1
-    return {"competing_last_admin_demotions": [200, 409], "active_admins_retained": 1,
-            "demoted_admin_session_revoked": True, "pin_reset_session_revoked": True}
+    # Now exercise the new removal path against the same last-admin invariant.
+    # Use the surviving administrator's still-valid session; no production
+    # identities or credentials are involved in this isolated UUID schema.
+    third = 'PG-REMOVAL-ADMIN'
+    ok(api.post('/api/employees', {'badge': third, 'name': 'Local removal administrator',
+        'role': 'admin', 'pin': TEST_PIN}, role=remaining), 201)
+    accounts = {row['badge']: row for row in ok(api.get('/api/admin/employees', role=remaining))['employees']}
+    removals = {badge: {'expected_version': accounts[badge]['version'],
+        'reason': 'Competing self-removal in isolated last-admin test'} for badge in (remaining, third)}
+    gate, seen = Barrier(2), set()
+
+    def remove_self(badge):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.post(f'/api/admin/employees/{badge}/remove', removals[badge], role=badge)
+            return {'badge': badge, 'status': response.status_code, 'body': response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, 'before_cursor_execute', synchronize)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [future.result(timeout=30) for future in [pool.submit(remove_self, badge) for badge in removals]]
+    finally:
+        event.remove(application.engine, 'before_cursor_execute', synchronize)
+    assert sorted(row['status'] for row in results) == [200, 409], results
+    removed = next(row['badge'] for row in results if row['status'] == 200)
+    survivor = next(row['badge'] for row in results if row['status'] == 409)
+    assert api.get('/api/me', role=removed).status_code == 401
+    roster = ok(api.get('/api/admin/employees', role=survivor))
+    assert roster['active_admins'] == 1
+    assert removed not in {row['badge'] for row in roster['employees']}
+    history = ok(api.get('/api/admin/employees?include_removed=true', role=survivor))
+    archived = next(row for row in history['employees'] if row['badge'] == removed)
+    assert archived['removed'] and not archived['active']
+    with application.SessionLocal() as session:
+        assert session.scalar(select(func.count()).select_from(application.Employee).where(
+            application.Employee.active.is_(True), application.Employee.role == 'admin')) == 1
+        assert session.get(EmployeeAccessState, removed).session_version == 1
+        assert session.scalar(select(func.count()).select_from(application.Audit).where(
+            application.Audit.event == 'EMPLOYEE_REMOVED', application.Audit.actor == removed)) == 1
+    return {"competing_last_admin_demotions": [200, 409],
+            "competing_last_admin_removals": [200, 409], "active_admins_retained": 1,
+            "demoted_admin_session_revoked": True, "removed_admin_session_revoked": True,
+            "removed_identity_retained": True, "pin_reset_session_revoked": True}
 
 
 def verify_excel_export(application, api):
@@ -1166,6 +1214,7 @@ def verify(dsn):
             for model in (transfers.ItemTransferState, transfers.TransferLocation):
                 assert session.query(model).count() == 0, "Migration invented transfer status or custom shop locations"
             assert session.query(administration.EmployeeAccessState).count() == 0, "Migration changed existing employee access or sessions"
+            assert session.query(administration.EmployeeRemovalState).count() == 0, "Migration removed an existing employee"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
