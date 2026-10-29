@@ -14,6 +14,7 @@ HISTORY_TABLES = (
     'tracking_requirement_templates',
     'tracking_process_events',
     'flow_events',
+    'spool_parts_events',
     'quality_documents',
     'quality_evidence',
     'quality_reviews',

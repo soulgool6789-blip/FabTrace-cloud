@@ -10,6 +10,8 @@ This guide describes the implemented tracking extension and the constraints that
 | `tracking.py` | Tracking tables, validated request models, project/spool/weld APIs, authoritative work and acceptance checks, versions, holds, repairs, and rollups. |
 | `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
+| `parts.py` | Optional spool parts plans, whole-piece requirement lines, unique physical allocations, quantity projections and audited scope controls. |
+| `static/parts.js`, `static/parts.css`, `PARTS_GUIDE.md` | Parts-list editor, QR allocation, current quantity progress and operating instructions. |
 | `quality.py`, `quality_templates.py` | Audit workspaces, draft customer matrix, controlled document revisions, actual evidence, corrective actions, signed reviews and optional project gates. |
 | `QUALITY_API.md` | Quality endpoint contracts, payloads, state meanings, review permissions and dependency rules. |
 | `dossier.py`, `dossier_templates.py` | Project-scoped Job Packet checklist, immutable uploaded files/reviews/issues, physical/digital handovers, currentness and coating/shipment gates. |
@@ -114,7 +116,7 @@ Tracking mutations lock the owning `Item` row before changing related state. Hie
 
 Keep validation, inserts, invalidation, counter synchronization, and audit creation in one transaction. Read-snapshot helpers preload records for one spool calculation; they are not a durable cache and must not be reused after writes.
 
-`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on eighteen history/file tables:
+`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on nineteen history/file tables:
 
 - `audit_events`
 - `tracking_requirement_evidence`
@@ -124,6 +126,7 @@ Keep validation, inserts, invalidation, counter synchronization, and audit creat
 - `tracking_requirement_templates`
 - `tracking_process_events`
 - `flow_events`
+- `spool_parts_events`
 - `quality_documents`
 - `quality_evidence`
 - `quality_reviews`
@@ -136,6 +139,26 @@ Keep validation, inserts, invalidation, counter synchronization, and audit creat
 - `dossier_events`
 
 These triggers prevent ordinary mutation, not deliberate removal by a database owner. Requirements, holds, plans, and weld metadata are current-state records and remain mutable through controlled APIs.
+
+## Required component quantities per spool
+
+The optional `parts.py` extension adds four tables: `spool_parts_plans`, `spool_part_lines`, `spool_part_allocations` and immutable `spool_parts_events`. A plan belongs to one existing individual spool plan; a Part allocation belongs to one active line, and its component ID is globally unique. `flow_component_links` remains the physical component-to-spool relationship. No existing columns are changed and no plan is created by a read.
+
+| Route | Behavior |
+| --- | --- |
+| `GET /api/parts/spools?project_id=...` | Read planned spools and optional quantity totals. |
+| `GET /api/parts/spools/{id}` | Read required lines, allocated component facts, candidates, blockers and history. |
+| `PUT /api/parts/spools/{id}/plan` | Supervisor/admin replaces the current required list with expected version, source reference and reason. Version zero creates it; IDs preserve existing lines. |
+| `POST /api/parts/spools/{id}/allocations` | Handler/supervisor/admin atomically assigns one or several existing `component_ids` to a `line_id`, with expected version, reference and notes. |
+| `POST /api/parts/spools/{id}/allocations/{component_id}/remove` | Versioned unassignment removes the allocation and component link while preserving the item, traveler and audit history. |
+
+Required quantities are strict positive integers representing physical pieces: up to 500 lines, 10,000 pieces per spool and 1,000 unique IDs in one allocation request. Nonempty line part numbers must match the actual recorded part number. Existing linked components remain unallocated until deliberately classified. A tracked legacy item whose kind is still `Part` is not an eligible preparation component.
+
+Receipt counts actual current step-1 completion. Preparation requires current-pass steps 7 and 8, a completed component route and no current identity, hold, rework or exception blockers. Baselines never backfill missing events. Required quantities are the denominator; no zero-scope percentage implies completion. Assignment creates no receipt, work, timer or custody record.
+
+Writes take the existing topology advisory lock before item locks, refresh the parts version and keep validation, component links, flow-version changes and audit records atomic. Scope edits reconcile `FlowPlan.expected_children`; old traveler start/scope/assignment endpoints cannot bypass a configured parts list. The scope locks after spool step 9, real weld work, release or applicable parent progression. Generic final release locks configured child components before testing current readiness.
+
+Configured lists expose a compact `parts` summary in tracking, flow and progress. Dossier fingerprints include stable recorded plan/line/allocation facts and actual component identity; no permissions, candidates or elapsed clocks enter the fingerprint. The parts key is omitted entirely for an unconfigured spool, preserving legacy issue fingerprints. Frozen issues retain the original snapshot and printable evidence. Four raw Excel sheets and `Spool parts progress` share the existing read-only export snapshot.
 
 ## Production process timing
 

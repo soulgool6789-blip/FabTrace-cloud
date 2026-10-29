@@ -156,7 +156,7 @@ def verify_history_protection(application, initializer, schema):
     assert set(initializer.HISTORY_TABLES) == {
         "audit_events", "tracking_requirement_evidence", "tracking_requirement_reviews",
         "tracking_weld_work", "tracking_weld_repairs", "tracking_requirement_templates",
-        "tracking_process_events", "flow_events",
+        "tracking_process_events", "flow_events", "spool_parts_events",
         "quality_documents", "quality_evidence", "quality_reviews", "quality_events",
         "dossier_documents", "dossier_files", "dossier_reviews", "dossier_issues",
         "dossier_handovers", "dossier_events",
@@ -616,6 +616,100 @@ def verify_readonly_quality_gate_views(application, api):
     return {"flow_and_quality_read_views": 4, "write_locks": 0, "unverified_gate_visible": True}
 
 
+def verify_concurrent_parts_allocation(application, api):
+    """Real row/advisory locks must prevent double counting and scope races."""
+    from test_progress import database_state
+
+    item_id = make_spool(api, item_id="PG-PARTS-SPOOL")
+    root = f"/api/parts/spools/{item_id}"
+    initial = ok(api.put(root + "/plan", {
+        "expected_version": 0, "reference": "PG-BOM-A", "reason": "Isolated quantity concurrency test",
+        "lines": [{"part_number": "PG-PART-NO", "description": "Synthetic required flange", "required_qty": 1}],
+    }))
+    line = initial["lines"][0]
+    for component in ("PG-PART-A", "PG-PART-B"):
+        ok(api.post("/api/items", {
+            "id": component, "description": "Synthetic physical part", "kind": "Part", "project": "TEST-PROJECT",
+            "google_part_number": "PG-PART-NO", "location": "Test rack", "handler": BADGES["handler"], "welds_required": 0,
+        }), 201)
+
+    def race(calls):
+        gate, seen = Barrier(2), set()
+
+        def synchronize(connection, cursor, statement, parameters, context, many):
+            if "pg_advisory_xact_lock" in statement and id(connection) not in seen:
+                seen.add(id(connection))
+                gate.wait(timeout=15)
+
+        def submit(call):
+            worker = TestAPI(application, application.SessionLocal)
+            try:
+                method, path, body = call
+                response = worker.request(method, path, json=body)
+                return {"status": response.status_code, "body": response.json()}
+            finally:
+                worker.client.close()
+
+        event.listen(application.engine, "before_cursor_execute", synchronize)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = [future.result(timeout=30) for future in [pool.submit(submit, call) for call in calls]]
+        finally:
+            event.remove(application.engine, "before_cursor_execute", synchronize)
+        assert sum(result["status"] in (200, 201) for result in responses) == 1, responses
+        assert sum(result["status"] == 409 for result in responses) == 1, responses
+        return sorted(result["status"] for result in responses)
+
+    def allocation(component, version):
+        return {"expected_version": version, "line_id": line["id"], "component_ids": [component],
+                "reference": "PG-ASSIGN", "notes": "Actual isolated allocation for concurrency test"}
+
+    allocation_codes = race([("POST", root + "/allocations", allocation(component, initial["version"]))
+                             for component in ("PG-PART-A", "PG-PART-B")])
+    assigned = ok(api.get(root))
+    assert assigned["version"] == initial["version"] + 1
+    assert assigned["totals"]["assigned_qty"] == assigned["totals"]["required_qty"] == 1
+    assert assigned["totals"]["received_qty"] == assigned["totals"]["prepared_qty"] == 0
+    winner = assigned["lines"][0]["components"][0]["id"]
+    loser = next(component for component in ("PG-PART-A", "PG-PART-B") if component != winner)
+    expanded = ok(api.put(root + "/plan", {
+        "expected_version": assigned["version"], "reference": "PG-BOM-B", "reason": "Add a second real required piece",
+        "lines": [{"id": line["id"], "part_number": "PG-PART-NO", "description": "Synthetic required flange", "required_qty": 2}],
+    }))
+    correction_codes = race([
+        ("POST", root + "/allocations", allocation(loser, expanded["version"])),
+        ("PUT", root + "/plan", {"expected_version": expanded["version"], "reference": "PG-BOM-C",
+            "reason": "Competing controlled scope correction", "lines": [{"id": line["id"], "part_number": "PG-PART-NO",
+                "description": "Synthetic required flange", "required_qty": 1}]}),
+    ])
+    current = ok(api.get(root))
+    assert current["version"] == expanded["version"] + 1
+    assert current["totals"]["required_qty"] == current["totals"]["assigned_qty"] in (1, 2)
+    assert len(current["events"]) == 4
+    assert len(current["lines"][0]["components"]) == current["totals"]["assigned_qty"]
+    assert current["totals"]["received_qty"] == current["totals"]["prepared_qty"] == 0
+
+    before, unsafe = database_state(api), []
+
+    def observe(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if sql.startswith(("INSERT", "UPDATE", "DELETE")) or "FOR UPDATE" in sql or "PG_ADVISORY_XACT_LOCK" in sql:
+            unsafe.append(statement)
+
+    event.listen(application.engine, "before_cursor_execute", observe)
+    try:
+        for path in ("/api/parts/spools", root, "/api/progress/projects/TEST-PROJECT", f"/api/tracking/spools/{item_id}", "/api/exports/excel"):
+            response = api.get(path)
+            assert response.status_code == 200, response.text
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe)
+    assert unsafe == []
+    assert database_state(api) == before
+    return {"competing_allocations": allocation_codes, "allocation_vs_scope_correction": correction_codes,
+            "duplicate_counting": False, "recorded_receipts_or_preparation_invented": False,
+            "readonly_views_and_export": 5, "write_locks_on_reads": 0, "mutations_on_reads": 0}
+
+
 def verify_excel_export(application, api):
     exports = importlib.import_module("exports")
     def row_counts():
@@ -659,7 +753,7 @@ def verify_excel_export(application, api):
         sheets = [sheet.attrib["name"] for sheet in workbook.findall("s:sheets/s:sheet", namespace)]
     expected_sheets = ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS],
         "Process visits", "Process totals", "Flow steps", "Audit readiness",
-        "Project progress", "Part progress", "Job Packet readiness"]
+        "Project progress", "Part progress", "Job Packet readiness", "Spool parts progress"]
     assert sheets[:len(expected_sheets)] == expected_sheets, sheets
     # A complete retained packet exceeds Excel's per-cell text limit. Its
     # exact JSON is preserved through normal Text overflow continuation rows.
@@ -673,7 +767,7 @@ def verify_excel_export(application, api):
     assert len({backend_pid for _, _, backend_pid, _ in export_reads}) == 1
     assert row_counts() == before, "Excel export changed database row counts"
     return {
-        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 7, "rows_unchanged": True,
+        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 8, "rows_unchanged": True,
         "isolation": "repeatable read", "read_only": True, "server_side_queries": len(export_reads),
     }
 
@@ -712,6 +806,7 @@ def verify(dsn):
         flow = importlib.import_module("flow")
         quality = importlib.import_module("quality")
         dossier = importlib.import_module("dossier")
+        parts = importlib.import_module("parts")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -739,6 +834,8 @@ def verify(dsn):
                           dossier.DossierFile, dossier.DossierReview, dossier.DossierIssue,
                           dossier.DossierHandover, dossier.DossierEvent):
                 assert session.query(model).count() == 0, "Migration invented packet scope, evidence, approval, or handover"
+            for model in (parts.SpoolPartsPlan, parts.PartLine, parts.PartAllocation, parts.PartEvent):
+                assert session.query(model).count() == 0, "Migration invented parts requirements, allocations or history"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -760,6 +857,7 @@ def verify(dsn):
         quality_read_views = verify_readonly_quality_gate_views(application, api)
         dossier_concurrency = verify_concurrent_dossier_mutation(application, dossier, api)
         dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
+        parts_concurrency = verify_concurrent_parts_allocation(application, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -780,6 +878,7 @@ def verify(dsn):
             "concurrent_flow_step": flow_concurrency,
             "concurrent_quality_evidence": quality_concurrency,
             "concurrent_dossier_mutation": dossier_concurrency,
+            "concurrent_parts_allocation": parts_concurrency,
             "readonly_quality_gate_views": quality_read_views,
             "readonly_dossier_progress_and_exports": dossier_read_views,
             "excel_export": excel_export,

@@ -43,6 +43,10 @@ TABLES = {
     "Flow events": ("flow", "FlowEvent"),
     "Flow exceptions": ("flow", "FlowException"),
     "Component links": ("flow", "ComponentLink"),
+    "Spool parts plans": ("parts", "SpoolPartsPlan"),
+    "Spool part lines": ("parts", "PartLine"),
+    "Part allocations": ("parts", "PartAllocation"),
+    "Spool parts events": ("parts", "PartEvent"),
     "Quality workspaces": ("quality", "QualityWorkspace"),
     "Quality requirements": ("quality", "QualityRequirement"),
     "Quality documents": ("quality", "QualityDocument"),
@@ -61,7 +65,7 @@ TABLES = {
 PROCESS_REPORTS = ["Process visits", "Process totals"]
 FLOW_DEFINITIONS = ["Flow steps"]
 QUALITY_REPORTS = ["Audit readiness"]
-DELIVERY_REPORTS = ["Project progress", "Part progress", "Job Packet readiness"]
+DELIVERY_REPORTS = ["Project progress", "Part progress", "Job Packet readiness", "Spool parts progress"]
 
 
 @dataclass
@@ -329,12 +333,12 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
     sources = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Source table"}
     assert counts == {**{name: len(expected["rows"]) for name, expected in populated_export.items()},
                       **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24, "Audit readiness": 0,
-                      "Project progress": 1, "Part progress": 1, "Job Packet readiness": 0}
+                      "Project progress": 1, "Part progress": 1, "Job Packet readiness": 0, "Spool parts progress": 0}
     assert sources == {**{name: model.__tablename__ for name, model in models().items()},
                        **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS},
                        "Flow steps": "definition:CLM-process-flow", "Audit readiness": "derived:quality_readiness",
                        "Project progress": "derived:project_progress", "Part progress": "derived:part_progress",
-                       "Job Packet readiness": "derived:packet_readiness"}
+                       "Job Packet readiness": "derived:packet_readiness", "Spool parts progress": "derived:spool_parts_progress"}
     # Downloading must not edit business records or silently log into the data snapshot.
     assert snapshot(api) == populated_export
     assert "pin_hash" not in workbook.headers("Employees")
@@ -363,9 +367,43 @@ def test_empty_tables_keep_their_column_headers(api):
     assert [row["number"].value for row in workbook.records("Flow steps")] == list(range(1, 25))
     for name, columns in (("Project progress", exporter.PROJECT_PROGRESS_COLUMNS),
                           ("Part progress", exporter.PART_PROGRESS_COLUMNS),
-                          ("Job Packet readiness", exporter.PACKET_READINESS_COLUMNS)):
+                          ("Job Packet readiness", exporter.PACKET_READINESS_COLUMNS),
+                          ("Spool parts progress", exporter.SPOOL_PARTS_PROGRESS_COLUMNS)):
         assert workbook.headers(name) == list(columns)
         assert not workbook.records(name)
+
+
+def test_spool_parts_export_uses_required_quantities_and_actual_recorded_component_progress(api):
+    from test_parts import allocate, component, detail, line, plan, prepare, spool
+    from test_progress import database_state
+
+    spool_id = spool(api, "EXPORT-QUANTITY-SPOOL")
+    record = plan(api, spool_id, [line(3, part_number="000-ELBOW", description="=1+1 < & synthetic part")])
+    component(api, "EXPORT-PART-001", part_number="000-ELBOW")
+    component(api, "EXPORT-PART-002", part_number="000-ELBOW")
+    allocate(api, spool_id, record["lines"][0]["id"], ["EXPORT-PART-001", "EXPORT-PART-002"])
+    prepare(api, "EXPORT-PART-001", spool_id)
+    prepare(api, "EXPORT-PART-002", spool_id, start_step=8)
+    expected = detail(api, spool_id)
+    before = database_state(api)
+    _, workbook = download(api)
+    assert database_state(api) == before
+    assert workbook.formulas == []
+    assert len(workbook.records("Spool parts plans")) == 1
+    assert len(workbook.records("Spool part lines")) == 1
+    assert len(workbook.records("Part allocations")) == 2
+    assert len(workbook.records("Spool parts events")) == len(expected["events"])
+    row = workbook.records("Spool parts progress")[0]
+    assert row["spool_id"].value == spool_id
+    assert row["part_number"].value == "000-ELBOW"
+    assert row["description"].value == "=1+1 < & synthetic part"
+    for key, value in {"required_qty": 3, "assigned_qty": 2, "received_qty": 1, "prepared_qty": 1,
+                       "short_qty": 1, "remaining_qty": 2}.items():
+        assert row[key].kind == "n" and row[key].value == value
+    assert row["prepared_percent"].value == pytest.approx(33.3)
+    assert json.loads(row["component_ids"].value) == ["EXPORT-PART-001", "EXPORT-PART-002"]
+    assert row["blockers"].value
+    assert row["as_of"].style in workbook.date_styles
 
 
 def test_packet_export_keeps_immutable_issues_and_current_readiness_separate_from_progress(api):

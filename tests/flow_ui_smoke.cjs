@@ -46,7 +46,7 @@ function allowed(){
 function detail(){return {...structuredClone(record),allowed_actions:[...allowed()]}}
 const context={document:{getElementById:id=>elements.get(id)||null},me:{role:'admin',badge:'ADMIN'},current:null,URL,URLSearchParams,Date,console,esc,
   performance:{now:()=>now},setInterval:fn=>{timers.set(++timerId,fn);return timerId},clearInterval:id=>timers.delete(id),
-  history:{replaceState(_a,_b,url){context.url=url}},show(page){context.page=page},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(id){context.openedItem=id},FabTracking:{async open(value){context.openedWelds=value}},
+  history:{replaceState(_a,_b,url){context.url=url}},show(page){context.page=page},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(id){context.openedItem=id},FabTracking:{async open(value){context.openedWelds=value}},FabParts:{async open(value){context.openedParts=value}},
   qrId(value,kind){const text=String(value||'').trim();if(kind==='badge')return text.startsWith('FABTRACE:EMP:')?text.slice(13):text;try{return new URL(text).searchParams.get('item')||''}catch(_){}return text.startsWith('FABTRACE:ITEM:')?text.slice(14):/^[A-Za-z0-9_-]{3,60}$/.test(text)?text:''},
   FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
   api:async(url,options={})=>{
@@ -127,6 +127,12 @@ const check=number=>({['check_s'+number+'_1']:'on'});
   await submitDialog({route:'component',expected_children:'0',start_step:'5',baseline_reference:'TRAVELER-OLD',baseline_reason:'Material already received and verified',notes:'Adopted work'});
   assert.deepEqual(JSON.parse(posts().at(-1).body),{route:'component',expected_children:0,start_step:5,notes:'Adopted work',baseline_reference:'TRAVELER-OLD',baseline_reason:'Material already received and verified'});
 
+  record=detailAt(9,{parts:{configured:true,reference:'BOM-REQ',totals:{required_qty:6}}});record.flow=null;await context.FabFlow.open({item:'ITM-001'});await click('start');
+  assert.equal(elements.get('ff-field-expected_children').value,'6','configured BOM sets the required child count');assert.equal(elements.get('ff-field-expected_children').readOnly,true);assert.match(elements.get('flowDialogFields').innerHTML,/from Spool parts/);
+  const beforeWrongCount=posts().length;await submitDialog({route:'spool',start_step:'9',expected_children:'1',notes:'Setup'});assert.equal(posts().length,beforeWrongCount,'linked count cannot replace the required BOM count');
+  await submitDialog({route:'spool',start_step:'9',expected_children:'6',notes:'Approved parts list'});assert.equal(JSON.parse(posts().at(-1).body).expected_children,6);
+  record=detailAt(9,{parts:{configured:true,totals:{required_qty:6}}});allowedOverride=['scope'];await context.FabFlow.open({item:'ITM-001',project:'P1'});await click('scope');assert.equal(context.openedParts.spool,'ITM-001');assert.equal(context.openedParts.project,'P1');allowedOverride=null;
+
   record=detailAt(6);await context.FabFlow.open({item:'ITM-001'});await click('pause');
   let finish;hold=new Promise(resolve=>{finish=resolve});const beforeDuplicate=posts().length;
   const first=submitDialog({notes:'Waiting for equipment'});await submitDialog({notes:'Duplicate'});assert.equal(posts().length,beforeDuplicate+1);finish();await first;hold=null;
@@ -138,6 +144,7 @@ const check=number=>({['check_s'+number+'_1']:'on'});
   await submitDialog({notes:'Delay record'});assert.ok(calls.filter(row=>row.url==='/api/flow/items/ITM-001'&&!row.method).length>readCount);
   assert.equal(elements.get('flowDialogSubmit').disabled,true);assert.match(elements.get('flowDialogError').textContent,/Close this dialog/);assert.equal(messages.length,notifications);
   fail=null;elements.get('flowDialog').close();await click('pause');assert.equal(elements.get('flowDialogSubmit').disabled,false);
+  record=detailAt(9,{parts:{configured:true,totals:{required_qty:6,prepared_qty:2,assigned_qty:4,received_qty:3,short_qty:2}}});await context.FabFlow.open({item:'ITM-001',project:'P1'});assert.match(html(),/2 of 6 required pieces prepared/);await click('spool-parts','ITM-001');assert.equal(context.openedParts.spool,'ITM-001');assert.equal(context.openedParts.project,'P1');
   context.FabFlow.cancelPending();assert.equal(timers.size,0);
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
   assert.match(index,/params\.has\('flow'\)[\s\S]*FabFlow\.open/);assert.match(index,/id="itemFlowBtn"/);assert.match(index,/id="navFlow"/);assert.match(index,/FabFlow\.cancelPending/);

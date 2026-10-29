@@ -14,6 +14,8 @@ An optional assembly link must identify an existing item of type **Assembly**. P
 
 Define each planned joint; missing joint records block final release. Increase the plan before adding joints. The count cannot be reduced below the existing joint records.
 
+Use **Spool parts** to enter the required physical components separately from the weld count: for example, two flanges, four elbows and one pipe section. Assign the actual Part QR IDs and follow assigned, received and prepared quantities against the required pieces. Parts-list requirements reconcile with the numbered spool traveler's component scope; they do not replace individual weld requirements. See [PARTS_GUIDE.md](PARTS_GUIDE.md) for setup, QR allocation, progress meanings and corrections.
+
 ## 2. Define each individual weld
 
 Select **Add weld** and enter a joint number such as `W01`. Numbers must be unique within their spool and remain unchanged after creation. FabTrace also assigns a permanent internal identity. Root and fill/cap operations belong to this one joint; they do not count as extra welds.

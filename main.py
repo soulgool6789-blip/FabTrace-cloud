@@ -35,7 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.29-guide.1'
+APP_VERSION='2026.10.29-parts.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -418,6 +418,8 @@ class ReleaseIn(BaseModel):
 def finalize_release(s,r,actor,reference,at=None,flow_step=None):
     """Validate and record QA release inside the caller's locked transaction."""
     require_unreleased(r)
+    from parts import lock_parts_for_release
+    lock_parts_for_release(s,r.id)
     if is_tracked(s,r):
         reasons=tracking_release_errors(s,r)
     else:
@@ -488,6 +490,10 @@ def health(s:Session=Depends(db)):
     s.execute(select(QualityWorkspace.id).limit(1))
     s.execute(select(DossierProject.project_id).limit(1))
     s.execute(select(DossierIssue.id).limit(1))
+    s.execute(select(SpoolPartsPlan.spool_id).limit(1))
+    s.execute(select(PartLine.id).limit(1))
+    s.execute(select(PartAllocation.component_id).limit(1))
+    s.execute(select(PartEvent.id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -506,6 +512,9 @@ from flow import (router as flow_router, FlowPlan, flow_release_errors,
                   lock_topology as lock_flow_topology, guard_reopen as guard_flow_reopen,
                   on_item_reopened as on_flow_item_reopened)
 app.include_router(flow_router)
+
+from parts import router as parts_router, SpoolPartsPlan, PartLine, PartAllocation, PartEvent
+app.include_router(parts_router)
 
 from quality import router as quality_router, QualityWorkspace
 app.include_router(quality_router)

@@ -33,6 +33,12 @@ The project bar counts each registered physical component, spool and assembly as
 
 For a numbered route, the part bar counts completed records in that item's route: components 1–8, spools 9–16, assemblies 17–24. An approved late starting baseline does not invent earlier records. A spool can therefore have a valid physical release while its recorded-route bar remains below 100%. Rework returns reopen affected steps. Without a numbered route, the bar uses completed individual welds against the declared weld count; a zero-weld plan uses actual QA release.
 
+### Required component quantities within each spool
+
+**Spool parts** adds an explicit parts list: required quantities by part number/description, allocated individual QR IDs, and actual received/prepared quantities. Its bars use the complete required quantity, so shortages are visible even when the missing pieces have not been registered. Each piece remains traceable through its component traveler and custody records. See [PARTS_GUIDE.md](PARTS_GUIDE.md).
+
+When configured for a spool, the list and allocations are included in its packet records and readiness checks. Required parts must be reconciled and currently prepared; quantity scope is controlled before fabrication. A complete quantity bar does not replace weld acceptance, QA release or packet authorization. Existing spools without a list retain their earlier packet fingerprint until a list is explicitly created.
+
 ## 3. Configure the project's Job Packet
 
 An administrator or supervisor opens **Job Packets**, selects the project and chooses the configuration action. The project and its spool/assembly plans must already exist.

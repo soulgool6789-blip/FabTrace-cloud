@@ -36,6 +36,7 @@ from quality import (QualityWorkspace, QualityRequirement, QualityDocument, Qual
 from dossier import (DossierProject, DossierEntry, DossierDocument, DossierReview,
                      DossierIssue, DossierHandover, DossierEvent, item_detail)
 from progress import project_rows, summarize as progress_summary
+from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_snapshot
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -94,6 +95,10 @@ TABLE_SPECS = (
     _spec(FlowEvent, 'Flow events', 'id item_id sequence action step actor at reference notes data'),
     _spec(FlowException, 'Flow exceptions', 'id item_id step return_step reason reference opened_by opened_at closed_by closed_at resolution'),
     _spec(ComponentLink, 'Component links', 'component_id spool_id assigned_by assigned_at', 'component_id'),
+    _spec(SpoolPartsPlan, 'Spool parts plans', 'spool_id version reference created_by created_at updated_at', 'spool_id'),
+    _spec(PartLine, 'Spool part lines', 'id spool_id part_number description required_qty notes active created_by created_at updated_at'),
+    _spec(PartAllocation, 'Part allocations', 'component_id line_id assigned_by assigned_at', 'component_id'),
+    _spec(PartEvent, 'Spool parts events', 'id spool_id sequence action actor at reference reason data'),
     _spec(QualityWorkspace, 'Quality workspaces', 'id name customer project_id purchase_order audit_date owner_badge template_version version created_by created_at updated_at'),
     _spec(QualityRequirement, 'Quality requirements', 'id workspace_id item_number title requirement_text response_text source_document source_revision source_section source_reference supporting_documents required_evidence gaps priority owner_badge due_date applicability applicability_reason required_evidence_types document_ids requires_closed_action requires_approved_document gate version created_by created_at updated_at'),
     _spec(QualityDocument, 'Quality documents', 'id workspace_id code title revision reference effective_date requires_training required_badges notes created_by created_at'),
@@ -122,6 +127,11 @@ PART_PROGRESS_COLUMNS = (
     'total_steps', 'not_recorded_steps', 'planned_welds', 'completed_welds', 'qa_accepted',
     'flow_status', 'current_step', 'current_title', 'released', 'location', 'handler',
     'updated_at', 'as_of',
+)
+SPOOL_PARTS_PROGRESS_COLUMNS = (
+    'project_id', 'subproject_id', 'spool_id', 'line_id', 'part_number', 'description',
+    'required_qty', 'assigned_qty', 'received_qty', 'prepared_qty', 'short_qty', 'remaining_qty',
+    'assigned_percent', 'received_percent', 'prepared_percent', 'component_ids', 'blockers', 'as_of',
 )
 PACKET_READINESS_COLUMNS = (
     'project_id', 'item_id', 'purchase_order', 'packet_status', 'source_status',
@@ -162,6 +172,9 @@ OVERFLOW_COLUMNS = (
 )
 
 RELATIONSHIPS = (
+    'spool_parts_plans.spool_id -> the tracked spool items.id; spool_part_lines.spool_id -> its optional controlled parts plan. Quantities are whole physical pieces, not weld counts or length.',
+    'spool_part_allocations.component_id -> one individual Part items.id and line_id -> spool_part_lines.id. Each allocation must also match the existing flow_component_links parent; a QR identity is counted once.',
+    'spool_parts_events preserves versioned parts-list edits, allocations and removals. Spool parts progress derives actual receipt step1 and current prepared steps7+8; historical baselines are not invented.',
     'items.handler -> employees.badge; items.id is the original physical item identity.',
     'inspections.item_id / reworks.item_id / audit_events.item_id -> items.id. Audit item_id may be blank for account or project events.',
     'inspections.inspector -> employees.badge; rework assigned / closed_by and audit actor retain employee badge identities.',
@@ -734,6 +747,37 @@ def _write_delivery_reports(connection, writer, created_at, exporter):
             writer.write_rows(name, table, columns, rows(), count, json_columns=json_columns, group='report')
 
 
+def _write_spool_parts_report(connection, writer, created_at):
+    """Required quantities and recorded part preparation in the export snapshot."""
+    as_of = _utc(created_at).isoformat()
+    count = 0
+    with tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as report:
+        with Session(bind=connection, autoflush=False, expire_on_commit=False,
+                     join_transaction_mode='rollback_only') as session:
+            for spool_id in connection.scalars(select(SpoolPartsPlan.spool_id).order_by(SpoolPartsPlan.spool_id)):
+                plan = session.get(SpoolPlan, spool_id)
+                snapshot = parts_snapshot(session, spool_id)
+                for line in snapshot['lines']:
+                    values = {**line, 'project_id': plan.project_id, 'subproject_id': plan.subproject_id,
+                              'spool_id': spool_id, 'line_id': line['id'],
+                              'component_ids': [component['id'] for component in line['components']],
+                              'blockers': '\n'.join(snapshot['blockers']), 'as_of': as_of}
+                    report.write((json.dumps([values[key] for key in SPOOL_PARTS_PROGRESS_COLUMNS], ensure_ascii=True) + '\n').encode())
+                    count += 1
+                session.expunge_all()
+        report.seek(0)
+
+        def rows():
+            for line in report:
+                values = json.loads(line)
+                values[-1] = dt.datetime.fromisoformat(values[-1])
+                identity = {key: values[SPOOL_PARTS_PROGRESS_COLUMNS.index(key)] for key in ('spool_id', 'line_id')}
+                yield values, _json_text(identity)
+
+        writer.write_rows('Spool parts progress', 'derived:spool_parts_progress', SPOOL_PARTS_PROGRESS_COLUMNS,
+                          rows(), count, json_columns={'component_ids'}, group='report')
+
+
 def build_workbook(bind, exporter, created_at=None):
     """Return a rewound temporary XLSX; caller owns and must close the file."""
     created_at = created_at or utcnow()
@@ -774,6 +818,7 @@ def build_workbook(bind, exporter, created_at=None):
                         _write_flow_steps(writer)
                         _write_quality_report(connection, writer, created_at, exporter)
                         _write_delivery_reports(connection, writer, created_at, exporter)
+                        _write_spool_parts_report(connection, writer, created_at)
                         writer.write_overflow()
                         manifest = _manifest_rows(created_at, exporter, writer, kind)
                         writer.write_rows('Export info', 'export_manifest', ('section', 'entry', 'part', 'value'),

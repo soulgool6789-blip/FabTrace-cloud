@@ -741,6 +741,8 @@ def tracking_release_errors(s, item):
         errors.append('Spool dimensional inspection predates latest work')
     if _snapshot(s, item.id)['open_rework']:
         errors.append('Open spool rework exists')
+    from parts import parts_blockers
+    errors.extend(parts_blockers(s, item.id))
     return errors
 
 
@@ -761,6 +763,8 @@ def tracking_summary(s, item):
     project = s.get(Project, plan.project_id)
     sub = s.get(Subproject, plan.subproject_id) if plan.subproject_id else None
     blockers = tracking_release_errors(s, item)
+    from parts import parts_summary
+    parts = parts_summary(s, item.id)
     return {
         'item_id': item.id, 'description': item.description,
         'drawing': item.drawing, 'drawing_revision': plan.drawing_revision,
@@ -772,6 +776,7 @@ def tracking_summary(s, item):
         'ready_to_release': not blockers, 'released': bool(item.released),
         'blockers': blockers, 'due_date': plan.due_date,
         'production_process': compact_process_summary(_snapshot(s, item.id)['production_process']),
+        **({'parts': parts} if parts else {}),
     }
 
 
@@ -812,7 +817,10 @@ def template_dict(row):
 @_snapshot_response
 def spool_dict(s, item):
     plan = s.get(SpoolPlan, item.id)
+    from parts import parts_summary
+    parts = parts_summary(s, item.id)
     return {
+        **({'parts': parts} if parts else {}),
         'item': asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
         'summary': tracking_summary(s, item),
@@ -957,6 +965,8 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     before = asdict(plan, PLAN_KEYS) if plan else None
     from flow import guard_plan_change
     guard_plan_change(s, item, plan, values)
+    from parts import guard_plan_project
+    guard_plan_project(s, item, values)
     if plan:
         _version(plan, data.expected_version)
         changed_scope = any(getattr(plan, key) != values[key] for key in (

@@ -309,10 +309,12 @@ def _project(s, item):
 
 
 def _component_errors(s, item, plan):
+    from parts import parts_blockers
+    parts_errors = parts_blockers(s, item.id)
     ids = _component_ids(s, item.id)
     if plan.expected_children == 0:
-        return [] if not ids and len(plan.material_reference.strip()) >= 2 else ['Legacy material basis is missing, or components exist outside the declared zero-component scope']
-    errors = []
+        return parts_errors + ([] if not ids and len(plan.material_reference.strip()) >= 2 else ['Legacy material basis is missing, or components exist outside the declared zero-component scope'])
+    errors = list(parts_errors)
     if len(ids) != plan.expected_children:
         errors.append(f'Prepared component scope incomplete: {len(ids)} linked of {plan.expected_children} declared')
     project_id, _ = _project(s, item)
@@ -532,6 +534,8 @@ def _summary(s, item, plan=None):
 
 def detail(s, item, user):
     from production import process_snapshot
+    from parts import parts_summary
+    parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
     process = process_snapshot(s, item.id)
     component_ids = _component_ids(s, item.id)
@@ -561,6 +565,7 @@ def detail(s, item, user):
     if plan and plan.status == 'shipped' and user.role in HANDOFF:
         actions.append('deliver')
     return {
+        **({'parts': parts} if parts else {}),
         'item': _dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
         'flow': {**_dict(plan, PLAN_KEYS), 'steps': _step_states(s, plan),
@@ -623,6 +628,9 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
         raise HTTPException(422, 'Declare at least one required child spool for the assembly')
     if data.route == 'spool' and data.expected_children == 0 and len(data.material_reference) < 2:
         raise HTTPException(422, 'Declare required components, or record the controlled legacy material basis for an existing spool')
+    if data.route == 'spool':
+        from parts import guard_flow_scope
+        guard_flow_scope(s, item.id, data.expected_children)
     scope = ROUTE_BY_ID[data.route]
     step = data.start_step or scope['first_step']
     if not scope['first_step'] <= step <= scope['last_step']:
@@ -827,6 +835,8 @@ def assign_component(item_id: str, data: LinkIn, u: Employee = Depends(auth), s:
     permit(u, *HANDOFF)
     component, plan = _locked(s, item_id)
     _version(plan, data.expected_version)
+    from parts import guard_component_assignment
+    guard_component_assignment(s, item_id, data.spool_id)
     link = s.get(ComponentLink, component.id)
     if plan.route != 'component' or plan.status != 'active' or (plan.current_step > 5 and link):
         raise HTTPException(409, 'Component selection is fixed after step 5; a later baseline may record its missing original assignment')
@@ -912,6 +922,9 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
     permit(u, *MANAGE)
     item, plan = _locked(s, item_id)
     _version(plan, data.expected_version)
+    if plan.route == 'spool':
+        from parts import guard_flow_scope
+        guard_flow_scope(s, item_id, data.expected_children)
     if plan.status != 'active' or item.released or not (
             plan.route == 'spool' and plan.current_step == 9 or
             plan.route == 'assembly' and plan.current_step in (17, 18)):

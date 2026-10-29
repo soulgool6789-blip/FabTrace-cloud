@@ -325,7 +325,10 @@ def _physical_structure(s,item,plan,seen=None):
     for child_plan in s.scalars(select(SpoolPlan).where(SpoolPlan.assembly_id==item.id).order_by(SpoolPlan.item_id)):
         child=s.get(Item,child_plan.item_id)
         children.append({'item_id':child_plan.item_id,'physical_basis':_physical_structure(s,child,child_plan,seen)})
+    from parts import parts_basis
+    parts = parts_basis(s, item.id)
     return _structural({'tracking':spool_dict(s,item),'component_links':[row_dict(x) for x in links],
+        **({'parts': {'basis': parts}} if parts else {}),
         'child_spools':children,'reworks':[row_dict(x) for x in s.scalars(select(Rework).where(Rework.item_id.in_(ids)).order_by(Rework.id))],
         'flow_events':[row_dict(x) for x in s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids)).order_by(FlowEvent.id))]})
 
@@ -358,7 +361,17 @@ def _actual_records(s, item, plan, user):
         quality.append({'workspace': {k:detail['workspace'][k] for k in ('id','project_id','name','customer','purchase_order')}, 'evidence': linked,
             'requirements': [r for r in detail['requirements'] if r['id'] in requirement_ids],
             'actions': [a for a in detail['actions'] if a['requirement_id'] in requirement_ids]})
+    from parts import parts_basis, parts_snapshot
+    parts = parts_basis(s, item.id)
+    snapshot = parts_snapshot(s, item.id) if parts else None
+    part_records = None
+    if snapshot:
+        part_records = {'basis': parts, 'totals': snapshot['totals'], 'blockers': snapshot['blockers'],
+            'lines': [{**{key:value for key,value in line.items() if key != 'components'},
+                       'components': [{key:value for key,value in component.items() if key != 'can_remove'}
+                                      for component in line['components']]} for line in snapshot['lines']]}
     return {'tracking': tracking, 'inspections': inspections, 'reworks': reworks,
+        **({'parts': part_records} if part_records else {}),
         'component_links': [row_dict(x) for x in components], 'child_spools': children,
         'flow': row_dict(fp) if fp else None, 'flow_events': flow_events,
         'flow_exceptions': exceptions, 'quality_records': quality}
@@ -372,6 +385,7 @@ def _structural(records):
     physical_events = [e for e in records['flow_events'] if (e['action']=='advance' and e['step'] in (1,7,18)) or
         (e['action'] in ('fail','reopen') and (e['data'].get('return_step', e['step']) or 0) <= 19)]
     return {'item_id':tr['item']['id'], 'drawing':tr['item']['drawing'],
+        **({'parts': records['parts']['basis']} if records.get('parts') else {}),
         'plan':{k:tr['plan'][k] for k in ('project_id','subproject_id','assembly_id','planned_welds','drawing_revision','zero_weld_reason')},
         'welds':welds, 'components':records['component_links'],
         'children':[{'item_id':x['item_id'],'physical_basis':x.get('physical_basis')} for x in records['child_spools']],
@@ -1117,6 +1131,12 @@ def _render_item(snapshot,draft=False):
     body+='<h3>Rework and process exceptions</h3>'+_table(records['reworks'])+_table(records['flow_exceptions'])
     body+='<h3>Process traveler records retained at issue</h3>'+_table(records['flow_events'],['item_id','sequence','step','action','reference','notes','actor','at','data'])
     body+='<h3>Child spools and component links</h3>'+_table(records['child_spools'],['item_id','project_id','description','drawing_revision','released'])+_table(records['component_links'])
+    if records.get('parts'):
+        body+='<h3>Required spool parts and quantities retained at issue</h3>'+_table(records['parts']['lines'],
+            ['id','part_number','description','required_qty','assigned_qty','received_qty','prepared_qty','short_qty','remaining_qty'])
+        body+='<p>Each allocated physical Part ID counts once. Receipt and preparation use actual recorded component steps; unrecorded baseline history is not inferred.</p>'
+        body+=_table([{'line_id':line['id'], **component} for line in records['parts']['lines'] for component in line['components']],
+            ['line_id','id','google_part_number','received','prepared','flow_status','current_step','handler','location','blockers'])
     if snapshot.get('child_issues'):
         body+='<h3>Exact child packet revisions included with this assembly</h3>'+_table(snapshot['child_issues'],['id','item_id','revision','sha256','actor','at'])+'<ul>'
         for child in snapshot['child_issues']:
