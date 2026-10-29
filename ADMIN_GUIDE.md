@@ -53,7 +53,9 @@ Open **Admin controls → Employee accounts**. Search by name, badge or role, th
 
 ### Edit an account
 
-Use **Edit account** to correct an employee's name, assign the appropriate application role, or activate/deactivate their account. Record the reason before saving. Available roles are Handler, Welder, Inspector, Supervisor and Administrator.
+Use **Edit account** to correct an employee's name, assign the appropriate job position, or activate/deactivate their account. Record the reason before saving. Positions are Administrator, Supervisor, Material coordinator, Welder, Fit-up welder, Process welder, QA/QC, Painter, Finisher and Miscellaneous. Review the selected position's scope before saving. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the complete work, timing, evidence and packet permissions.
+
+Existing accounts keep their current assignment. To apply job restrictions to an account currently assigned Administrator, explicitly select its actual job position. An Administrator account retains full authority. New employee creation requires an explicit position selection; changing a position revokes the employee's old sessions and requires a fresh sign-in.
 
 Badge IDs stay permanent so existing work, custody and audit records remain linked to the same identity. Deactivation prevents further sign-in and use of the badge for normal handoffs; it does not delete historical records or silently reassign items. Use an explicit custody correction for an item still assigned to that employee.
 

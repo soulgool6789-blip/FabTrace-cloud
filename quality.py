@@ -17,13 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, select
 from sqlalchemy.orm import Session
 
-from main import Base, Employee, Item, Rework, audit, auth, db, permit, utcnow
+from main import Base, Employee, Item, Rework, audit, auth, db, utcnow
 from tracking import Project, SpoolPlan, Weld, WeldRequirement, TrackingHold
+from permissions import has_capability, require_capability
 from quality_templates import TEMPLATE_VERSION, SOURCE_NOTE, SOURCE_DOCUMENTS, TEMPLATES, EVIDENCE_TYPES
 
 router = APIRouter(prefix='/api/quality', tags=['quality'])
-WRITERS = ('admin', 'supervisor', 'inspector')
-REVIEWERS = ('admin', 'inspector')
 EVIDENCE_KINDS = {row['value']: row for row in EVIDENCE_TYPES}
 
 
@@ -650,8 +649,8 @@ def workspace_detail(s, workspace, user, as_of=None):
             'documents': [_document_view(ctx, row) for row in ctx['documents']],
             'evidence': [_evidence_view(ctx, row) for row in ctx['evidence']], 'actions': actions,
             'reviews': [row_dict(row) for row in ctx['reviews']], 'events': [row_dict(row) for row in ctx['events']],
-            'metrics': metrics, 'permissions': {'manage': user.role in ('admin', 'supervisor'),
-                    'write': user.role in WRITERS, 'review': user.role in REVIEWERS}}
+            'metrics': metrics, 'permissions': {'manage': has_capability(user, 'manage_production'),
+                    'write': has_capability(user, 'quality_write'), 'review': has_capability(user, 'quality_review')}}
 
 
 def _finish(s, workspace, user):
@@ -676,7 +675,7 @@ def list_workspaces(user: Employee = Depends(auth), s: Session = Depends(db)):
 
 @router.post('/workspaces', status_code=201)
 def create_workspace(data: WorkspaceIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, 'admin', 'supervisor')
+    require_capability(user, 'manage_production')
     from flow import lock_topology
     lock_topology(s)
     values = _values(data, 'template')
@@ -701,7 +700,7 @@ def get_workspace(workspace_id: int, user: Employee = Depends(auth), s: Session 
 
 @router.put('/workspaces/{workspace_id}')
 def update_workspace(workspace_id: int, data: WorkspaceUpdate, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, 'admin', 'supervisor')
+    require_capability(user, 'manage_production')
     workspace = _workspace(s, workspace_id, data.expected_version)
     values = _values(data)
     _check_scope(s, values)
@@ -732,7 +731,7 @@ def _requirement_values(s, workspace, data, user, old=None):
     if data.gate != 'none' and not workspace.project_id:
         _error('Production gates require a specific tracking project', 422)
     if data.gate != (old.gate if old else 'none'):
-        permit(user, *REVIEWERS)
+        require_capability(user, 'quality_review')
     duplicate = s.scalar(select(QualityRequirement.id).where(QualityRequirement.workspace_id == workspace.id,
                       QualityRequirement.item_number == data.item_number,
                       QualityRequirement.id != (old.id if old else -1)))
@@ -743,7 +742,7 @@ def _requirement_values(s, workspace, data, user, old=None):
 
 @router.post('/workspaces/{workspace_id}/requirements', status_code=201)
 def create_requirement(workspace_id: int, data: RequirementIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *WRITERS)
+    require_capability(user, 'quality_write')
     workspace = _workspace(s, workspace_id, data.expected_version)
     values = _requirement_values(s, workspace, data, user)
     requirement = QualityRequirement(workspace_id=workspace_id, **values, created_by=user.badge)
@@ -755,7 +754,7 @@ def create_requirement(workspace_id: int, data: RequirementIn, user: Employee = 
 
 @router.put('/workspaces/{workspace_id}/requirements/{requirement_id}')
 def update_requirement(workspace_id: int, requirement_id: int, data: RequirementIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *WRITERS)
+    require_capability(user, 'quality_write')
     workspace = _workspace(s, workspace_id, data.expected_version)
     requirement = _one(s, QualityRequirement, requirement_id, workspace_id)
     values = _requirement_values(s, workspace, data, user, requirement)
@@ -770,7 +769,7 @@ def update_requirement(workspace_id: int, requirement_id: int, data: Requirement
 
 @router.post('/workspaces/{workspace_id}/documents', status_code=201)
 def create_document(workspace_id: int, data: DocumentIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *WRITERS)
+    require_capability(user, 'quality_write')
     workspace = _workspace(s, workspace_id, data.expected_version)
     _badges(s, data.required_badges, data.requires_training)
     if data.required_badges and not data.requires_training:
@@ -862,7 +861,7 @@ def _lock_physical_records(s, workspace_id):
 
 @router.post('/workspaces/{workspace_id}/evidence', status_code=201)
 def create_evidence(workspace_id: int, data: EvidenceIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *WRITERS)
+    require_capability(user, 'quality_write')
     workspace = _workspace(s, workspace_id, data.expected_version)
     payload = _evidence_payload(s, workspace, data)
     values = _values(data)
@@ -910,7 +909,7 @@ def _action_values(s, workspace, data, old=None):
 
 @router.post('/workspaces/{workspace_id}/actions', status_code=201)
 def create_action(workspace_id: int, data: ActionIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *WRITERS)
+    require_capability(user, 'quality_write')
     workspace = _workspace(s, workspace_id, data.expected_version)
     values = _action_values(s, workspace, data)
     action = QualityAction(workspace_id=workspace_id, **values, created_by=user.badge)
@@ -922,7 +921,7 @@ def create_action(workspace_id: int, data: ActionIn, user: Employee = Depends(au
 
 @router.put('/workspaces/{workspace_id}/actions/{action_id}')
 def update_action(workspace_id: int, action_id: int, data: ActionIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *WRITERS)
+    require_capability(user, 'quality_write')
     workspace = _workspace(s, workspace_id, data.expected_version)
     action = _one(s, QualityAction, action_id, workspace_id)
     values = _action_values(s, workspace, data, action)
@@ -1018,7 +1017,7 @@ def _review_basis(s, workspace, data, user):
 
 @router.post('/workspaces/{workspace_id}/reviews', status_code=201)
 def create_review(workspace_id: int, data: ReviewIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, *REVIEWERS)
+    require_capability(user, 'quality_review')
     workspace = _workspace(s, workspace_id, data.expected_version)
     basis = _review_basis(s, workspace, data, user)
     review = QualityReview(workspace_id=workspace_id, target_type=data.target_type, target_id=data.target_id,

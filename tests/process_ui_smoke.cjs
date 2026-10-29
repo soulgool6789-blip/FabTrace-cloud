@@ -54,6 +54,13 @@ function runningProcess(status='running'){
 const summary={item_id:'S1',description:'Spool One',project_id:'P1',project_name:'Plant One',planned_welds:0,welds_defined:0,production_complete:0,qa_accepted:0,ready_to_release:false,released:false,blockers:[]};
 let processData=emptyProcess(),released=false,rejectMutation=null,holdMutation=null;
 const calls=[],messages=[],timers=new Map();
+const processLabels={material_prep:'Material preparation',cutting_beveling:'Cutting & beveling',fit_up:'Fit-up',welding:'Welding',nde:'NDE / testing',pwht:'PWHT',dimensional:'Dimensional inspection',coating:'Coating / painting',final_qa:'Final QA',dispatch:'Ready for dispatch',custom:'Custom process'};
+function scopedProcess(){
+ const row=structuredClone(processData),keys=require('./ui_permissions_fixture.cjs').policy(context.me.role).process_keys||[],actions=[];
+ if(!released){if(!row.current&&keys.length)actions.push('start');else if(row.current&&keys.includes(row.current.process_key)){if(keys.some(key=>key==='custom'||key!==row.current.process_key))actions.push('move');actions.push(row.status==='paused'?'resume':'pause','finish')}}
+ row.permissions={allowed_actions:actions,allowed_processes:keys.map(key=>({key,label:processLabels[key]}))};return row;
+}
+
 let now=10000,timerSequence=0;
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const context={
@@ -68,16 +75,16 @@ const context={
     if(options.method){
       if(holdMutation)await holdMutation;
       if(rejectMutation)throw rejectMutation;
-      return structuredClone(processData);
+      return scopedProcess();
     }
     if(url==='/api/tracking/processes')return [{key:'fit_up',label:'Fit-up'},{key:'welding',label:'Welding'},{key:'nde',label:'NDE / testing'}];
-    if(url.startsWith('/api/tracking/overview'))return {projects:[{id:'P1',name:'Plant One'}],subprojects:[],templates:[],spools:[{...summary,production_process:structuredClone(processData)},{...summary,item_id:'S2',description:'Untimed spool',production_process:emptyProcess()}]};
-    if(url==='/api/tracking/spools/S1')return {item:{id:'S1',description:'Spool One',released},plan:{item_id:'S1',project_id:'P1',planned_welds:0,drawing_revision:'A',version:1},summary,welds:[],requirements:[],holds:[],history:[],production_process:structuredClone(processData)};
+    if(url.startsWith('/api/tracking/overview'))return {projects:[{id:'P1',name:'Plant One'}],subprojects:[],templates:[],spools:[{...summary,production_process:scopedProcess()},{...summary,item_id:'S2',description:'Untimed spool',production_process:emptyProcess()}]};
+    if(url==='/api/tracking/spools/S1')return {item:{id:'S1',description:'Spool One',released},plan:{item_id:'S1',project_id:'P1',planned_welds:0,drawing_revision:'A',version:1},summary,welds:[],requirements:[],holds:[],history:[],production_process:scopedProcess()};
     throw Error('Unexpected endpoint '+url);
   },
 };
 context.window=context;
-vm.createContext(context);
+vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/tracking.js'),'utf8'),context);
 const html=()=>elements.get('trackingContent').innerHTML;
 const click=async(action,id='')=>elements.get('trackingContent').listeners.click({target:{closest:()=>({dataset:{ftAction:action,ftId:id},disabled:false})}});
@@ -87,13 +94,20 @@ const tick=milliseconds=>{now+=milliseconds;for(const fn of timers.values())fn()
 const liveValues=()=>elements.get('trackingContent').clockNodes.map(n=>n.textContent);
 
 (async()=>{
-  for(const role of ['admin','supervisor','handler','welder','inspector']){
+  context.me.role='painter';await context.FabTracking.open({spool:'S1'});await click('process-start');
+  assert.match(elements.get('trackingDialogFields').innerHTML,/<option value="coating"/);
+  assert.doesNotMatch(elements.get('trackingDialogFields').innerHTML,/<option value="(?:welding|fit_up|nde|custom)"/,'painters receive only server-permitted timing choices');
+  const beforeWrongProcess=postCalls().length;await submit({process_key:'welding',notes:'Unpermitted work'});assert.equal(postCalls().length,beforeWrongProcess,'a forged process option cannot be submitted');elements.get('trackingDialog').close();
+  processData=runningProcess();await context.FabTracking.open({spool:'S1'});assert.doesNotMatch(html(),/data-ft-action="process-(?:move|pause|resume|finish)"/,'a painter cannot close or pause another trade’s current timer');
+  await click('process-pause');assert.equal(postCalls().length,beforeWrongProcess);
+  processData=emptyProcess();
+  for(const role of ['admin','supervisor','handler','welder','fitup_welder','process_welder','inspector','painter','finisher','misc']){
     context.me.role=role;await context.FabTracking.open({spool:'S1'});
     assert.match(html(),/data-ft-action="process-start"/,role+' can record a process start');
   }
   context.me.role='unknown';await context.FabTracking.open({spool:'S1'});
   assert.doesNotMatch(html(),/data-ft-action="process-start"/);
-  context.me.role='handler';await context.FabTracking.open({spool:'S1'});
+  context.me.role='supervisor';await context.FabTracking.open({spool:'S1'});
   await click('process-start');
   assert.match(elements.get('trackingDialogFields').innerHTML,/Custom process/);
   elements.get('ft-field-process_key').value='custom';elements.get('ft-field-process_key').onchange();

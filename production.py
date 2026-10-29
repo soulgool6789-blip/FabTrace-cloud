@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from main import Base, Employee, Item, audit, auth, db, lock_item, permit, require_unreleased, utcnow
 from tracking import ROLES, _require_plan
+from permissions import PROCESS_KEYS, can_control_process
 
 
 router = APIRouter(prefix='/api/tracking', tags=['production timing'])
@@ -227,7 +228,7 @@ def summarize_process_events(item_id, events, as_of):
     }
 
 
-def process_snapshot(s, item_id, as_of=None, events=None):
+def process_snapshot(s, item_id, as_of=None, events=None, user=None):
     if events is None:
         events = s.scalars(select(SpoolProcessEvent).where(
             SpoolProcessEvent.item_id == item_id).order_by(SpoolProcessEvent.sequence)).all()
@@ -238,7 +239,35 @@ def process_snapshot(s, item_id, as_of=None, events=None):
         snapshot.update(flow_managed=flow is not None,
                         flow_step=flow.current_step if flow else None,
                         flow_status=flow.status if flow else None)
-    return snapshot
+    return with_process_permissions(s, item_id, snapshot, user)
+
+
+def with_process_permissions(s, item_id, snapshot, user):
+    """Decorate a response without mutating the shared pure timing projection."""
+    if user is None:
+        return snapshot
+    from flow import FlowPlan
+    item = s.get(Item, item_id)
+    flow = s.get(FlowPlan, item_id)
+    keys = PROCESS_KEYS.get(user.role, ())
+    choices = [dict(row) for row in PROCESS_CATALOG if row['key'] in keys]
+    if 'custom' in keys:
+        choices.append({'key': 'custom', 'label': 'Custom support process'})
+    current, actions = snapshot['current'], []
+    if flow is not None:
+        choices = []
+        if (flow.status == 'active' and current is not None and
+                can_control_process(user, current['process_key']) and
+                (not item.released or flow.current_step in (16, 23, 24))):
+            actions.append('pause' if snapshot['status'] == 'running' else 'resume')
+    elif item is not None and not item.released:
+        if current is None and choices:
+            actions.append('start')
+        elif current is not None and can_control_process(user, current['process_key']):
+            if any(row['key'] == 'custom' or row['key'] != current['process_key'] for row in choices):
+                actions.append('move')
+            actions.extend(('pause' if snapshot['status'] == 'running' else 'resume', 'finish'))
+    return {**snapshot, 'permissions': {'allowed_actions': actions, 'allowed_processes': choices}}
 
 
 def compact_process_summary(snapshot):
@@ -319,14 +348,14 @@ def get_process(item_id: str, u: Employee = Depends(auth), s: Session = Depends(
     if item is None:
         raise HTTPException(404, 'Item not found')
     _timing_flow(s, item)
-    return process_snapshot(s, item_id)
+    return process_snapshot(s, item_id, user=u)
 
 
 @router.post('/spools/{item_id}/process', status_code=201)
 def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(u, *ROLES)
     from flow import lock_topology
     lock_topology(s)
+    permit(u, *ROLES)
     item = lock_item(s, item_id)
     flow = _timing_flow(s, item)
     if flow is not None:
@@ -342,6 +371,10 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
         raise HTTPException(409, 'Process timing changed since you opened it; refresh and retry. No changes were saved.')
     _check_clock(snapshot, at)
     current = snapshot['current']
+    if current is not None and not can_control_process(u, current['process_key']):
+        raise HTTPException(403, 'Your assigned position cannot control the current process timer.')
+    if data.action in ('start', 'move') and not can_control_process(u, data.process_key):
+        raise HTTPException(403, 'Your assigned position cannot start or move to that process.')
     if data.action == 'start' and current is not None:
         raise HTTPException(409, 'A process is already open; move it to the next process or finish it first')
     if data.action != 'start' and current is None:
@@ -363,4 +396,4 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
     except IntegrityError:
         s.rollback()
         raise HTTPException(409, 'Another process update was saved first; refresh and retry. No changes were saved.') from None
-    return process_snapshot(s, item_id)
+    return process_snapshot(s, item_id, user=u)

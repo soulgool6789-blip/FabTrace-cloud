@@ -33,3 +33,9 @@
 .fa-links{display:flex;gap:8px;flex-wrap:wrap}.fa-links button{font-size:13px}.fa-site{display:flex;gap:14px;justify-content:space-between;align-items:start;flex-wrap:wrap}
 .fa-site small{display:block;color:#617283;font-size:12px}.fa-access-note{background:#f4f8fc;border:1px solid #dce3ea;border-radius:9px;padding:12px;font-size:13px}
 @media(max-width:760px){.fa-detail-grid,.fa-fields{grid-template-columns:1fr}.fa-fields .fa-span{grid-column:auto}.fa-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.fa-card{padding:14px}.fa-toolbar{align-items:stretch}.fa-toolbar .field{min-width:0;flex-basis:100%}.fa-toolbar button{flex:1}.fa-header .actions{width:100%}.fa-header .actions button{flex:1}.fa-meta{grid-template-columns:1fr;gap:3px}.fa-meta dd{margin-bottom:8px}.fa-action-form{padding:12px}.fa-action-form .actions button{min-height:42px;flex:1}}
+
+/* Position summaries use the server's catalog and remain readable on small screens. */
+.fa-position-scope{display:block;padding:12px;border:1px solid #d4e4ef;border-radius:9px;background:#f4f9fd;margin:12px 0;overflow-wrap:anywhere}
+.fa-position-scope strong,.fa-position-scope span{display:block}.fa-position-scope span{font-size:13px;color:#536575;margin-top:4px}
+.fa-role-directory{background:#fff;border:1px solid #dce3ea;border-radius:12px;padding:16px;margin-bottom:16px}.fa-role-directory>summary{font-weight:700;cursor:pointer}
+.fa-role-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px}.fa-role-grid .fa-position-scope{margin:0}

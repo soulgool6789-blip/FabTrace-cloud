@@ -129,8 +129,14 @@ def test_admin_can_release_legacy_item_despite_missing_welds_inspection_hold_and
     assert override["bypassed_blockers"] == reviewed["blockers"]
     current = ok(api.get(f"/api/items/{item_id}"))
     for key in ("welds_required", "welds_done", "dimensional", "weld", "on_hold", "reinspection_due",
-                "dimension_at", "weld_at", "last_work_at", "reworks", "inspections"):
+                "dimension_at", "weld_at", "last_work_at", "inspections"):
         assert current[key] == original[key], key
+    # Release changes the signed-in viewer's available action, not the
+    # underlying rework record. Compare every persisted rework field.
+    assert [{k: v for k, v in row.items() if k != "can_close"} for row in current["reworks"]] == [
+        {k: v for k, v in row.items() if k != "can_close"} for row in original["reworks"]]
+    assert original["reworks"][0]["can_close"] is True
+    assert current["reworks"][0]["can_close"] is False
     assert current["release_control"] == control
     decisions = [row for row in events(api, item_id) if row["event"] == "ADMIN_RELEASE_OVERRIDE"]
     assert len(decisions) == 1 and decisions[0]["id"] == override["audit_id"]

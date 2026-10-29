@@ -29,7 +29,7 @@ import os
 from pathlib import Path
 import re
 import sys
-from threading import Barrier
+from threading import Barrier, Event
 import uuid
 from xml.etree import ElementTree as ET
 import zipfile
@@ -222,13 +222,14 @@ def verify_concurrent_evidence(application, tracking, api, item_id, weld_id):
             application.Audit.item_id == item_id,
         )).all()
 
-    # Synchronize at the actual database row-lock query, after both requests
-    # have read the same old requirement. This exercises stale identity-map
-    # refresh plus PostgreSQL row locking, not only sequential stale requests.
+    # Evidence writes serialize before their Item lock. Align the competing
+    # requests before that first lock, never at a barrier after it is held.
     lock_barrier = Barrier(2)
+    seen = set()
 
     def synchronize_item_lock(connection, cursor, statement, parameters, context, many):
-        if "FROM items" in statement and "FOR UPDATE" in statement:
+        if "pg_advisory_xact_lock" in statement and id(connection) not in seen:
+            seen.add(id(connection))
             lock_barrier.wait(timeout=15)
 
     def submit_one(reference):
@@ -240,7 +241,7 @@ def verify_concurrent_evidence(application, tracking, api, item_id, weld_id):
                     "expected_version": req["version"], "reference": reference,
                     "result": "pass", "notes": "Concurrent local PostgreSQL test",
                 },
-                role="welder",
+                role="inspector",
             )
             return {"status": response.status_code, "reference": reference, "body": response.json()}
         finally:
@@ -274,7 +275,7 @@ def verify_concurrent_evidence(application, tracking, api, item_id, weld_id):
         assert audit.details["evidence_id"] == evidence.id
         assert audit.details["requirement_id"] == req["id"]
         assert audit.details["reference"] == evidence.reference
-        assert audit.actor == evidence.actor == BADGES["welder"]
+        assert audit.actor == evidence.actor == BADGES["inspector"]
     return {"response_codes": sorted(row["status"] for row in responses), "new_evidence_rows": 1, "new_audit_rows": 1}
 
 
@@ -305,7 +306,7 @@ def verify_concurrent_process_transition(application, production, api, item_id):
             response = worker.post(route, {
                 "action": "start", "expected_version": initial["version"],
                 "process_key": process_key, "notes": "Concurrent local process start",
-            }, role="welder")
+            }, role="supervisor")
             return {"status": response.status_code, "process_key": process_key, "body": response.json()}
         finally:
             worker.client.close()
@@ -341,7 +342,7 @@ def verify_concurrent_process_transition(application, production, api, item_id):
         assert audit.details["process_event_id"] == recorded.id
         assert audit.details["sequence"] == recorded.sequence
         assert audit.details["process_key"] == recorded.process_key
-        assert audit.actor == recorded.actor == BADGES["welder"]
+        assert audit.actor == recorded.actor == BADGES["supervisor"]
     return {"response_codes": [201, 409], "new_process_events": 1, "new_audit_rows": 1, "open_visits": 1}
 
 
@@ -890,6 +891,96 @@ def verify_admin_dispositions(application, api):
             "readonly_views_and_export": len(paths), "mutations_on_reads": 0, "write_locks_on_reads": 0}
 
 
+def verify_queued_permission_revocation(application, api):
+    """A write authenticated before an access change must stop after waiting.
+
+    The administrator holds the real topology lock. The writer signals before
+    trying that lock, then waits for the administrator's actual API commit.
+    Only the administrator waits on the signal, never both lock owners.
+    """
+    from administration import EmployeeAccessState
+
+    outcomes = {}
+    for change in ('role', 'pin'):
+        badge = 'PG-QUEUED-' + change.upper()
+        item_id = 'PG-QUEUED-ITEM-' + change.upper()
+        ok(api.post('/api/employees', {'badge': badge, 'name': 'Isolated queued ' + change,
+            'role': 'welder', 'pin': TEST_PIN}), 201)
+        api.item(item_id=item_id, welds_required=1)
+        before = ok(api.get('/api/items/' + item_id))
+        account = next(row for row in ok(api.get('/api/admin/employees'))['employees'] if row['badge'] == badge)
+        if change == 'role':
+            change_path = '/api/admin/employees/' + badge
+            change_body = {'expected_version': account['version'], 'name': account['name'],
+                'role': 'painter', 'active': True, 'reason': 'Reassign the queued local test employee'}
+            change_method = 'patch'
+        else:
+            change_path = '/api/admin/employees/' + badge + '/pin'
+            change_body = {'expected_version': account['version'], 'pin': 'queued-local-replacement-123456',
+                'reason': 'Revoke the queued local test session'}
+            change_method = 'post'
+
+        administrator_locked, writer_waiting = Event(), Event()
+        control = {'administrator_connection': None, 'held_once': False}
+
+        def before_lock(connection, cursor, statement, parameters, context, many):
+            if 'pg_advisory_xact_lock' not in statement:
+                return
+            if control['administrator_connection'] is None:
+                control['administrator_connection'] = id(connection)
+            elif id(connection) != control['administrator_connection']:
+                writer_waiting.set()
+
+        def after_lock(connection, cursor, statement, parameters, context, many):
+            if ('pg_advisory_xact_lock' in statement and
+                    id(connection) == control['administrator_connection'] and not control['held_once']):
+                control['held_once'] = True
+                administrator_locked.set()
+                assert writer_waiting.wait(timeout=15), 'Writer did not reach its serialization point'
+
+        def change_access():
+            worker = TestAPI(application, application.SessionLocal)
+            try:
+                response = getattr(worker, change_method)(change_path, change_body)
+                return {'status': response.status_code, 'body': response.json()}
+            finally:
+                worker.client.close()
+
+        def write_weld():
+            worker = TestAPI(application, application.SessionLocal)
+            try:
+                response = worker.post('/api/items/' + item_id + '/weld', {
+                    'count': 1, 'weld_ids': 'LOCAL-QUEUED-W01', 'notes': 'Must be rejected after account revocation',
+                }, role=badge)
+                return {'status': response.status_code, 'body': response.json()}
+            finally:
+                worker.client.close()
+
+        event.listen(application.engine, 'before_cursor_execute', before_lock)
+        event.listen(application.engine, 'after_cursor_execute', after_lock)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                access_future = pool.submit(change_access)
+                assert administrator_locked.wait(timeout=15), 'Administrator did not acquire its lock'
+                write_future = pool.submit(write_weld)
+                access_result = access_future.result(timeout=30)
+                write_result = write_future.result(timeout=30)
+        finally:
+            event.remove(application.engine, 'before_cursor_execute', before_lock)
+            event.remove(application.engine, 'after_cursor_execute', after_lock)
+        assert access_result['status'] == 200, access_result
+        assert write_result['status'] == 401, write_result
+        assert ok(api.get('/api/items/' + item_id)) == before
+        assert api.get('/api/me', role=badge).status_code == 401
+        with application.SessionLocal() as session:
+            assert session.get(EmployeeAccessState, badge).session_version == 1
+            assert session.scalar(select(func.count()).select_from(application.Audit).where(
+                application.Audit.item_id == item_id, application.Audit.event == 'WELDS_COMPLETED')) == 0
+        outcomes[change] = {'account_change': 200, 'queued_write': 401,
+            'item_unchanged': True, 'weld_history_created': False}
+    return outcomes
+
+
 def verify_last_admin_concurrency(application, api):
     """Run last: this deliberately revokes one original synthetic admin session."""
     from administration import EmployeeAccessState
@@ -1099,6 +1190,7 @@ def verify(dsn):
         parts_concurrency = verify_concurrent_parts_allocation(application, api)
         transfer_concurrency = verify_concurrent_transfers(application, api)
         admin_dispositions = verify_admin_dispositions(application, api)
+        queued_permissions = verify_queued_permission_revocation(application, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -1123,6 +1215,7 @@ def verify(dsn):
             "concurrent_parts_allocation": parts_concurrency,
             "concurrent_transfers": transfer_concurrency,
             "administrative_dispositions": admin_dispositions,
+            "queued_permission_revocation": queued_permissions,
             "administrator_access": admin_access,
             "readonly_quality_gate_views": quality_read_views,
             "readonly_dossier_progress_and_exports": dossier_read_views,

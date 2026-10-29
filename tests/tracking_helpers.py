@@ -67,7 +67,7 @@ def find_requirement(api, item_id, weld_id, *, code=None, check=None):
     )
 
 
-def submit(api, item_id, req_id, reference="LOCAL-EVIDENCE", result="pass", role="welder"):
+def submit(api, item_id, req_id, reference="LOCAL-EVIDENCE", result="pass", role="inspector"):
     current = requirement(api, item_id, req_id)
     response = api.post(
         f"/api/tracking/requirements/{req_id}/evidence",

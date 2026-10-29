@@ -39,7 +39,7 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:{role:'ad
   if(url==='/api/quality/workspaces/1')return detail();
   throw Error('Unexpected endpoint '+url);
 }};
-context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/quality.js'),'utf8'),context);
+context.window=context;vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/quality.js'),'utf8'),context);
 const html=()=>elements.get('qualityContent').innerHTML,formHtml=()=>elements.get('qualityDialogFields').innerHTML,writes=()=>calls.filter(row=>row.method),body=()=>JSON.parse(writes().at(-1).body);
 const click=(name,id='')=>elements.get('qualityContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{qualityAction:name,qualityId:String(id)}})}});
 const submit=async values=>{const form=elements.get('qualityDialogForm');form.values=values;await form.listeners.submit({preventDefault(){},target:form});};

@@ -22,7 +22,7 @@ from main import (APP_VERSION, Base, Employee, Item, Audit, ITEM_KEYS, audit, au
 router = APIRouter(prefix='/api/admin', tags=['administration'])
 RELEASE_EVENTS = ('FINAL_RELEASE', 'ADMIN_RELEASE_OVERRIDE', 'ADMIN_RETURN_TO_WORK', 'REOPENED')
 ADMIN_EVENTS = ('ADMIN_RELEASE_OVERRIDE', 'ADMIN_RETURN_TO_WORK', 'ADMIN_CUSTODY_CORRECTION')
-Role = Literal['admin', 'supervisor', 'handler', 'welder', 'inspector']
+from permissions import Role, role_catalog, role_label, user_permissions
 
 
 class EmployeeAccessState(Base):
@@ -126,6 +126,26 @@ def validate_session(s, user, payload):
     if type(version) is not int or version != session_version(s, user.badge):
         raise HTTPException(401, 'Your account access changed. Sign in again with your current badge and PIN.')
     s.info['authenticated_session'] = (user.badge, version)
+
+
+def refresh_session_authority(s):
+    """Revalidate a queued writer after the shared topology lock is held.
+
+    No Employee row lock is taken: Item writers later acquire Employee foreign
+    key locks, and reversing that order would create a lock inversion.
+    """
+    authenticated = s.info.get('authenticated_session')
+    if authenticated is None:
+        return None  # Internal migration/projection callers have no session.
+    badge, validated_version = authenticated
+    current = s.scalar(select(Employee).where(Employee.badge == badge)
+        .execution_options(populate_existing=True))
+    access = s.scalar(select(EmployeeAccessState).where(EmployeeAccessState.badge == badge)
+        .execution_options(populate_existing=True))
+    version = access.session_version if access else 0
+    if not current or not current.active or version != validated_version:
+        raise HTTPException(401, 'Your account access changed while this request was waiting. Sign in again.')
+    return current
 
 
 def release_summary(s, item):
@@ -387,6 +407,7 @@ def custody_correction(item_id: str, data: CustodyIn, u: Employee = Depends(auth
 def _employee_dict(s, employee):
     access = s.get(EmployeeAccessState, employee.badge)
     return {**_dict(employee, ('badge', 'name', 'role', 'active')),
+        'role_label': role_label(employee), 'permissions': user_permissions(employee),
         'version': access.version if access else 0, 'can_edit': True, 'can_reset_pin': True}
 
 
@@ -394,7 +415,7 @@ def _employee_dict(s, employee):
 def employees(u: Employee = Depends(auth), s: Session = Depends(db)):
     permit(u, 'admin')
     rows = s.scalars(select(Employee).order_by(Employee.name, Employee.badge)).all()
-    return {'employees': [_employee_dict(s, row) for row in rows],
+    return {'employees': [_employee_dict(s, row) for row in rows], 'roles': role_catalog(),
             'active_admins': sum(row.active and row.role == 'admin' for row in rows)}
 
 

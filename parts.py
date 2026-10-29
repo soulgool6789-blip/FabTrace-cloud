@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from main import Base, Employee, Item, Rework, audit, auth, db, lock_item, utcnow, permit
 from tracking import Project, SpoolPlan, TrackingHold, Weld, WeldWork, new_id
 from flow import ComponentLink, FlowPlan, FlowEvent, FlowException, STEP_BY_NUMBER, lock_topology
+from permissions import has_capability, require_capability
 
 router = APIRouter(prefix='/api/parts', tags=['spool parts quantities'])
 DEFINITIONS = {
@@ -332,7 +333,7 @@ def _detail(s, item, spool_plan, user):
             candidates.append(component_state(s, child, spool_plan, editable=not reason))
     return {'item': {'id': item.id, 'description': item.description, 'google_part_number': item.google_part_number,
                     'project_id': spool_plan.project_id, 'project_name': project.name if project else '', 'subproject_id': spool_plan.subproject_id},
-        **snapshot, 'permissions': {'can_manage': user.role in ('admin', 'supervisor'), 'can_allocate': user.role in ('admin', 'supervisor', 'handler')},
+        **snapshot, 'permissions': {'can_manage': has_capability(user, 'manage_production'), 'can_allocate': has_capability(user, 'allocate_parts')},
         'candidates': candidates, 'definitions': DEFINITIONS,
         'events': [_row(event) for event in s.scalars(select(PartEvent).where(PartEvent.spool_id == item.id).order_by(PartEvent.sequence.desc()).limit(100))] if cfg else []}
 
@@ -405,7 +406,7 @@ def get_spool(spool_id: str, user: Employee = Depends(auth), s: Session = Depend
 
 @router.put('/spools/{spool_id}/plan')
 def save_plan(spool_id: str, data: PlanIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, 'admin', 'supervisor')
+    require_capability(user, 'manage_production')
     item, spool_plan, cfg = _locked(s, spool_id, data.expected_version, creating=True)
     total = sum(line.required_qty for line in data.lines)
     if total > 10000:
@@ -469,7 +470,7 @@ def save_plan(spool_id: str, data: PlanIn, user: Employee = Depends(auth), s: Se
 
 @router.post('/spools/{spool_id}/allocations')
 def allocate(spool_id: str, data: AllocateIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, 'admin', 'supervisor', 'handler')
+    require_capability(user, 'allocate_parts')
     item, spool_plan, cfg = _locked(s, spool_id, data.expected_version)
     line = s.get(PartLine, data.line_id)
     if not line or line.spool_id != spool_id or not line.active:
@@ -519,7 +520,7 @@ def allocate(spool_id: str, data: AllocateIn, user: Employee = Depends(auth), s:
 
 @router.post('/spools/{spool_id}/allocations/{component_id}/remove')
 def remove_allocation(spool_id: str, component_id: str, data: ChangeIn, user: Employee = Depends(auth), s: Session = Depends(db)):
-    permit(user, 'admin', 'supervisor', 'handler')
+    require_capability(user, 'allocate_parts')
     item, spool_plan, cfg = _locked(s, spool_id, data.expected_version)
     child = lock_item(s, component_id)
     allocation = s.get(PartAllocation, component_id)

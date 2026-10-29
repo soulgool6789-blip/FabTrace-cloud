@@ -436,7 +436,7 @@ def test_completed_step9_freezes_plan_allocation_and_removal(api):
 def test_opt_in_is_blocked_after_real_weld_work_and_existing_final_release(api):
     working = spool(api, "PARTS-WORKING-SPOOL", planned=1)
     weld = add_weld(api, working)
-    ok(api.post(f"/api/tracking/welds/{weld['id']}/work", {"operation": "fitup", "notes": "Actual fixture fit-up work"}, role="handler"))
+    ok(api.post(f"/api/tracking/welds/{weld['id']}/work", {"operation": "fitup", "notes": "Actual fixture fit-up work"}, role="fitup_welder"))
     released = spool(api, "PARTS-RELEASED-SPOOL")
     physical_release(api, released)
     for spool_id in (working, released):

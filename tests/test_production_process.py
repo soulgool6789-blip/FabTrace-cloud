@@ -33,7 +33,8 @@ def clock(application, monkeypatch):
 
 
 def process(api, item_id):
-    return ok(api.get(f"/api/tracking/spools/{item_id}/process"))
+    return {key: value for key, value in ok(api.get(f"/api/tracking/spools/{item_id}/process")).items()
+            if key != "permissions"}
 
 
 def change(api, item_id, action, version, role="welder", **values):
@@ -43,7 +44,7 @@ def change(api, item_id, action, version, role="welder", **values):
         role=role,
     )
     assert response.status_code in (200, 201), response.text
-    return response.json()
+    return {key: value for key, value in response.json().items() if key != "permissions"}
 
 
 def durations(row, elapsed, active, paused):
@@ -83,18 +84,25 @@ def test_no_timing_is_inferred_until_first_start_and_catalog_is_stable(api, cloc
         "pwht", "dimensional", "coating", "final_qa", "dispatch",
     }
     assert all(row["label"].strip() for row in catalog)
-    assert spool(api, item_id)["production_process"] == current
+    assert {key: value for key, value in spool(api, item_id)["production_process"].items()
+            if key != "permissions"} == current
 
 
-@pytest.mark.parametrize("role", list(BADGES))
-def test_each_shop_role_can_record_a_process_with_its_own_identity(api, clock, role):
+@pytest.mark.parametrize("role,key", [
+    ("admin", "fit_up"), ("supervisor", "fit_up"), ("handler", "material_prep"),
+    ("welder", "welding"), ("fitup_welder", "fit_up"), ("process_welder", "welding"),
+    ("inspector", "nde"), ("painter", "coating"), ("finisher", "cutting_beveling"),
+    ("misc", "custom"),
+])
+def test_each_shop_role_can_record_its_own_process_with_its_own_identity(api, clock, role, key):
     item_id = make_spool(api)
-    current = change(api, item_id, "start", 0, role=role, process_key="fit_up", notes="At the fit-up station")
+    current = change(api, item_id, "start", 0, role=role, process_key=key,
+                     notes="At the assigned station", **({"process_name": "Support task"} if key == "custom" else {}))
     assert current["status"] == "running"
     assert current["version"] == 1
-    assert current["current"]["process_key"] == "fit_up"
+    assert current["current"]["process_key"] == key
     assert current["events"][0]["actor"] == BADGES[role]
-    assert current["events"][0]["notes"] == "At the fit-up station"
+    assert current["events"][0]["notes"] == "At the assigned station"
     assert dt.datetime.fromisoformat(current["events"][0]["at"]).utcoffset() == dt.timedelta(0)
     durations(current["current"], 0, 0, 0)
 
@@ -118,7 +126,7 @@ def test_pauses_moves_revisits_and_idle_gaps_have_correct_process_totals(api, cl
     clock.advance(600)
     current = change(api, item_id, "pause", current["version"], notes="Awaiting consumables")
     clock.advance(300)
-    current = change(api, item_id, "move", current["version"], process_key="nde", role="inspector")
+    current = change(api, item_id, "move", current["version"], process_key="nde", role="supervisor")
     assert current["status"] == "running"
     durations(current["visits"][1], 900, 600, 300)
     clock.advance(1200)
@@ -143,13 +151,13 @@ def test_pauses_moves_revisits_and_idle_gaps_have_correct_process_totals(api, cl
 
 def test_custom_process_names_are_normalized_and_revisits_aggregate(api, clock):
     item_id = make_spool(api)
-    current = change(api, item_id, "start", 0, process_key="custom", process_name="  Client   witness  ")
+    current = change(api, item_id, "start", 0, role="misc", process_key="custom", process_name="  Client   witness  ")
     assert current["current"]["process_name"] == "Client witness"
     clock.advance(60)
-    current = change(api, item_id, "finish", current["version"])
-    current = change(api, item_id, "start", current["version"], process_key="custom", process_name="client WITNESS")
+    current = change(api, item_id, "finish", current["version"], role="misc")
+    current = change(api, item_id, "start", current["version"], role="misc", process_key="custom", process_name="client WITNESS")
     clock.advance(30)
-    current = change(api, item_id, "finish", current["version"])
+    current = change(api, item_id, "finish", current["version"], role="misc")
     assert len(current["by_process"]) == 1
     assert current["by_process"][0]["visits"] == 2
     durations(current["by_process"][0], 90, 90, 0)
@@ -210,7 +218,7 @@ def test_timing_changes_do_not_complete_welds_or_satisfy_qa_requirements(api, cl
     before = spool(api, item_id)
     current = change(api, item_id, "start", 0, process_key="welding")
     clock.advance(1800)
-    current = change(api, item_id, "move", current["version"], process_key="final_qa", role="inspector")
+    current = change(api, item_id, "move", current["version"], process_key="final_qa", role="supervisor")
     clock.advance(600)
     change(api, item_id, "finish", current["version"], role="inspector")
     after = spool(api, item_id)

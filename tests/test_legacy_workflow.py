@@ -88,7 +88,7 @@ def test_rework_close_does_not_restore_old_inspections(api):
     response = api.post(
         f"/api/items/{item_id}/rework/{rework_id}/close",
         {"notes": "Test correction completed"},
-        role="welder",
+        role="supervisor",
     )
     assert response.status_code == 200, response.text
     response = api.post(

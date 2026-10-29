@@ -21,6 +21,11 @@ BADGES = {
     "inspector": "TEST-QA",
     "welder": "TEST-WELDER",
     "handler": "TEST-HANDLER",
+    "fitup_welder": "TEST-FITUP-WELDER",
+    "process_welder": "TEST-PROCESS-WELDER",
+    "painter": "TEST-PAINTER",
+    "finisher": "TEST-FINISHER",
+    "misc": "TEST-MISC",
 }
 
 

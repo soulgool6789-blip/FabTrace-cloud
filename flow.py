@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from main import Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item, permit, utcnow
+from permissions import flow_step_roles
 from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
     _production_complete, _requirement_satisfied, _reset_requirements,
     tracking_release_errors)
@@ -25,8 +26,6 @@ VERSION = 'CLM-24-v1'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
-FABRICATE = ['admin', 'supervisor', 'handler', 'welder']
-QA = ['admin', 'inspector']
 ROUTES = (
     {'id': 'component', 'label': 'Material / component preparation', 'first_step': 1, 'last_step': 8},
     {'id': 'spool', 'label': 'Spool fabrication', 'first_step': 9, 'last_step': 16},
@@ -35,11 +34,11 @@ ROUTES = (
 ROUTE_BY_ID = {row['id']: row for row in ROUTES}
 
 
-def _step(number, title, section, checks, roles=HANDOFF):
+def _step(number, title, section, checks):
     route = 'component' if number <= 8 else 'spool' if number <= 16 else 'assembly'
     return {
         'number': number, 'title': title, 'route': route, 'section': section,
-        'roles': list(roles),
+        'roles': list(flow_step_roles(number)),
         'checks': [{'id': f's{number}_{index}', 'label': label} for index, label in enumerate(checks, 1)],
         'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 20, 23, 24),
         'requires_handoff': number in (6, 8, 9, 12, 13, 16, 20, 23),
@@ -52,27 +51,27 @@ def _step(number, title, section, checks, roles=HANDOFF):
 
 STEPS = (
     _step(1, 'Receive Shipment', 'Material receipt', ['Scan the material barcode / ID', 'Verify against purchase order and BOM', 'Inspect material condition']),
-    _step(2, 'Check Dimensions', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Verify MTR and material documentation'], HANDOFF + ['inspector']),
+    _step(2, 'Check Dimensions', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Verify MTR and material documentation']),
     _step(3, 'Capture Location', 'Material receipt', ['Scan material into inventory', 'Record its storage location']),
     _step(4, 'Material in Inventory', 'Material receipt', ['Confirm the material is available for production']),
     _step(5, 'Select Components for Spool', 'Component preparation', ['Select components against the BOM / isometric', 'Scan components out of inventory']),
     _step(6, 'Release to Fabrication Prep Technician', 'Component preparation', ['Issue the selected components', 'Record the scanned handoff']),
-    _step(7, 'Prep Components', 'Component preparation', ['Buff ends, clean and prepare surfaces', 'Mark or label the components as prepared'], FABRICATE),
+    _step(7, 'Prep Components', 'Component preparation', ['Buff ends, clean and prepare surfaces', 'Mark or label the components as prepared']),
     _step(8, 'Return to Production', 'Component preparation', ['Material coordinator receives prepared components', 'Scan the components back into production']),
     _step(9, 'Release to Fit-Up Welder', 'Spool fabrication', ['Issue the required prepared components', 'Record the scanned handoff']),
-    _step(10, 'Fit-Up & Tack Weld', 'Spool fabrication', ['Assemble the spool to its isometric', 'Record fit-up / tack work for each configured weld'], FABRICATE),
-    _step(11, 'QA/QC – Check Dimensions', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions'], QA),
+    _step(10, 'Fit-Up & Tack Weld', 'Spool fabrication', ['Assemble the spool to its isometric', 'Record fit-up / tack work for each configured weld']),
+    _step(11, 'QA/QC – Check Dimensions', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions']),
     _step(12, 'Return to Production', 'Spool fabrication', ['Material coordinator receives the tacked spool', 'Record the scan update']),
     _step(13, 'Release to Process Welder', 'Spool fabrication', ['Issue the tacked spool to the process welder', 'Record the scanned handoff']),
-    _step(14, 'Complete Welds', 'Spool fabrication', ['Complete all individual weld operations to the approved WPS'], ['admin', 'supervisor', 'welder']),
-    _step(15, 'QA/QC – Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks'], QA),
+    _step(14, 'Complete Welds', 'Spool fabrication', ['Complete all individual weld operations to the approved WPS']),
+    _step(15, 'QA/QC – Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
     _step(16, 'Scan Completed Spool', 'Spool fabrication', ['Material coordinator scans the completed spool back into production']),
     _step(17, 'Collect Spools for Assembly', 'Final assembly', ['Collect every required released spool', 'Scan each child spool barcode']),
     _step(18, 'Create Assembly ID', 'Final assembly', ['Verify the assembly ID and barcode / QR', 'Link all child spools to the parent assembly in the system']),
-    _step(19, 'QA/QC – Assembly Inspection', 'Final assembly', ['Verify overall assembly dimensions against the isometric'], QA),
+    _step(19, 'QA/QC – Assembly Inspection', 'Final assembly', ['Verify overall assembly dimensions against the isometric']),
     _step(20, 'Release to Sandblast & Paint', 'Sandblast & paint', ['Material coordinator issues the assembly', 'Record the scanned handoff']),
-    _step(21, 'Sandblast & Paint', 'Sandblast & paint', ['Complete surface preparation and sandblasting', 'Apply paint to the approved specification'], FABRICATE),
-    _step(22, 'QA/QC – Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks'], QA),
+    _step(21, 'Sandblast & Paint', 'Sandblast & paint', ['Complete surface preparation and sandblasting', 'Apply paint to the approved specification']),
+    _step(22, 'QA/QC – Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks']),
     _step(23, 'Release to Ready to Ship', 'Shipment', ['Material coordinator verifies ready-to-ship status', 'Scan and move the assembly to the shipping area', 'Generate and verify shipping documents']),
     _step(24, 'Ship to Customer', 'Shipment', ['Scan the assembly at shipping', 'Record shipment and its destination', 'Complete production records / close the work order']),
 )
@@ -228,6 +227,8 @@ def _dict(row, keys):
 def lock_topology(s):
     if s.get_bind().dialect.name == 'postgresql':
         s.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': TOPOLOGY_LOCK})
+    from administration import refresh_session_authority
+    refresh_session_authority(s)
 
 
 def _locked(s, item_id):
@@ -545,7 +546,7 @@ def detail(s, item, user):
     from transfers import transfer_snapshot
     parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
-    process = process_snapshot(s, item.id)
+    process = process_snapshot(s, item.id, user=user)
     component_ids = _component_ids(s, item.id)
     spool_ids = _spool_ids(s, item.id)
     link = s.get(ComponentLink, item.id)
@@ -568,8 +569,7 @@ def detail(s, item, user):
             actions.append('link-spool')
         if user.role in MANAGE and (plan.route == 'spool' and plan.current_step == 9 or plan.route == 'assembly' and plan.current_step in (17, 18)):
             actions.append('scope')
-        if process['status'] in ('running', 'paused'):
-            actions.append('pause' if process['status'] == 'running' else 'resume')
+        actions.extend(action for action in process['permissions']['allowed_actions'] if action in ('pause', 'resume'))
     if plan and plan.status == 'shipped' and user.role in HANDOFF:
         actions.append('deliver')
     return {

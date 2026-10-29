@@ -12,6 +12,7 @@ This guide describes the implemented tracking extension and the constraints that
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
 | `transfers.py` | Shared sender/receiver validation, versioned custody/location/status state, managed location catalog and ordinary transfer API. |
 | `administration.py` | Explicit admin release/return/custody decisions, current release provenance, versioned employee access and session revocation. |
+| `permissions.py`, `PERMISSIONS_GUIDE.md` | Shared job-position policy, permission catalog and operating matrix; no database writes or automatic employee assignments. |
 | `static/admin.js`, `static/admin.css`, `ADMIN_GUIDE.md` | Administrator workspace, employee controls, role-aware navigation and operating instructions. |
 | `static/handoff.js`, `static/handoff.css`, `HANDOFF_GUIDE.md` | Shared badge/location/status controls, camera lifecycle, ordinary handoff page and operating instructions. |
 | `parts.py` | Optional spool parts plans, whole-piece requirement lines, unique physical allocations, quantity projections and audited scope controls. |
@@ -90,18 +91,34 @@ Existing `/api/items/{id}/inspect`, `/release`, and `/reopen` remain the interfa
 
 ## Authority and roles
 
+`permissions.py` defines ten application positions: `admin`, `supervisor`, `handler` (Material coordinator), `welder`, `fitup_welder`, `process_welder`, `inspector` (QA/QC), `painter`, `finisher` and `misc`. An employee has one position. Existing assignments remain unchanged, including full authority for existing administrators. Unknown positions receive no capabilities. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the full work, timing and documentation matrix.
+
 | Action | Roles |
 | --- | --- |
-| Read tracking; submit evidence | Any active authenticated employee |
-| Record production process timing | Any active authenticated employee; released items remain read-only |
+| Read shared tracking; record ordinary dual-badge custody transfers | Any active employee in a supported position; custody does not grant work authority |
+| Submit requirement evidence | Exact `owner_role`; general welder also covers fit-up/process-welder ownership; admin, supervisor and inspector have submission oversight |
+| Record production process timing | Assigned process scope; admin/supervisor may coordinate all timers; move requires authority over both current and destination process |
 | Create projects, subprojects, plans, welds, requirements, templates; correct metadata | Supervisor, admin |
-| Record fit-up | Handler, welder, supervisor, admin |
-| Record root, fill/cap, completion | Welder, supervisor, admin |
+| Record fit-up or complete step 10 | Welder, fit-up welder, admin |
+| Record root, fill/cap, completion or legacy weld quantities; complete step 14 | Welder, process welder, admin |
+| Complete preparation step 7 / sandblast-paint step 21 | Finisher/admin / painter/admin, respectively |
+| Perform QA steps 2, 11, 15, 19 and 22 | Inspector, admin |
 | Open tracking holds or repair cycles | Inspector, supervisor, admin |
 | Review requirements, close holds, inspect dimensions, approve release | Inspector, admin |
+| Close a free-text legacy rework ticket | Supervisor, admin; actual scoped work and fresh QA remain separate |
 | Reopen a released item; manage employees | Admin |
 
-`owner_role` assigns responsibility; it does not grant approval permission. Frontend visibility helps usability, while the server enforces every permission and gate.
+`owner_role` is enforced for evidence submission and never grants approval permission. Existing default inspector-owned requirements therefore require QA/QC or management submission. Specialists do not inherit general-welder requirements. Supervisors retain planning and coordination without physical welding/painting completion. Frontend visibility follows server permission hints; every mutation independently enforces its permission and state checks.
+
+### Permission response contracts
+
+`GET /api/permissions` returns `{version, roles, current}`. Catalog rows contain `id`, `label`, `description` and the position's policy lists. `POST /api/login` and `GET /api/me` return `badge`, `name`, `role`, `role_label` and `permissions`. The permission lists are `capabilities`, `weld_operations`, `process_keys`, `dossier_check_codes` and `dossier_upload_sections`. Admin employee responses include the same label/lists; `GET /api/admin/employees` also includes the role catalog.
+
+Authenticated Item detail adds `permissions` with `can_weld`, `can_inspect`, `can_open_rework`, `can_release` and `can_reopen`; each rework adds `can_close`. Welds expose `allowed_operations`; requirements expose `permissions.can_submit_evidence` and `can_review`. Process responses expose `permissions.allowed_actions` and `allowed_processes` (`{key,label}` rows). Flow retains its `allowed_actions` and role-bearing step catalog; its pause/resume choices use current process permissions.
+
+Job Packet permissions include `manage`, `write`, `review`, `editable_check_codes`, `upload_sections` and separate `can_handover`. Trades may prepare only their allowed checks/sections; admin/supervisor/inspector may prepare all. Handler, supervisor, inspector and admin may record dispatch/receipt; only inspector/admin may review or issue. Upload authorization checks every prior section for the same project, scope and document code, preventing a new revision from bypassing restrictions by changing its section.
+
+These fields are presentation hints, not evidence or a promise that a workflow is ready. Tracking/process serializers accept an optional user and leave internal `user=None` projections unchanged. Keep user-dependent permission data out of actual-record, construction and checklist fingerprint bases, including the physical/quality records retained inside issued snapshots. Packet-level presentation metadata may retain the issuer's view, but does not enter the acceptance fingerprint or grant a later viewer authority. Opening a view under another position must not invalidate existing approvals.
 
 ## Invariants to preserve
 
@@ -116,7 +133,7 @@ Existing `/api/items/{id}/inspect`, `/release`, and `/reopen` remain the interfa
 
 ## Concurrency and history
 
-Tracking mutations lock the owning `Item` row before changing related state. Hierarchy-changing operations also take a PostgreSQL transaction advisory lock before the item lock. Reload the controlled record under the lock before checking its version; stale SQLAlchemy identity-map values must not bypass a conflict.
+Tracking mutations take the shared topology advisory lock before the owning `Item` row and related state locks. `flow.lock_topology` then calls `administration.refresh_session_authority`, refreshing the employee and stored session version against `s.info['authenticated_session']`. A queued writer whose role, active access or PIN was changed receives `401` before mutation. The refresh takes no Employee row lock, preserving the established Item-before-history/foreign-key lock order. Reload controlled records under their locks before checking versions; stale SQLAlchemy identity-map values must not bypass a conflict. Pure reads take neither advisory nor write locks and create no access-state rows.
 
 Keep validation, inserts, invalidation, counter synchronization, and audit creation in one transaction. Read-snapshot helpers preload records for one spool calculation; they are not a durable cache and must not be reused after writes.
 
@@ -174,7 +191,7 @@ Configured lists expose a compact `parts` summary in tracking, flow and progress
 | --- | --- |
 | `GET /api/transfers/options` | Authenticated location/status catalog with built-in/custom kind, active flag, version and `can_manage_locations`. Inactive custom records remain visible for management; destination selectors filter them. |
 | `GET /api/transfers/items/{id}` | Read-only current custodian/name/active state, recorded location, operational status, transfer version, update metadata and role/release-derived `can_transfer`. |
-| `POST /api/items/{id}/transfer` | Handler/welder/supervisor/admin submits `sender_badge`, receiving `handler`, `location_id`, `operational_status`, strict integer `expected_transfer_version`, and optional notes/scan method. |
+| `POST /api/items/{id}/transfer` | An active employee in any supported position submits `sender_badge`, receiving `handler`, `location_id`, `operational_status`, strict integer `expected_transfer_version`, and optional notes/scan method. |
 | `POST /api/transfers/locations` | Supervisor/admin creates a custom location with `label`; returns 201. |
 | `PATCH /api/transfers/locations/{id}` | Supervisor/admin supplies `label`, `active` and current `expected_version`. Rename/deactivate/reactivate retains historical labels. There is no delete route. |
 
@@ -200,7 +217,7 @@ All `/api/admin` routes require a current active administrator. The shared topol
 | `POST /api/admin/items/{id}/release` | `{expected_version, reason, reference?}` explicitly releases an unreleased item despite its blockers. |
 | `POST /api/admin/items/{id}/return-to-work` | Same decision fields; restores a current override's saved prior route or performs the guarded ordinary-QA reopen. |
 | `POST /api/admin/items/{id}/custody` | Same decision fields plus `handler`, `location_id` and `operational_status`; records an administrative correction without claimed badge scans. |
-| `GET /api/admin/employees` | `{employees, active_admins}`. Employee rows include permanent badge, name, role, active flag, integer version and allowed controls. |
+| `GET /api/admin/employees` | `{employees, roles, active_admins}`. Employee rows include permanent badge, name, role/label, policy permissions, active flag, integer version and allowed controls. |
 | `PATCH /api/admin/employees/{badge}` | `{expected_version, name, role, active, reason}`. No badge replacement or arbitrary field edits. |
 | `POST /api/admin/employees/{badge}/pin` | `{expected_version, pin, reason}`; resets the private PIN and revokes existing sessions. |
 
@@ -232,7 +249,7 @@ The Excel allowlist includes the raw process-event table. Two additional reports
 
 ## Numbered CLM process flow
 
-`flow.py` transcribes the supplied chart into `STEPS` / `STEP_BY_NUMBER`, version `CLM-24-v1`. Routes retain the original numbering: component 1–8, spool 9–16, assembly 17–24. The catalog supplies role lists, checklist identifiers/text, scan/location/handoff/reference requirements and allowed rework destinations. Frontend forms consume those definitions and the authenticated `allowed_actions` response. Keep role enforcement and release gates on the server.
+`flow.py` transcribes the supplied chart into `STEPS` / `STEP_BY_NUMBER`, version `CLM-24-v1`. Routes retain the original numbering: component 1–8, spool 9–16, assembly 17–24. The catalog supplies role lists from `permissions.flow_step_roles`, checklist identifiers/text, scan/location/handoff/reference requirements and allowed rework destinations. Frontend forms consume those definitions and the authenticated `allowed_actions` response. Keep role enforcement and release gates on the server; the separate job-policy version comes from `/api/permissions`.
 
 Four additive tables model the flow: `FlowPlan` is the current route/version/scope and shipment state; `FlowEvent` is its immutable revision history; `FlowException` retains failed inspections and controlled resolution metadata; `ComponentLink` is the current physical component-to-spool assignment. Existing `SpoolPlan.assembly_id` remains authoritative for spool-to-assembly membership. Events snapshot the definition version and step/checklist text so later catalog edits cannot silently rewrite the meaning of recorded observations.
 

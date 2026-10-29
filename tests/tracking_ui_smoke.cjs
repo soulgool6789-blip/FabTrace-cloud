@@ -38,6 +38,8 @@ const spool={item:{id:'S1',description:'Spool <one>',kind:'Spool',location:'Bay 
 const overview={projects:[{id:'P1',name:'Plant One'}],subprojects:[{id:'SUB1',project_id:'P1',name:'Package One'}],templates:[],spools:[summary,released]};
 let failSpool=false, rejectMutation=false;
 const calls=[],messages=[];
+function scopedWeld(){const row=structuredClone(weld),p=require('./ui_permissions_fixture.cjs').policy(context.me.role);row.allowed_operations=p.weld_operations||[];for(const r of row.requirements)r.permissions={can_submit_evidence:['admin','supervisor','inspector'].includes(context.me.role)||r.owner_role===context.me.role,can_review:['admin','inspector'].includes(context.me.role)};return row;}
+function scopedSpool(){const row=structuredClone(spool);row.welds=[scopedWeld()];return row;}
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const context={
   document:{getElementById:id=>elements.get(id)||null},
@@ -51,14 +53,14 @@ const context={
     calls.push({url,...options});
     if(options.method){if(rejectMutation)throw Error('Record changed; refresh and try again.');return requirement;}
     if(url.startsWith('/api/tracking/overview'))return structuredClone(overview);
-    if(url==='/api/tracking/spools/S1'){if(failSpool){failSpool=false;throw Error('Temporary unavailable')}return structuredClone(spool)}
-    if(url==='/api/tracking/welds/WLD1')return structuredClone(weld);
+    if(url==='/api/tracking/spools/S1'){if(failSpool){failSpool=false;throw Error('Temporary unavailable')}return scopedSpool()}
+    if(url==='/api/tracking/welds/WLD1')return scopedWeld();
     if(url.startsWith('/api/tracking/exceptions'))return {exceptions:[]};
     throw Error('Unexpected endpoint '+url);
   },
 };
 context.window=context;
-vm.createContext(context);
+vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/tracking.js'),'utf8'),context);
 const html=()=>elements.get('trackingContent').innerHTML;
 const click=async(action,id='')=>elements.get('trackingContent').listeners.click({target:{closest:()=>({dataset:{ftAction:action,ftId:id},disabled:false})}});
@@ -113,9 +115,14 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   assert.doesNotMatch(html(),/data-ft-action="review-accept"/);
   assert.doesNotMatch(html(),/data-ft-action="edit-weld"/);
   assert.doesNotMatch(html(),/data-ft-action="new-hold"/);
-  assert.match(html(),/data-ft-action="evidence"/);
+  assert.doesNotMatch(html(),/data-ft-action="evidence"/,'an inspector-owned requirement is read-only to a welder');
   assert.match(html(),/data-ft-id="fill_cap"/);
 
+  for(const [position,expected] of [['fitup_welder',['fitup']],['process_welder',['fill_cap','complete']],['painter',[]],['finisher',[]],['handler',[]],['supervisor',[]],['misc',[]]]){
+    context.me.role=position;await context.FabTracking.open({spool:'S1',weld:'WLD1'});
+    assert.deepEqual([...html().matchAll(/data-ft-action="work" data-ft-id="([^"]+)"/g)].map(x=>x[1]),expected,position+' sees only its authorized welding operations');
+    if(!expected.length){const before=calls.filter(c=>c.method).length;await click('work','fill_cap');assert.equal(elements.get('trackingDialog').open,false);assert.equal(calls.filter(c=>c.method).length,before);}
+  }
   context.me.role='inspector';await context.FabTracking.open({spool:'S1',weld:'WLD1'});
   assert.match(html(),/data-ft-action="review-accept"/);
   assert.doesNotMatch(html(),/data-ft-action="work"/);

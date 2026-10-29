@@ -1,5 +1,9 @@
 # FabTrace project progress and final Job Packet guide
 
+## Position-specific controls
+
+Employees prepare records for their assigned jobs. Painters edit surface/coating entries; finishers edit surface/packaging entries; welding positions edit procedure and applicable brazing/bonding entries; material coordinators edit material, packaging and packing-slip entries. Upload section choices follow those responsibilities. Supervisors, QA/QC and administrators can coordinate the full packet. QA/QC and administrators perform signed reviews and issue the packet. Material coordinators, supervisors, QA/QC and administrators record controlled package dispatch/receipt. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the exact matrix and employee assignment instructions.
+
 An **Administrative release** is an explicit management disposition and remains distinguishable from ordinary QA release. It does not satisfy the final QA release checklist or authorize a QA-issued Job Packet. Existing evidence, physical work and holds keep their actual status; the admin decision and outstanding conditions stay visible. Use **Admin controls → Return to work** to resume the appropriate work/QA path. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
 
 This guide covers the **Project progress** and **Job Packets** screens introduced in `2026.10.29-dossier.1`. Continue using **Projects & welds** for individual joints, **Process flow** for the numbered traveler, and **Audit readiness** for the five audit prompts. The new screens assemble those records into a controlled completion package.

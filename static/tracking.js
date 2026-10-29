@@ -6,12 +6,13 @@
   const encode = encodeURIComponent;
   const state = {view:'overview', project:'', subproject:'', query:'', status:'', processFilter:'', overview:null, spool:null, weld:null, routeSpool:'', routeWeld:'', exceptions:[], sequence:0, dialogAction:null, dialogStale:false, processCatalog:null, processDialogLoading:false};
   const role = () => me?.role || '';
-  const allowed = roles => roles.includes(role());
-  const manage = () => allowed(['admin','supervisor']);
-  const review = () => allowed(['admin','inspector']);
-  const holdRole = () => allowed(['admin','supervisor','inspector']);
-  const productionRole = () => allowed(['admin','supervisor','welder']);
-  const processRole = () => allowed(['admin','supervisor','handler','welder','inspector']);
+  const capability = name => window.FabPermissions?.can(name)===true;
+  const manage = () => capability('manage_production');
+  const review = () => capability('quality_review');
+  const holdRole = () => capability('open_rework');
+  const roleLabel = id => window.FabPermissions?.label(id)||id;
+  const processAllowed = (action,process=state.spool?.production_process) => Array.isArray(process?.permissions?.allowed_actions)&&process.permissions.allowed_actions.includes(action);
+  const operationAllowed = (operation,weld=state.weld) => Array.isArray(weld?.allowed_operations)&&weld.allowed_operations.includes(operation);
   const stamp = value => value ? new Date(value).toLocaleString() : '—';
   const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
   const arr = value => Array.isArray(value) ? value : [];
@@ -269,7 +270,7 @@
   function renderExceptions() {
     const q=state.query.toLowerCase().trim();
     const rows=state.exceptions.filter(x=>!q||[x.item_id,x.weld_number,x.label,x.type,x.owner_role].some(v=>String(v||'').toLowerCase().includes(q)));
-    return `<div class="card"><div class="ft-section-heading"><h2>Outstanding requirements</h2><span class="muted">${rows.length} records</span></div><p class="ft-filter-note">Each row points to the spool or weld where the requirement can be resolved. Submitted evidence still requires an authorized review.</p>${rows.length?wrap(`<table class="ft-table"><thead><tr><th>Spool</th><th>Weld</th><th>Requirement / blocker</th><th>Status</th><th>Responsible role</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td>${btn('open-spool',x.item_id,x.item_id,'ft-link')}</td><td>${esc(x.weld_number||'Spool level')}</td><td>${esc(x.label||x.type)}${small(x.type||'')}</td><td>${badge(x.status||'pending')}</td><td>${esc(x.owner_role||'Supervisor')}</td><td>${btn(x.weld_id?'open-weld':'open-spool','Open',x.weld_id||x.item_id)}</td></tr>`).join('')}</tbody></table>`):empty('No outstanding requirements in this view','Choose another project or clear the search to see more records.')}</div>`;
+    return `<div class="card"><div class="ft-section-heading"><h2>Outstanding requirements</h2><span class="muted">${rows.length} records</span></div><p class="ft-filter-note">Each row points to the spool or weld where the requirement can be resolved. Submitted evidence still requires an authorized review.</p>${rows.length?wrap(`<table class="ft-table"><thead><tr><th>Spool</th><th>Weld</th><th>Requirement / blocker</th><th>Status</th><th>Responsible role</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td>${btn('open-spool',x.item_id,x.item_id,'ft-link')}</td><td>${esc(x.weld_number||'Spool level')}</td><td>${esc(x.label||x.type)}${small(x.type||'')}</td><td>${badge(x.status||'pending')}</td><td>${esc(roleLabel(x.owner_role)||'Supervisor')}</td><td>${btn(x.weld_id?'open-weld':'open-spool','Open',x.weld_id||x.item_id)}</td></tr>`).join('')}</tbody></table>`):empty('No outstanding requirements in this view','Choose another project or clear the search to see more records.')}</div>`;
   }
   function renderTemplates() {
     const templates=arr(state.overview.templates);
@@ -282,7 +283,7 @@
   function renderSpool() {
     const s=state.spool, item=s.item, plan=s.plan;
     let actions=btn('item-record','Item & QR record',item.id);
-    actions+=btn('process-flow','Process flow',item.id);if(role()==='admin')actions+=btn('admin-controls','Admin controls',item.id);
+    actions+=btn('process-flow','Process flow',item.id);if(capability('admin'))actions+=btn('admin-controls','Admin controls',item.id);
     if(item.kind!=='Assembly')actions+=btn('spool-parts','Spool parts',item.id);
     if(manage()&&!item.released) actions+=btn('edit-plan',plan?'Edit spool plan':'Set up spool','','primary');
     let html=crumbs()+pageHeading(item.id,item.description||'Spool / item',actions);
@@ -291,7 +292,7 @@
     html+=metrics({...summary,spools:1,welds_planned:plan.planned_welds,ready_to_release:summary.ready_to_release&&!item.released?1:0,released:item.released?1:0});
     html+=renderProcess();
     if(s.parts?.configured){const t=s.parts.totals||{},required=number(t.required_qty),prepared=number(t.prepared_qty);html+=`<section class="card"><div class="ft-section-heading"><h2>Required parts</h2>${btn('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${number(t.assigned_qty)} assigned · ${number(t.received_qty)} receipt recorded · ${number(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}<p class="ft-footer-note">Counts come from the required parts list and individual component records. Prepared quantities do not approve the spool's welds or final release.</p></section>`;}
-    html+=`<div class="card"><div class="ft-section-heading"><h2>Spool plan</h2>${item.release_control?.mode==='admin_override'?'<span class="fa-release-tag">Administrative release · changes locked</span>':item.released?'<span class="ft-tag good">QA released · changes locked</span>':badge('open')}</div>${definitionRows([['Project',summary.project_name||plan.project_id],['Subproject',summary.subproject_name||plan.subproject_id],['Assembly',plan.assembly_id],['Drawing revision',plan.drawing_revision||item.drawing],['Target date',plan.due_date],['Location / handler',`${item.location||'—'} · ${item.handler||'—'}`]])}${plan.notes?`<p>${esc(plan.notes)}</p>`:''}${plan.zero_weld_reason?`<p class="muted">Zero-weld plan: ${esc(plan.zero_weld_reason)}</p>`:''}${arr(summary.blockers).length?`<details class="ft-fold" open><summary>${summary.blockers.length} release checks outstanding</summary><ul>${summary.blockers.map(b=>`<li>${esc(b)}</li>`).join('')}</ul></details>`:'<p class="muted">All current tracking checks are satisfied.</p>'}<div class="actions">${!item.released&&review()?btn('dimensional','Record dimensional inspection'):''}${!item.released&&review()?btn('release','Approve final release','','primary'):''}${role()==='admin'?btn('admin-controls',item.released?'Release / return controls':'Release as administrator',item.id):''}${item.released&&role()==='admin'&&item.release_control?.mode!=='admin_override'?btn('reopen','Reopen released spool'):''}</div><p class="ft-footer-note">Ordinary final release records QA approval. Administrative release is identified separately and retains unresolved requirements. Shipment and delivery have their own records.</p></div>`;
+    html+=`<div class="card"><div class="ft-section-heading"><h2>Spool plan</h2>${item.release_control?.mode==='admin_override'?'<span class="fa-release-tag">Administrative release · changes locked</span>':item.released?'<span class="ft-tag good">QA released · changes locked</span>':badge('open')}</div>${definitionRows([['Project',summary.project_name||plan.project_id],['Subproject',summary.subproject_name||plan.subproject_id],['Assembly',plan.assembly_id],['Drawing revision',plan.drawing_revision||item.drawing],['Target date',plan.due_date],['Location / handler',`${item.location||'—'} · ${item.handler||'—'}`]])}${plan.notes?`<p>${esc(plan.notes)}</p>`:''}${plan.zero_weld_reason?`<p class="muted">Zero-weld plan: ${esc(plan.zero_weld_reason)}</p>`:''}${arr(summary.blockers).length?`<details class="ft-fold" open><summary>${summary.blockers.length} release checks outstanding</summary><ul>${summary.blockers.map(b=>`<li>${esc(b)}</li>`).join('')}</ul></details>`:'<p class="muted">All current tracking checks are satisfied.</p>'}<div class="actions">${!item.released&&review()?btn('dimensional','Record dimensional inspection'):''}${!item.released&&review()?btn('release','Approve final release','','primary'):''}${capability('admin')?btn('admin-controls',item.released?'Release / return controls':'Release as administrator',item.id):''}${item.released&&capability('admin')&&item.release_control?.mode!=='admin_override'?btn('reopen','Reopen released spool'):''}</div><p class="ft-footer-note">Ordinary final release records QA approval. Administrative release is identified separately and retains unresolved requirements. Shipment and delivery have their own records.</p></div>`;
     html+=`<div class="card"><div class="ft-section-heading"><h2>Individual weld matrix</h2>${manage()&&!isLocked()?btn('new-weld','Add weld','','primary'):''}</div><p class="ft-filter-note">${arr(s.welds).length} defined / ${number(plan.planned_welds)} planned joints. Root and fill / cap records count toward one joint.</p>${renderMatrix(arr(s.welds))}</div>`;
     html+=`<div class="ft-two-col"><div class="card"><div class="ft-section-heading"><h2>Spool requirements</h2>${manage()&&!isLocked()?btn('new-requirement','Add requirement'):''}</div>${renderRequirements(arr(s.requirements))}</div><div><div class="card"><div class="ft-section-heading"><h2>Holds</h2>${holdRole()&&!isLocked()?btn('new-hold','Place hold'):''}</div>${renderHolds(arr(s.holds))}</div><div class="card"><h2>Recent tracking history</h2>${renderAudit(arr(s.history).slice(0,20))}</div></div></div>`;
     return html;
@@ -303,10 +304,10 @@
     let actions='';
     if(process.flow_managed){
       actions=btn('process-flow','Open process flow',state.spool.item.id,'primary');
-      if(processRole()&&process.flow_status==='active'&&current)actions+=process.status==='paused'?btn('process-resume','Resume process'):btn('process-pause','Pause / record delay');
-    }else if(processRole()&&!isLocked()){
-      if(!current)actions=btn('process-start',visits.length?'Start another process':'Start process','','primary');
-      else actions=btn('process-move','Move to next process','','primary')+(process.status==='paused'?btn('process-resume','Resume process'):btn('process-pause','Pause / record delay'))+btn('process-finish','Finish process');
+      if(process.flow_status==='active'&&current){if(processAllowed('resume',process))actions+=btn('process-resume','Resume process');if(processAllowed('pause',process))actions+=btn('process-pause','Pause / record delay');}
+    }else if(!isLocked()){
+      if(!current&&processAllowed('start',process))actions=btn('process-start',visits.length?'Start another process':'Start process','','primary');
+      if(current){if(processAllowed('move',process))actions+=btn('process-move','Move to next process','','primary');if(processAllowed('resume',process))actions+=btn('process-resume','Resume process');if(processAllowed('pause',process))actions+=btn('process-pause','Pause / record delay');if(processAllowed('finish',process))actions+=btn('process-finish','Finish process');}
     }
     let html=`<section class="card ft-process-card" aria-labelledby="ftProcessHeading"><div class="ft-section-heading"><h2 id="ftProcessHeading">Production process time</h2>${processBadge(process.status)}</div>`;
     if(current){
@@ -349,7 +350,7 @@
     const beforeClear=before.every(r=>r.satisfied!==undefined?r.satisfied:['accepted','not_applicable'].includes(r.status));
     const holds=Boolean(state.spool.item.on_hold)||[...arr(w.holds),...arr(state.spool.holds).filter(h=>!h.weld_id||h.weld_id===w.id)].some(h=>!closedHold(h));
     const required=arr(w.required_operations).length?w.required_operations:['root','fill_cap'];
-    const defs=[['fitup','Record fit-up',allowed(['admin','supervisor','welder','handler'])],...required.map(operation=>[operation,operation==='root'?'Record root':'Record fill / cap',productionRole()]),['complete','Mark weld complete',productionRole()]];
+    const defs=[['fitup','Record fit-up',operationAllowed('fitup',w)],...required.map(operation=>[operation,operation==='root'?'Record root':'Record fill / cap',operationAllowed(operation,w)]),['complete','Mark weld complete',operationAllowed('complete',w)]];
     let html='<div class="actions">';
     for(const [operation,label,permitted] of defs) {
       if(!permitted) continue;
@@ -371,9 +372,9 @@
       const evidence=arr(r.evidence), reviews=arr(r.reviews);
       const currentEvidence=evidence.filter(e=>number(e.cycle)===number(r.cycle));
       const latest=currentEvidence[0];
-      const canSubmit=!isLocked()&&allowed(['admin','supervisor','inspector','welder','handler']);
-      const reviewButtons=!isLocked()&&review();
-      return `<article class="ft-requirement" id="ft-requirement-${esc(r.id)}"><div class="row"><h3>${esc(r.label)}</h3>${requirementBadge(r)}</div><p class="muted">${esc(stageNames[r.stage]||r.stage)} · ${esc(r.owner_role||'Assigned role')} · ${r.evidence_required?'Evidence required':'Evidence optional'}</p>${r.source?`<p><strong>Source:</strong> ${esc(r.source)}</p>`:''}${arr(r.check_errors).length?`<p><strong>Prerequisites:</strong> ${r.check_errors.map(esc).join('; ')}</p>`:''}${latest?`<p><strong>Latest evidence:</strong> ${safeEvidence(latest.reference)}${latest.result?' · '+esc(latest.result):''}</p>${latest.notes?`<p>${esc(latest.notes)}</p>`:''}<p class="muted">${esc(latest.actor)} · ${stamp(latest.at)}</p>`:'<p class="muted">No evidence recorded for the current work cycle.</p>'}<div class="actions">${canSubmit?btn('evidence','Record evidence',r.id):''}${reviewButtons?btn('review-accept','Accept',r.id)+btn('review-reject','Reject',r.id)+(r.allow_na?btn('review-na','Not applicable',r.id):''):''}</div>${evidence.length||reviews.length?`<details class="ft-fold"><summary>Evidence & review history (${evidence.length+reviews.length})</summary>${evidence.map(e=>`<div class="ft-history"><strong>Evidence · ${esc(e.result||'recorded')}</strong><p>${safeEvidence(e.reference)}</p>${e.notes?`<p>${esc(e.notes)}</p>`:''}<small>${esc(e.actor)} · ${stamp(e.at)} · cycle ${esc(e.cycle)}</small></div>`).join('')}${reviews.map(v=>`<div class="ft-history"><strong>Review · ${esc(statusNames[v.decision]||v.decision||v.status)}</strong>${v.notes?`<p>${esc(v.notes)}</p>`:''}<small>${esc(v.actor||v.reviewer)} · ${stamp(v.at)} · cycle ${esc(v.cycle)}</small></div>`).join('')}</details>`:''}</article>`;
+      const canSubmit=!isLocked()&&r.permissions?.can_submit_evidence===true;
+      const reviewButtons=!isLocked()&&r.permissions?.can_review===true;
+      return `<article class="ft-requirement" id="ft-requirement-${esc(r.id)}"><div class="row"><h3>${esc(r.label)}</h3>${requirementBadge(r)}</div><p class="muted">${esc(stageNames[r.stage]||r.stage)} · ${esc(roleLabel(r.owner_role)||'Assigned role')} · ${r.evidence_required?'Evidence required':'Evidence optional'}</p>${r.source?`<p><strong>Source:</strong> ${esc(r.source)}</p>`:''}${arr(r.check_errors).length?`<p><strong>Prerequisites:</strong> ${r.check_errors.map(esc).join('; ')}</p>`:''}${latest?`<p><strong>Latest evidence:</strong> ${safeEvidence(latest.reference)}${latest.result?' · '+esc(latest.result):''}</p>${latest.notes?`<p>${esc(latest.notes)}</p>`:''}<p class="muted">${esc(latest.actor)} · ${stamp(latest.at)}</p>`:'<p class="muted">No evidence recorded for the current work cycle.</p>'}<div class="actions">${canSubmit?btn('evidence','Record evidence',r.id):''}${reviewButtons?btn('review-accept','Accept',r.id)+btn('review-reject','Reject',r.id)+(r.allow_na?btn('review-na','Not applicable',r.id):''):''}</div>${evidence.length||reviews.length?`<details class="ft-fold"><summary>Evidence & review history (${evidence.length+reviews.length})</summary>${evidence.map(e=>`<div class="ft-history"><strong>Evidence · ${esc(e.result||'recorded')}</strong><p>${safeEvidence(e.reference)}</p>${e.notes?`<p>${esc(e.notes)}</p>`:''}<small>${esc(e.actor)} · ${stamp(e.at)} · cycle ${esc(e.cycle)}</small></div>`).join('')}${reviews.map(v=>`<div class="ft-history"><strong>Review · ${esc(statusNames[v.decision]||v.decision||v.status)}</strong>${v.notes?`<p>${esc(v.notes)}</p>`:''}<small>${esc(v.actor||v.reviewer)} · ${stamp(v.at)} · cycle ${esc(v.cycle)}</small></div>`).join('')}</details>`:''}</article>`;
     }).join('');
   }
   function renderWork(work) {
@@ -409,25 +410,26 @@
     if(state.processDialogLoading)return;
     const spool=state.spool, process=spool?.production_process, sequence=state.sequence;
     const flowPause=process?.flow_managed&&process.flow_status==='active'&&['pause','resume'].includes(action);
-    if(!processRole()||isLocked()&&!flowPause)throw Error('This spool is read-only for process changes.');
+    if(!processAllowed(action,process)||isLocked()&&!flowPause)throw Error('Your job position cannot change this process.');
     if(process?.flow_managed&&!flowPause)throw Error('Use Process flow to complete the numbered step and change its process.');
     if(!process)throw Error('Refresh the spool to load its current process timing.');
     const selecting=action==='start'||action==='move';
     state.processDialogLoading=true;
     try{
-      if(selecting&&!state.processCatalog)state.processCatalog=arr(await api(ROOT+'/processes'));
+      const choices=arr(process.permissions?.allowed_processes);
+      if(selecting&&!choices.length)throw Error('Your position has no permitted destination process.');
       if(sequence!==state.sequence||state.spool?.item?.id!==spool.item.id)return;
       const titles={start:'Start production process',move:'Move to next process',pause:'Pause process / record delay',resume:'Resume process',finish:'Finish process'};
       const buttons={start:'Start process',move:'Move & start next process',pause:'Pause process',resume:'Resume process',finish:'Finish process'};
       const notes={start:'The server records the start time when you save.',move:'Moving closes the current visit and starts the next process at the same time.',pause:'Elapsed time keeps counting during a pause. Record what is delaying the spool.',resume:'Running time resumes when you save. The recorded pause stays in the history.',finish:'Finish when the spool leaves this process. Timing stays stopped until another process starts.'};
       let html=`<p><strong>${esc(spool.item.id)}</strong>${process.current?' · '+esc(process.current.process_name):''}</p><div class="notice">${notes[action]}</div>`;
-      if(selecting)html+=grid(field('process_key','Production process','',{required:true,options:[['','Select process'],...arr(state.processCatalog).filter(x=>action!=='move'||x.key!==process.current?.process_key).map(x=>[x.key,x.label]),['custom','Custom process']]}))+`<div id="ftProcessCustom" class="hidden">${field('process_name','Custom process name','',{maxlength:80,minlength:2,disabled:true,help:'Use the same name for repeat visits so their times add together.'})}</div>`;
+      if(selecting)html+=grid(field('process_key','Production process','',{required:true,options:[['','Select process'],...choices.filter(x=>action!=='move'||x.key==='custom'||x.key!==process.current?.process_key).map(x=>[x.key,x.label])]}))+`<div id="ftProcessCustom" class="hidden">${field('process_name','Custom process name','',{maxlength:80,minlength:2,disabled:true,help:'Use the same name for repeat visits so their times add together.'})}</div>`;
       html+=grid(field('notes',action==='pause'?'Delay reason':'Notes / work center (optional)','',{required:action==='pause',type:'textarea',full:true,maxlength:2000,help:action==='pause'?'For example: waiting for material, inspector, equipment, or another crew.':''}));
       dialog(titles[action],html,async data=>{
         const payload={action,expected_version:process.version,notes:String(data.notes||'').trim()};
         if(action==='pause'&&payload.notes.length<3)throw Error('Enter a delay reason of at least 3 characters.');
         if(selecting){
-          if(!data.process_key)throw Error('Select a production process.');
+          if(!choices.some(choice=>choice.key===data.process_key))throw Error('Choose a process permitted for your position.');
           payload.process_key=data.process_key;
           if(data.process_key==='custom'){
             payload.process_name=String(data.process_name||'').trim();
@@ -504,7 +506,7 @@
   }
   function requirementDefinitionFields(value={},prefix='') {
     const name=key=>prefix+key;
-    return field(name('code'),'Requirement code',value.code||'',{required:true,maxlength:80})+field(name('label'),'Requirement name',value.label||'',{required:true,maxlength:200})+field(name('stage'),'Approval stage',value.stage||'after_welding',{options:Object.entries(stageNames)})+field(name('owner_role'),'Responsible role',value.owner_role||'inspector',{options:[['handler','Handler'],['welder','Welder'],['inspector','Inspector'],['supervisor','Supervisor'],['admin','Administrator']]})+field(name('check'),'Record prerequisite',value.check||'none',{options:[['none','Evidence / review only'],['materials','Both material sides must be identified'],['procedure','WPS and revision must be recorded'],['welding_complete','Weld must be complete']]})+field(name('source'),'Requirement / acceptance source',value.source||'',{maxlength:1000,help:'Code, contract, WPS, inspection plan, or approved procedure reference.',full:true});
+    return field(name('code'),'Requirement code',value.code||'',{required:true,maxlength:80})+field(name('label'),'Requirement name',value.label||'',{required:true,maxlength:200})+field(name('stage'),'Approval stage',value.stage||'after_welding',{options:Object.entries(stageNames)})+field(name('owner_role'),'Responsible role',value.owner_role||'inspector',{options:(window.FabPermissions?.roles()||[]).map(role=>[role.id,role.label])})+field(name('check'),'Record prerequisite',value.check||'none',{options:[['none','Evidence / review only'],['materials','Both material sides must be identified'],['procedure','WPS and revision must be recorded'],['welding_complete','Weld must be complete']]})+field(name('source'),'Requirement / acceptance source',value.source||'',{maxlength:1000,help:'Code, contract, WPS, inspection plan, or approved procedure reference.',full:true});
   }
   function newRequirement() {
     dialog(state.weld?'Add weld requirement':'Add spool requirement',grid(requirementDefinitionFields())+check('evidence_required','Evidence is required before acceptance.',true)+check('allow_na','Allow an inspector or administrator to approve a justified not-applicable decision.'),data=>{
@@ -516,14 +518,17 @@
   }
   function recordEvidence(id) {
     const r=findRequirement(id);if(!r)throw Error('Requirement not found. Refresh the record.');
+    if(isLocked()||r.permissions?.can_submit_evidence!==true)throw Error('Your job position cannot submit this requirement’s evidence.');
     dialog('Record evidence · '+r.label,'<div class="notice">Saving evidence records the result for review. It does not accept the requirement or release the weld.</div>'+grid(field('reference','Report / record reference','',{required:true,minlength:2,maxlength:500,full:true,help:'Enter an identifiable report reference or an http(s) link.'})+field('result','Recorded result','recorded',{options:[['recorded','Recorded / no pass-fail result'],['pass','Pass'],['fail','Fail']]})+field('notes','Measurements, findings, or evidence notes','',{type:'textarea',full:true})),data=>request('/requirements/'+encode(r.id)+'/evidence','POST',{...data,expected_version:r.version}),'Submit evidence');
   }
   function reviewRequirement(id,decision) {
     const r=findRequirement(id);if(!r)throw Error('Requirement not found. Refresh the record.');
+    if(isLocked()||r.permissions?.can_review!==true)throw Error('QA/QC permission is required to review this requirement.');
     const title=decision==='accepted'?'Accept requirement':decision==='rejected'?'Reject requirement':'Approve not applicable';
     dialog(title+' · '+r.label,`<p>${esc(r.source||'Review the applicable project requirements and supporting evidence.')}</p>`+grid(field('notes',decision==='not_applicable'?'Justification and authorization reference':'Review notes / approval reference','',{required:true,type:'textarea',full:true})),data=>request('/requirements/'+encode(r.id)+'/review','POST',{...data,decision,expected_version:r.version}),title);
   }
   function work(operation) {
+    if(isLocked()||!operationAllowed(operation))throw Error('Your job position cannot record this welding operation.');
     dialog(operationNames[operation]||'Record work',`<p><strong>${esc(state.weld.number)}</strong> · ${esc(me.name)} (${esc(me.badge)})</p>`+grid(field('notes','Work notes / traveler reference','',{type:'textarea',full:true})),data=>request('/welds/'+encode(state.weld.id)+'/work','POST',{...data,operation}),'Record work');
   }
   function newHold() {
@@ -574,6 +579,10 @@
   }
 
   async function act(action,id) {
+    if(['new-project','new-subproject','plan-spool','edit-plan','new-weld','edit-weld','new-requirement','new-template','copy-template'].includes(action)&&!manage())throw Error('Production planning permission is required.');
+    if(['new-hold','repair'].includes(action)&&!holdRole())throw Error('Your position cannot open a hold or repair.');
+    if(['close-hold','dimensional','release'].includes(action)&&!review())throw Error('QA/QC permission is required.');
+    if(['reopen','admin-controls'].includes(action)&&!capability('admin'))throw Error('Administrator permission is required.');
     if(action==='process-flow')return window.FabFlow.open({item:id||state.spool?.item?.id});
     if(action==='spool-parts')return window.FabParts.open({spool:id||state.spool?.item?.id,project:state.spool?.plan?.project_id||state.project});
     if(['process-start','process-move','process-pause','process-resume','process-finish'].includes(action))return processAction(action.slice(8));
@@ -602,7 +611,7 @@
     if(action==='close-hold')return closeHold(id);
     if(action==='repair')return repair();
     if(action==='dimensional')return dimensional();
-    if(action==='admin-controls'&&role()==='admin')return window.FabAdmin.open({item:id||state.spool.item.id});
+    if(action==='admin-controls'&&capability('admin'))return window.FabAdmin.open({item:id||state.spool.item.id});
     if(action==='release')return releaseSpool();
     if(action==='reopen')return reopenSpool();
     if(action==='new-template')return templateForm();

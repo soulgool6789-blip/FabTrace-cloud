@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, select, func, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from pwdlib import PasswordHash
+from permissions import Role, role_catalog, role_label, user_permissions, has_capability, require_capability
 
 DATABASE_URL=os.environ.get('DATABASE_URL','')
 # Render PostgreSQL supplies postgresql://, but SQLAlchemy must use the
@@ -37,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.29-admin.1'
+APP_VERSION='2026.10.29-permissions.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -165,6 +166,15 @@ def item_dict(s,r,user=None):
     d['transfer']=transfer_snapshot(s,r,user)
     from administration import release_summary
     d['release_control']=release_summary(s,r)
+    if user is not None:
+        d['permissions']={
+            'can_weld':has_capability(user,'weld_production') and not r.released and not d['tracking_enabled'],
+            'can_inspect':has_capability(user,'inspect') and not r.released,
+            'can_open_rework':has_capability(user,'open_rework') and not r.released,
+            'can_release':has_capability(user,'inspect') and not r.released,
+            'can_reopen':has_capability(user,'admin') and bool(r.released)}
+        for row in d['reworks']:
+            row['can_close']=has_capability(user,'close_rework') and not r.released and row['closed_at'] is None
     return d
 
 @app.middleware('http')
@@ -199,7 +209,7 @@ def login(data:Login,response:Response,request:Request,s:Session=Depends(db)):
     token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow(),'sv':session_version(s,u.badge)},JWT_SECRET,algorithm='HS256')
     response.set_cookie('fabtrace_session',token,httponly=True,secure=os.environ.get('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=8*3600,path='/')
     audit(s,None,u.badge,'LOGIN',{'result':'success'});s.commit()
-    return {'badge':u.badge,'name':u.name,'role':u.role}
+    return {'badge':u.badge,'name':u.name,'role':u.role,'role_label':role_label(u),'permissions':user_permissions(u)}
 @app.post('/api/logout')
 def logout(response:Response,u:Employee=Depends(auth),s:Session=Depends(db)):
     audit(s,None,u.badge,'LOGOUT',{});s.commit()
@@ -207,12 +217,17 @@ def logout(response:Response,u:Employee=Depends(auth),s:Session=Depends(db)):
     return {'ok':True}
 @app.get('/api/me')
 def me(u:Employee=Depends(auth)):
-    return {'badge':u.badge,'name':u.name,'role':u.role}
+    return {'badge':u.badge,'name':u.name,'role':u.role,'role_label':role_label(u),'permissions':user_permissions(u)}
+@app.get('/api/permissions')
+def permissions(u:Employee=Depends(auth)):
+    from permissions import VERSION
+    return {'version':VERSION,'roles':role_catalog(),'current':user_permissions(u)}
+
 class EmployeeIn(BaseModel):
     badge:str=Field(min_length=2,max_length=80,pattern=r'^[A-Za-z0-9_-]+$')
     name:str=Field(min_length=2,max_length=160)
     pin:str=Field(min_length=8,max_length=128)
-    role:Literal['admin','supervisor','handler','welder','inspector']
+    role:Role
 @app.get('/api/employees')
 def employees(u:Employee=Depends(auth),s:Session=Depends(db)):
     permit(u,'admin');return [asdict(x,'badge name role active'.split()) for x in s.scalars(select(Employee).order_by(Employee.name)).all()]
@@ -266,6 +281,7 @@ class ItemIn(BaseModel):
     welds_required:int=Field(default=0,ge=0)
 @app.post('/api/items',status_code=201)
 def create_item(data:ItemIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    lock_flow_topology(s)
     permit(u,'admin','supervisor')
     if s.get(Item,data.id):raise HTTPException(409,'Item ID already exists')
     if not s.get(Employee,data.handler):raise HTTPException(422,'Unknown handler badge')
@@ -278,6 +294,7 @@ class PartNumberUpdate(BaseModel):
 
 @app.patch('/api/items/{item_id}/part-number')
 def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth),s:Session=Depends(db)):
+    lock_flow_topology(s)
     permit(u,'admin','supervisor')
     r=lock_item(s,item_id);require_unreleased(r)
     before=r.google_part_number
@@ -305,6 +322,7 @@ class BulkImport(BaseModel):
 @app.post('/api/items/bulk',status_code=201)
 def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends(db)):
     """Atomic import: each quantity makes a separately traceable physical item."""
+    lock_flow_topology(s)
     permit(u,'admin','supervisor')
     if sum(row.quantity for row in data.rows)>500:
         raise HTTPException(422,'Maximum 500 individual items per request; import in batches')
@@ -359,7 +377,8 @@ class WeldEvent(BaseModel):
     notes:str=Field(default='',max_length=2000)
 @app.post('/api/items/{item_id}/weld')
 def weld(item_id:str,data:WeldEvent,u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    lock_flow_topology(s)
+    require_capability(u,'weld_production');r=lock_item(s,item_id);require_unreleased(r)
     if is_tracked(s,r):
         raise HTTPException(409,'This spool uses individual weld tracking. Record work on the specific weld in Projects & welds.')
     if r.welds_done+data.count>r.welds_required:raise HTTPException(409,'Exceeds required weld count; change controlled traveler first')
@@ -372,6 +391,7 @@ class InspectionIn(BaseModel):
     measurements:str=Field(min_length=2,max_length=5000)
 @app.post('/api/items/{item_id}/inspect')
 def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    lock_flow_topology(s)
     permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
     if is_tracked(s,r) and data.kind=='Weld':
         raise HTTPException(409,'Review each weld requirement in Projects & welds. Aggregate weld inspection cannot accept individual welds.')
@@ -390,6 +410,7 @@ class ReworkIn(BaseModel):
     assigned:str=Field(min_length=2,max_length=80)
 @app.post('/api/items/{item_id}/rework',status_code=201)
 def open_rework(item_id:str,data:ReworkIn,u:Employee=Depends(auth),s:Session=Depends(db)):
+    lock_flow_topology(s)
     permit(u,'inspector','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
     if not s.get(Employee,data.assigned):raise HTTPException(422,'Unknown employee badge')
     r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started';r.last_work_at=utcnow()
@@ -401,7 +422,8 @@ class CloseRework(BaseModel):
     notes:str=Field(min_length=4,max_length=3000)
 @app.post('/api/items/{item_id}/rework/{rework_id}/close')
 def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(auth),s:Session=Depends(db)):
-    permit(u,'welder','supervisor','admin');r=lock_item(s,item_id);require_unreleased(r)
+    lock_flow_topology(s)
+    require_capability(u,'close_rework');r=lock_item(s,item_id);require_unreleased(r)
     x=s.get(Rework,rework_id)
     if not x or x.item_id!=r.id:raise HTTPException(404,'Rework not found')
     if x.closed_at:raise HTTPException(409,'Rework already closed')
