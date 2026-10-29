@@ -12,6 +12,7 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 - Separate requirement definitions, submitted evidence, inspector reviews, holds, repairs, and audit history.
 - Immutable requirement-template revisions for newly created welds. Core material, procedure/qualification, fit-up, visual, NDE-plan, and final-QA controls remain present.
 - Separate production-complete, weld-QA-accepted, ready-for-release, and final-release counters. Final release is not shipment.
+- Audit-readiness workspaces with the five-prompt Kelvion matrix, controlled document revisions, actual evidence, signed reviews, corrective actions and current-state Excel reports.
 - Spool process timers with start, move, pause, resume and finish controls; current-process age, visit history, repeat-visit totals, and Excel timing reports.
 - A numbered **Process flow** workspace following CLM's 24-step material-to-shipment chart, with linked components/spools/assemblies, scanned or entered identity checks, custody handoffs, QA gates, exception/rework returns, and separate shipment and delivery confirmation.
 
@@ -37,6 +38,18 @@ Numbered steps drive the existing process clock automatically. Staff can pause/r
 
 For work already underway, a supervisor can select the current starting step and record its existing-work reference and reason. Earlier steps remain **Not recorded**. A spool using existing controlled material records instead of newly linked component travelers needs an explicit material reference. No historical completion or timing is invented. Required-child counts can be corrected with a reference and reason while the traveler is still at its material-selection/collection stage.
 
+## Prepare for the Kelvion audit
+
+Open **Audit readiness** or `/?quality=1`. An administrator or supervisor creates a workspace for CLM generally or for a specific project and purchase order. The Kelvion starter matrix uses the supplied audit-preparation prompts, including the priority items **7, 9, 13 and 14**. It creates draft requirements only: no inspections, employee training, Quality Alerts, completed audits or corrective-action closures are invented.
+
+Each item organizes the customer requirement, CLM's response, supporting controlled documents, evidence to produce, and gaps/corrective actions. Register exact document revisions, their approval references and any required employee training. Record actual approved schedules separately from completed audits; attach actual Quality Alerts and the corresponding training, inspection reports, investment records or other evidence. The app stores references and locations, not the external files themselves.
+
+An inspector or administrator confirms the applicable source document/revision/clause and reviews the actual evidence. **Verified** requires current evidence and approved document revisions, satisfied training requirements, resolved applicability, and closed corrective actions where required. Corrective-action closure requires implementation evidence and an effectiveness check, plus customer approval when declared applicable. Changed requirements, document revisions, evidence or relevant linked production records require renewed verification while earlier reviews remain in history.
+
+The supplied seven-document summary is a planning basis. Its draft controls do not approve universal NDE percentages, pressure-test values, coating systems or customer deadlines. Check the applicable original documents, PO and written approvals before confirming a requirement. Optional project-scoped **Pre-coating** and **Shipment** gates can then require selected audit items at numbered flow steps 20/21 and 23/24. Gates default to off; organizational audit preparation alone does not change production release rules.
+
+See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for setup and the evidence/review sequence.
+
 ## Track time in each production process
 
 Open **Projects & welds**, choose a spool in the **Spool register**, and use its **Production process** card. Select a process and start its timer. **Move to process** closes the current visit and starts the next one at the same time. **Pause** records a delay reason; **Resume** continues running time. **Finish process** closes the visit when no new process should start yet.
@@ -56,6 +69,8 @@ The workbook includes the current business records and their histories on separa
 **Process events** contains every timing action. **Process visits** contains each visit's start/end, actor, and elapsed/running/paused time. **Process totals** combines repeated visits by spool and process. Both reports include project and subproject IDs and numeric seconds/decimal hours for Excel analysis. Open visits are calculated as of their report timestamp. Spools without a recorded start have no fabricated timing rows.
 
 **Flow plans**, **Flow events**, **Flow exceptions**, and **Component links** preserve numbered travelers, checklists, custody details, rework, parent/child identities, and shipment/receipt records. **Flow steps** provides the current 24-step definition lookup. Historical flow events also retain the definition version and step/checklist text recorded at the time.
+
+The **Audit readiness** report presents the five audit prompts, current source/verification status, evidence references and blockers in one row per requirement. Separate **Quality** worksheets preserve workspaces, requirements, document revisions, evidence, corrective actions, reviews and change history. They share the same read-only snapshot as the production data. Draft responses remain explicitly unverified; an exported matrix does not certify compliance.
 
 ## Run locally
 
@@ -110,6 +125,7 @@ node tests/tracking_ui_smoke.cjs
 node tests/export_ui_smoke.cjs
 node tests/process_ui_smoke.cjs
 node tests/flow_ui_smoke.cjs
+node tests/quality_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.
@@ -126,6 +142,6 @@ See the developer guide before running that local check.
 
 Evidence is a controlled report/reference or HTTP(S) link with notes; this version does not upload or store report files. Procedure and qualification applicability are reviewed by an authorized inspector using that evidence. The application does not calculate qualification ranges or choose governing acceptance criteria.
 
-Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. No universal NDE percentage is assumed. Pressure-test packages are not modeled. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Assemblies outside that workflow retain the original behavior: their release checks their own welds and requirements. Document references identify controlled files; the app does not generate carrier labels or archive the referenced report/shipping files.
+Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. No universal NDE percentage is assumed. Measured test results can be recorded as audit inspection evidence; a dedicated pressure-test package or automatic acceptance calculation is not modeled. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Assemblies outside that workflow retain the original behavior: their release checks their own welds and requirements. Document references identify controlled files; the app does not generate carrier labels or archive the referenced report/shipping files.
 
 Badge/PIN sign-in and audit records are the current controls. PostgreSQL history triggers reject routine updates and deletes, but do not protect against a database owner deliberately removing those controls. Validate configured work and acceptance rules with the people responsible for the job before using them for fabrication release. This application is not a certification of compliance.

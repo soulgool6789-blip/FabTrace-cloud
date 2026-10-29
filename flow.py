@@ -388,7 +388,7 @@ def _weld_errors(s, item, step):
     return errors
 
 
-def _step_errors(s, item, plan, *, allow_matching_exception=True):
+def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_update=False):
     if not plan or plan.status != 'active' or plan.current_step is None:
         return []
     step = plan.current_step
@@ -407,6 +407,13 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True):
         errors.extend(tracking_release_errors(s, item))
     if step in (16, 23, 24) and not item.released:
         errors.append('Final quality release is required before this post-inspection step')
+    if step in (20, 21, 23, 24):
+        # Opt-in, project-scoped requirements use the same transaction and
+        # topology lock as this traveler. Readiness is rechecked at the actual
+        # coating/shipping step, including after a document or evidence change.
+        from quality import production_gate_errors
+        errors.extend(production_gate_errors(s, item, 'pre_coating' if step in (20, 21) else 'shipment',
+                                            for_update=quality_for_update))
     if step in (5, 8) and not s.get(ComponentLink, item.id):
         errors.append('Assign this component to its target spool first')
     for exception in _exceptions(s, item.id, True):
@@ -696,7 +703,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
         raise HTTPException(409, 'Only post-QA handoff and shipping steps may change a released item')
     _lock_children(s, item, plan)
     receiver, matching = _verify_form(s, item, plan, data)
-    errors = _step_errors(s, item, plan)
+    errors = _step_errors(s, item, plan, quality_for_update=True)
     if errors:
         raise HTTPException(409, {'flow_blockers': errors})
     now = _utc(utcnow())

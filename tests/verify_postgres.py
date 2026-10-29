@@ -156,6 +156,7 @@ def verify_history_protection(application, initializer, schema):
         "audit_events", "tracking_requirement_evidence", "tracking_requirement_reviews",
         "tracking_weld_work", "tracking_weld_repairs", "tracking_requirement_templates",
         "tracking_process_events", "flow_events",
+        "quality_documents", "quality_evidence", "quality_reviews", "quality_events",
     }
     results = {}
     for name in initializer.HISTORY_TABLES:
@@ -378,6 +379,101 @@ def verify_concurrent_flow_step(application, flow, production, api):
     return {"response_codes": [200, 409], "new_flow_events": 1, "new_process_events": 1, "current_step": 2}
 
 
+def verify_concurrent_quality_evidence(application, quality, api):
+    from test_quality import (
+        PAST, confirm_source, create_document, create_requirement, current,
+        review, workspace,
+    )
+
+    workspace_id = workspace(api, name="Isolated PostgreSQL audit workspace")["workspace"]["id"]
+    requirement_id = create_requirement(api, workspace_id)
+    confirm_source(api, workspace_id, requirement_id)
+    document_id = create_document(api, workspace_id)
+    ok(review(api, workspace_id, "document", document_id, "approved"), 201)
+    initial = current(api, workspace_id)
+    with application.SessionLocal() as session:
+        evidence_before = session.scalar(select(func.count()).select_from(quality.QualityEvidence).where(
+            quality.QualityEvidence.workspace_id == workspace_id,
+        ))
+        events_before = session.scalar(select(func.count()).select_from(quality.QualityEvent).where(
+            quality.QualityEvent.workspace_id == workspace_id,
+        ))
+        audits_before = session.scalar(select(func.count()).select_from(application.Audit))
+
+    gate = Barrier(2)
+
+    def synchronize_topology_lock(connection, cursor, statement, parameters, context, many):
+        # Quality writes share production's topology-first lock ordering. Both
+        # workers must arrive before serialization, not inside the row lock.
+        if "pg_advisory_xact_lock" in statement:
+            gate.wait(timeout=15)
+
+    def submit_one(reference):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.post(f"/api/quality/workspaces/{workspace_id}/evidence", {
+                "expected_version": initial["workspace"]["version"],
+                "requirement_id": requirement_id, "type": "other",
+                "title": "Concurrent isolated audit evidence", "reference": reference,
+                "occurred_on": PAST, "data": {"scope": "Local PostgreSQL concurrency test", "result": "pass"},
+            }, role="supervisor")
+            return {"status": response.status_code, "reference": reference, "body": response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, "before_cursor_execute", synchronize_topology_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = [future.result(timeout=30) for future in [
+                pool.submit(submit_one, "PG-QUALITY-EVIDENCE-A"),
+                pool.submit(submit_one, "PG-QUALITY-EVIDENCE-B"),
+            ]]
+    finally:
+        event.remove(application.engine, "before_cursor_execute", synchronize_topology_lock)
+
+    assert sorted(row["status"] for row in responses) == [201, 409], responses
+    winner = next(row for row in responses if row["status"] == 201)
+    after = current(api, workspace_id)
+    assert after["workspace"]["version"] == initial["workspace"]["version"] + 1
+    assert len(after["evidence"]) == evidence_before + 1
+    assert after["evidence"][-1]["reference"] == winner["reference"]
+    assert after["evidence"][-1]["status"] == "submitted"
+    assert after["metrics"]["verified"] == 0
+    with application.SessionLocal() as session:
+        assert session.scalar(select(func.count()).select_from(quality.QualityEvent).where(
+            quality.QualityEvent.workspace_id == workspace_id,
+        )) == events_before + 1
+        assert session.scalar(select(func.count()).select_from(application.Audit)) == audits_before + 1
+    return {"response_codes": [201, 409], "new_evidence_rows": 1, "new_quality_events": 1,
+            "new_audit_rows": 1, "verification_invented": False}
+
+
+def verify_readonly_quality_gate_views(application, api):
+    from test_flow import PROJECT
+    from test_quality import assembly_at_step, create_requirement, workspace
+
+    item_id = assembly_at_step(api, 20)
+    workspace_id = workspace(api, project_id=PROJECT, name="Local read-only gate inspection")["workspace"]["id"]
+    create_requirement(api, workspace_id, gate="pre_coating")
+    locking_statements = []
+
+    def observe_locks(connection, cursor, statement, parameters, context, many):
+        if "FOR UPDATE" in statement.upper() or "pg_advisory_xact_lock" in statement:
+            locking_statements.append(statement)
+
+    event.listen(application.engine, "before_cursor_execute", observe_locks)
+    try:
+        detail = ok(api.get(f"/api/flow/items/{item_id}"))
+        assert detail["flow"]["blockers"], "The configured unverified gate must remain visible"
+        ok(api.get("/api/flow/items"))
+        ok(api.get(f"/api/quality/workspaces/{workspace_id}"))
+        ok(api.get("/api/quality/workspaces"))
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe_locks)
+    assert locking_statements == [], "A read-only view acquired write locks out of production lock order"
+    return {"flow_and_quality_read_views": 4, "write_locks": 0, "unverified_gate_visible": True}
+
+
 def verify_excel_export(application, api):
     exports = importlib.import_module("exports")
     def row_counts():
@@ -419,16 +515,16 @@ def verify_excel_export(application, api):
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
         sheets = [sheet.attrib["name"] for sheet in workbook.findall("s:sheets/s:sheet", namespace)]
-    assert sheets == ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS], "Process visits", "Process totals", "Flow steps"]
-    # Every raw table plus one joined, ordered process query for both reports
-    # stays in the same read-only repeatable-read snapshot.
-    assert len(export_reads) == len(exports.TABLE_SPECS) + 1, export_reads
+    assert sheets == ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS], "Process visits", "Process totals", "Flow steps", "Audit readiness"]
+    # Raw tables, the joined process query, and batched audit-readiness
+    # dependency queries all stay in one physical read-only snapshot.
+    assert len(export_reads) >= len(exports.TABLE_SPECS) + 2, export_reads
     assert all(read_only == "on" and isolation == "repeatable read" and server_cursor
                for read_only, isolation, _, server_cursor in export_reads), export_reads
     assert len({backend_pid for _, _, backend_pid, _ in export_reads}) == 1
     assert row_counts() == before, "Excel export changed database row counts"
     return {
-        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 3, "rows_unchanged": True,
+        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 4, "rows_unchanged": True,
         "isolation": "repeatable read", "read_only": True, "server_side_queries": len(export_reads),
     }
 
@@ -465,6 +561,7 @@ def verify(dsn):
         tracking = importlib.import_module("tracking")
         production = importlib.import_module("production")
         flow = importlib.import_module("flow")
+        quality = importlib.import_module("quality")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -483,6 +580,9 @@ def verify(dsn):
             assert session.query(flow.FlowEvent).count() == 0, "Migration invented fabrication step history"
             assert session.query(flow.FlowException).count() == 0, "Migration invented quality exceptions"
             assert session.query(flow.ComponentLink).count() == 0, "Migration invented parent-child links"
+            for model in (quality.QualityWorkspace, quality.QualityRequirement, quality.QualityDocument,
+                          quality.QualityEvidence, quality.QualityAction, quality.QualityReview, quality.QualityEvent):
+                assert session.query(model).count() == 0, "Migration invented audit readiness or actual evidence"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -500,6 +600,8 @@ def verify(dsn):
         }, role="inspector"), 201)
         process_concurrency = verify_concurrent_process_transition(application, production, api, item_id)
         flow_concurrency = verify_concurrent_flow_step(application, flow, production, api)
+        quality_concurrency = verify_concurrent_quality_evidence(application, quality, api)
+        quality_read_views = verify_readonly_quality_gate_views(application, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -517,6 +619,8 @@ def verify(dsn):
             "concurrent_evidence": concurrency,
             "concurrent_process_transition": process_concurrency,
             "concurrent_flow_step": flow_concurrency,
+            "concurrent_quality_evidence": quality_concurrency,
+            "readonly_quality_gate_views": quality_read_views,
             "excel_export": excel_export,
             "health": health["status"],
             "schema_cleanup": "completed",

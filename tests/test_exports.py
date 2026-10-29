@@ -42,9 +42,17 @@ TABLES = {
     "Flow events": ("flow", "FlowEvent"),
     "Flow exceptions": ("flow", "FlowException"),
     "Component links": ("flow", "ComponentLink"),
+    "Quality workspaces": ("quality", "QualityWorkspace"),
+    "Quality requirements": ("quality", "QualityRequirement"),
+    "Quality documents": ("quality", "QualityDocument"),
+    "Quality evidence": ("quality", "QualityEvidence"),
+    "Quality actions": ("quality", "QualityAction"),
+    "Quality reviews": ("quality", "QualityReview"),
+    "Quality events": ("quality", "QualityEvent"),
 }
 PROCESS_REPORTS = ["Process visits", "Process totals"]
 FLOW_DEFINITIONS = ["Flow steps"]
+QUALITY_REPORTS = ["Audit readiness"]
 
 
 @dataclass
@@ -262,7 +270,7 @@ def test_full_database_export_requires_an_administrator(api, role, status):
 
 def test_export_contains_every_business_record_and_column(api, populated_export, tmp_path):
     response, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS, *QUALITY_REPORTS]
     assert workbook.formulas == []
     for name, expected in populated_export.items():
         assert workbook.headers(name) == expected["columns"]
@@ -299,10 +307,10 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
     counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
     sources = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Source table"}
     assert counts == {**{name: len(expected["rows"]) for name, expected in populated_export.items()},
-                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24}
+                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24, "Audit readiness": 0}
     assert sources == {**{name: model.__tablename__ for name, model in models().items()},
                        **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS},
-                       "Flow steps": "definition:CLM-process-flow"}
+                       "Flow steps": "definition:CLM-process-flow", "Audit readiness": "derived:quality_readiness"}
     # Downloading must not edit business records or silently log into the data snapshot.
     assert snapshot(api) == populated_export
     assert "pin_hash" not in workbook.headers("Employees")
@@ -316,7 +324,7 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
 
 def test_empty_tables_keep_their_column_headers(api):
     _, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS, *QUALITY_REPORTS]
     for name, model in models().items():
         expected_columns = EMPLOYEE_COLUMNS if name == "Employees" else list(model.__table__.columns.keys())
         assert workbook.headers(name) == expected_columns
@@ -325,6 +333,8 @@ def test_empty_tables_keep_their_column_headers(api):
     assert workbook.headers("Process visits") == list(exporter.PROCESS_VISIT_COLUMNS)
     assert workbook.headers("Process totals") == list(exporter.PROCESS_TOTAL_COLUMNS)
     assert all(not workbook.records(name) for name in PROCESS_REPORTS)
+    assert workbook.headers("Audit readiness") == list(exporter.QUALITY_REPORT_COLUMNS)
+    assert not workbook.records("Audit readiness")
     assert workbook.headers("Flow steps") == list(exporter.FLOW_STEP_COLUMNS)
     assert [row["number"].value for row in workbook.records("Flow steps")] == list(range(1, 25))
 
@@ -492,3 +502,79 @@ def test_excel_row_limit_creates_continuations_without_dropping_records(api, mon
     assert sorted(json.loads(row["details"].value)["sequence"] for row in records) == list(range(15))
     assert len({row["id"].value for row in records}) == 15
     assert all(len(rows) <= 7 for rows in workbook.sheets.values())
+
+
+def test_quality_export_distinguishes_drafts_verified_records_and_stale_reviews(api):
+    from test_quality import workspace, verified_requirement, edit_requirement
+
+    first = workspace(api, name="Synthetic verified workspace")
+    workspace_id = first["workspace"]["id"]
+    requirement_id, evidence_id = verified_requirement(api, workspace_id, item_number="000007")
+    drafts = workspace(api, template="kelvion", name="Synthetic draft workspace")
+    before = snapshot(api)
+    _, workbook = download(api)
+    assert snapshot(api) == before
+    assert workbook.formulas == []
+    report = workbook.records("Audit readiness")
+    assert len(report) == 1 + len(drafts["requirements"])
+    verified = next(row for row in report if row["requirement_id"].value == str(requirement_id))
+    assert verified["item_number"].value == "000007"
+    assert verified["verification_status"].value == "verified"
+    assert verified["source_status"].value == "confirmed"
+    assert verified["last_reviewer"].value == BADGES["inspector"]
+    assert "TEST-ACTUAL-RECORD" in verified["collected_evidence"].value
+    assert verified["as_of"].style in workbook.date_styles
+    assert verified["last_review_at"].style in workbook.date_styles
+    for row in report:
+        if row["workspace_id"].value != str(drafts["workspace"]["id"]):
+            continue
+        assert row["verification_status"].value == "draft"
+        assert row["source_status"].value == "unconfirmed"
+        assert row["clm_response"].value.startswith("DRAFT")
+        assert row["blockers"].value
+        assert row["collected_evidence"].value == ""
+    assert len(workbook.records("Quality evidence")) == 1
+    assert workbook.records("Quality evidence")[0]["id"].value == str(evidence_id)
+    assert len(workbook.records("Quality reviews")) == 3
+    assert not workbook.records("Quality documents")
+    assert not workbook.records("Quality actions")
+    for name, expected in before.items():
+        assert len(workbook.records(name)) == len(expected["rows"]), name
+
+    edit_requirement(api, workspace_id, requirement_id, gaps="Locate the missing actual inspection record.")
+    before = snapshot(api)
+    _, changed = download(api)
+    assert snapshot(api) == before
+    row = next(row for row in changed.records("Audit readiness") if row["requirement_id"].value == str(requirement_id))
+    assert row["verification_status"].value != "verified"
+    assert row["last_review_decision"].value == "verified"
+    assert "missing actual inspection" in row["gaps_and_corrective_actions"].value
+    assert "gap" in row["blockers"].value.lower()
+    assert len(changed.records("Quality reviews")) == 3
+
+
+def test_audit_readiness_export_includes_training_recorded_under_another_requirement(api):
+    from test_quality import (workspace, create_requirement, create_document, edit_requirement,
+                              confirm_source, review, review_ok, accepted_evidence)
+
+    workspace_id = workspace(api)["workspace"]["id"]
+    requirement_id = create_requirement(api, workspace_id, item_number="DOC-CONTROL",
+        required_evidence_types=[], requires_approved_document=True)
+    training_requirement_id = create_requirement(api, workspace_id, item_number="TRAINING-REGISTER")
+    document_id = create_document(api, workspace_id, requires_training=True, required_badges=[BADGES["welder"]])
+    review_ok(review(api, workspace_id, "document", document_id, "approved"))
+    edit_requirement(api, workspace_id, requirement_id, document_ids=[document_id])
+    confirm_source(api, workspace_id, requirement_id)
+    evidence_id = accepted_evidence(api, workspace_id, training_requirement_id, type="training",
+        document_id=document_id, participants=[BADGES["welder"]], performed_by=BADGES["supervisor"],
+        reference="TEST-EXACT-REVISION-TRAINING", data={"topic": "Controlled revision", "assessment": "Understanding checked"})
+    review_ok(review(api, workspace_id, "requirement", requirement_id, "verified"))
+    _, workbook = download(api)
+    row = next(row for row in workbook.records("Audit readiness") if row["requirement_id"].value == str(requirement_id))
+    assert row["verification_status"].value == "verified"
+    assert f"#{evidence_id} training" in row["collected_evidence"].value
+    assert "TEST-EXACT-REVISION-TRAINING" in row["collected_evidence"].value
+    assert BADGES["welder"] in row["collected_evidence"].value
+    assert BADGES["supervisor"] in row["collected_evidence"].value
+    assert f"under requirement ID {training_requirement_id}" in row["collected_evidence"].value
+    assert "TEST-QMS Rev A" in row["supporting_documentation"].value

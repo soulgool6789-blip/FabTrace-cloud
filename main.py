@@ -35,7 +35,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.28-flow.1'
+APP_VERSION='2026.10.29-quality.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -485,6 +485,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(SpoolPlan.item_id).limit(1))
     s.execute(select(SpoolProcessEvent.id).limit(1))
     s.execute(select(FlowPlan.item_id).limit(1))
+    s.execute(select(QualityWorkspace.id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -503,6 +504,9 @@ from flow import (router as flow_router, FlowPlan, flow_release_errors,
                   lock_topology as lock_flow_topology, guard_reopen as guard_flow_reopen,
                   on_item_reopened as on_flow_item_reopened)
 app.include_router(flow_router)
+
+from quality import router as quality_router, QualityWorkspace
+app.include_router(quality_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)

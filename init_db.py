@@ -14,6 +14,10 @@ HISTORY_TABLES = (
     'tracking_requirement_templates',
     'tracking_process_events',
     'flow_events',
+    'quality_documents',
+    'quality_evidence',
+    'quality_reviews',
+    'quality_events',
 )
 
 def initialize():
@@ -51,6 +55,6 @@ def initialize():
                 print('Created bootstrap administrator')
             else:
                 print('Employee accounts already exist; bootstrap skipped')
-    print('Schema ready: legacy records preserved; weld, timing and numbered process flow tables available')
+    print('Schema ready: legacy records preserved; weld, timing, process flow and audit readiness tables available')
 if __name__=='__main__':initialize()
 
