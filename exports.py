@@ -38,6 +38,7 @@ from dossier import (DossierProject, DossierEntry, DossierDocument, DossierRevie
 from progress import project_rows, summarize as progress_summary
 from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_snapshot
 from transfers import ItemTransferState, TransferLocation
+from administration import EmployeeAccessState
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -76,6 +77,7 @@ def _spec(model, sheet, columns, keys='id'):
 # add it to an export. The employee secret field is never selected.
 TABLE_SPECS = (
     _spec(Employee, 'Employees', 'badge name role active created_at', 'badge'),
+    _spec(EmployeeAccessState, 'Employee access states', 'badge version session_version updated_by updated_at', 'badge'),
     _spec(Item, 'Items', 'id description kind project google_part_number drawing location handler welds_required welds_done dimensional weld dimension_at weld_at last_work_at reinspection_due on_hold released released_at released_by created_at updated_at'),
     _spec(Inspection, 'Inspections', 'id item_id kind result inspector report measurements at'),
     _spec(Rework, 'Reworks', 'id item_id kind reason assigned opened_at closed_at closed_by close_notes'),
@@ -128,7 +130,8 @@ PART_PROGRESS_COLUMNS = (
     'kind', 'item_kind', 'parent_id', 'scope_source', 'status', 'fabrication_finished',
     'blocked', 'blockers', 'progress_percent', 'progress_basis', 'completed_steps',
     'total_steps', 'not_recorded_steps', 'planned_welds', 'completed_welds', 'qa_accepted',
-    'flow_status', 'current_step', 'current_title', 'released', 'location', 'handler',
+    'flow_status', 'current_step', 'current_title', 'released', 'release_mode', 'release_label',
+    'administrative_release', 'location', 'handler',
     'updated_at', 'as_of',
 )
 SPOOL_PARTS_PROGRESS_COLUMNS = (
@@ -179,6 +182,8 @@ RELATIONSHIPS = (
     'transfer_locations stores managed custom destination choices; built-in work centers are application definitions. location_id may reference a built-in or custom choice, or be blank for a preserved legacy location. items.location retains the actual last recorded label, so renaming a catalog choice does not rewrite history.',
     'Audit TRANSFER details retain both scanned badge identities, before/after location and operational status, custody_changed and the authenticated recorder. Badge identification is not independent sender or recipient acknowledgement.',
     'Operational transfer status does not change numbered process steps, timers, holds, inspection acceptance or release. A custody_transfer Flow event invalidates stale traveler forms without advancing their step.',
+    'Items.released includes an explicit administrative release as well as ordinary QA release. Part progress release_mode and immutable ADMIN_RELEASE_OVERRIDE audit details identify that distinction. An override does not record passing inspections, completed welds or a QA-issued Job Packet.',
+    'Employee access states records account-edit and session-revocation versions. Private PINs, PIN hashes and session tokens are excluded. Administrative custody corrections are separately identified; they do not claim employee badge scans.',
     'spool_parts_plans.spool_id -> the tracked spool items.id; spool_part_lines.spool_id -> its optional controlled parts plan. Quantities are whole physical pieces, not weld counts or length.',
     'spool_part_allocations.component_id -> one individual Part items.id and line_id -> spool_part_lines.id. Each allocation must also match the existing flow_component_links parent; a QR identity is counted once.',
     'spool_parts_events preserves versioned parts-list edits, allocations and removals. Spool parts progress derives actual receipt step1 and current prepared steps7+8; historical baselines are not invented.',

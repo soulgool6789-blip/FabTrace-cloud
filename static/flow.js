@@ -6,7 +6,7 @@
   const stamp=value=>value?new Date(value).toLocaleString():'—';
   const roles={admin:'Administrator',supervisor:'Supervisor',handler:'Material coordinator / handler',welder:'Welder / production',inspector:'Inspector'};
   const routeNames={component:'Component',spool:'Spool',assembly:'Assembly'};
-  const statusNames={not_started:'Not started',active:'In progress',completed:'Route complete',shipped:'Shipped',delivered:'Delivered',rework:'Needs rework'};
+  const statusNames={admin_released:'Administrative release',not_started:'Not started',active:'In progress',completed:'Route complete',shipped:'Shipped',delivered:'Delivered',rework:'Needs rework'};
   const stepStatusNames={pending:'Upcoming',current:'Current step',completed:'Completed',not_recorded:'Not recorded',rework:'Needs reinspection',other_route:'Linked record'};
   const phases=[
     {id:'materials',label:'Material receipt & inventory',first:1,last:4},
@@ -125,7 +125,7 @@
   function filters(){
     const projects=[...new Set(state.board.map(row=>row.project_id).filter(Boolean))].sort();
     const subs=[...new Set(state.board.filter(row=>!state.project||row.project_id===state.project).map(row=>row.subproject_id).filter(Boolean))].sort();
-    return `<div class="ff-filters"><div class="field"><label for="flowProject">Project</label><select id="flowProject">${option('','All projects',state.project)}${projects.map(value=>option(value,value,state.project)).join('')}</select></div><div class="field"><label for="flowSubproject">Subproject</label><select id="flowSubproject">${option('','All subprojects',state.subproject)}${subs.map(value=>option(value,value,state.subproject)).join('')}</select></div><div class="field"><label for="flowStatus">Status</label><select id="flowStatus">${option('','All statuses',state.status)}${['active','rework','completed','shipped','delivered'].map(value=>option(value,statusNames[value],state.status)).join('')}</select></div><div class="field ff-search"><label for="flowSearch">Find item or process</label><input id="flowSearch" type="search" value="${esc(state.query)}" placeholder="ID, description, or current step"></div></div>${state.step?`<div class="notice">Showing step ${esc(state.step)} · ${esc(definition(state.step)?.title||'')} ${action('clear-step','Clear step filter','','ff-link')}</div>`:''}`;
+    return `<div class="ff-filters"><div class="field"><label for="flowProject">Project</label><select id="flowProject">${option('','All projects',state.project)}${projects.map(value=>option(value,value,state.project)).join('')}</select></div><div class="field"><label for="flowSubproject">Subproject</label><select id="flowSubproject">${option('','All subprojects',state.subproject)}${subs.map(value=>option(value,value,state.subproject)).join('')}</select></div><div class="field"><label for="flowStatus">Status</label><select id="flowStatus">${option('','All statuses',state.status)}${['active','rework','admin_released','completed','shipped','delivered'].map(value=>option(value,statusNames[value],state.status)).join('')}</select></div><div class="field ff-search"><label for="flowSearch">Find item or process</label><input id="flowSearch" type="search" value="${esc(state.query)}" placeholder="ID, description, or current step"></div></div>${state.step?`<div class="notice">Showing step ${esc(state.step)} · ${esc(definition(state.step)?.title||'')} ${action('clear-step','Clear step filter','','ff-link')}</div>`:''}`;
   }
   function counts(rows){
     const values=[['In progress',rows.filter(row=>row.status==='active').length,'Active component, spool, and assembly routes'],['Needs rework',rows.filter(row=>num(row.open_exceptions)>0).length,'Open process exceptions'],['Shipped',rows.filter(row=>row.status==='shipped').length,'Awaiting delivery receipt'],['Delivered',rows.filter(row=>row.status==='delivered').length,'Delivery recorded']];
@@ -196,8 +196,9 @@
   function currentStep(){
     const detail=state.detail,flow=detail.flow,step=flow.current;
     if(!step){
-      let title=flow.status==='shipped'?'Shipment recorded · awaiting delivery':flow.status==='delivered'?'Delivered to customer':'Route complete';
+      let title=flow.status==='admin_released'?'Administrative release':flow.status==='shipped'?'Shipment recorded · awaiting delivery':flow.status==='delivered'?'Delivered to customer':'Route complete';
       let description=flow.route==='component'?'This component is ready for the linked spool’s fabrication route.':flow.route==='spool'?'This completed spool can be collected for its assembly.':'The assembly’s recorded route is complete.';
+      if(flow.status==='admin_released')description='An administrator released this component. Its recorded work, inspections and unresolved requirements retain their actual status. Admin controls can return it to its previous process position.';
       if(flow.status==='shipped')description='Record the delivery receipt when the customer receives the assembly.';
       if(flow.status==='delivered')description='The delivery acknowledgment remains in the process history.';
       const shipment=['shipped','delivered'].includes(flow.status)?metadata([['Shipped',stamp(flow.shipped_at)],['Carrier',flow.carrier],['Shipping reference',flow.shipment_reference],['Destination',flow.destination],...(flow.status==='delivered'?[['Delivered',stamp(flow.delivered_at)],['Receipt reference',flow.receipt_reference],['Received by',flow.recipient]]:[])]):'';
@@ -248,6 +249,7 @@
   function renderDetail(){
     const detail=state.detail,item=detail.item,flow=detail.flow;
     let controls=action('board','Process board')+action('item-record','Item & QR record',item.id);
+    if(me?.role==='admin')controls+=action('admin-controls','Admin controls',item.id);
     if(['spool','assembly'].includes(flow?.route||detail.suggested_route)||['Spool','Assembly'].includes(item.kind))controls+=action('weld-record','Individual welds',item.id);
     if((flow?.route||detail.suggested_route)==='spool'||item.kind==='Spool')controls+=action('spool-parts','Spool parts',item.id);
     let html=heading(item.id,item.description||'Fabrication item',controls)+lookup();
@@ -259,7 +261,7 @@
     html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${route(flow.route)?.first_step}–${route(flow.route)?.last_step}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
     if(detail.parts?.configured){const t=detail.parts.totals||{},required=num(t.required_qty),prepared=num(t.prepared_qty);html+=`<section class="card"><div class="ff-section-head"><h2>Required component pieces</h2>${action('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${num(t.assigned_qty)} assigned · ${num(t.received_qty)} receipt recorded · ${num(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}</section>`;}
     const boardRow=state.board.find(row=>row.item_id===item.id);
-    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',boardRow?.project_id||flow.project_id||item.project],['Subproject',boardRow?.subproject_id||flow.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Quality release',item.released?'Released':'Not released']])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
+    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',boardRow?.project_id||flow.project_id||item.project],['Subproject',boardRow?.subproject_id||flow.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
     html+=`<section class="card"><details class="ff-fold"><summary>View the complete 24-step flow</summary><p class="ff-footer-note">Highlighted steps belong to this ${esc(routeNames[flow.route].toLowerCase())}. Other stages belong to its linked component, spool, or assembly records.</p>${renderMap(true)}</details></section>`;
     return html+timingHistory()+eventHistory();
   }
@@ -422,6 +424,7 @@
     if(name==='refresh')return refresh();
     if(name==='item')return open({item:id});
     if(name==='item-record')return openItem(id);
+    if(name==='admin-controls'&&me?.role==='admin')return window.FabAdmin.open({item:id});
     if(name==='weld-record')return window.FabTracking.open({spool:id});
     if(name==='spool-parts')return window.FabParts.open({spool:id,project:state.project});
     if(name==='filter-step'){state.step=id;state.item='';state.detail=null;render();updateUrl();return;}

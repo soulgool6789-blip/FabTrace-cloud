@@ -434,7 +434,7 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     return list(dict.fromkeys(errors))
 
 
-def flow_release_errors(s, item, approving_step=None):
+def flow_release_errors(s, item, approving_step=None, for_update=True):
     plan = s.get(FlowPlan, item.id)
     if not plan:
         return []
@@ -444,7 +444,8 @@ def flow_release_errors(s, item, approving_step=None):
     errors = []
     if approving_step != required or plan.current_step != required or plan.status != 'active':
         errors.append(f'Complete QA step {required} in the CLM process flow to approve final release')
-    _lock_children(s, item, plan)
+    if for_update:
+        _lock_children(s, item, plan)
     errors.extend(_component_errors(s, item, plan) if plan.route == 'spool' else _assembly_errors(s, item, plan))
     errors.extend(f'Open process-flow exception at step {row.step}' for row in _exceptions(s, item.id, True))
     return list(dict.fromkeys(errors))
@@ -508,10 +509,10 @@ def _step_states(s, plan):
     states = {number: {**STEP_BY_NUMBER[number], 'status': 'not_recorded' if number < plan.baseline_step else 'pending',
         'completed_at': None, 'last_actor': None, 'attempts': 0} for number in range(route['first_step'], route['last_step'] + 1)}
     for event in s.scalars(select(FlowEvent).where(FlowEvent.item_id == plan.item_id).order_by(FlowEvent.sequence)):
-        if event.action in ('fail', 'reopen'):
+        if event.action in ('fail', 'reopen', 'admin_return_to_work'):
             target = event.data.get('return_step', event.step)
             for number, state in states.items():
-                if number >= target:
+                if target is not None and number >= target:
                     state.update(status='pending', completed_at=None, last_actor=None)
         elif event.action == 'advance' and event.step in states:
             states[event.step].update(status='completed', completed_at=_utc(event.at).isoformat(), last_actor=event.actor)
@@ -538,6 +539,7 @@ def _summary(s, item, plan=None):
 
 
 def detail(s, item, user):
+    from administration import release_summary
     from production import process_snapshot
     from parts import parts_summary
     from transfers import transfer_snapshot
@@ -572,7 +574,9 @@ def detail(s, item, user):
         actions.append('deliver')
     return {
         **({'parts': parts} if parts else {}),
-        'item': _dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
+        'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
+                 'release_control': release_summary(s, item)},
+        'release_control': release_summary(s, item),
         'transfer': transfer_snapshot(s, item, user),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
         'flow': {**_dict(plan, PLAN_KEYS), 'steps': _step_states(s, plan),

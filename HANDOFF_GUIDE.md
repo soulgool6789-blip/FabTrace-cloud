@@ -58,10 +58,12 @@ An administrator's **Export Excel** includes **Item transfer states** and **Tran
 
 ## If a transfer is blocked
 
+An administrator can use **Admin controls → Correct custodian / location** to resolve a mistaken assignment or an inactive recorded custodian, including on a released item. That action records an administrative correction and its reason; it does not claim that either employee scanned a badge. Ordinary handoffs continue to require both identities. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
+
 | Message or situation | Next action |
 | --- | --- |
 | Sending badge does not match the current custodian | Reload the item and confirm who actually holds it. Scan the recorded custodian's badge for the real handoff; do not substitute the recorder's badge. |
-| Employee not found or inactive | Check the scanned badge. An administrator must verify the employee record before it can be used. |
+| Employee not found or inactive | Check the scanned badge. An administrator can manage the employee's access in Admin controls or record an explicit custody correction when the item is assigned incorrectly. |
 | Item or location changed since the form opened | Refresh the current data, review the change and repeat the required identity checks. |
 | Destination is inactive | Select an active destination or retain the actual current location. A supervisor can manage custom destinations. |
 | No changes to save | Choose the actual new location/status/recipient, or leave the record unchanged. |

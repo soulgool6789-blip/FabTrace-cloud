@@ -11,6 +11,8 @@ This guide describes the implemented tracking extension and the constraints that
 | `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
 | `transfers.py` | Shared sender/receiver validation, versioned custody/location/status state, managed location catalog and ordinary transfer API. |
+| `administration.py` | Explicit admin release/return/custody decisions, current release provenance, versioned employee access and session revocation. |
+| `static/admin.js`, `static/admin.css`, `ADMIN_GUIDE.md` | Administrator workspace, employee controls, role-aware navigation and operating instructions. |
 | `static/handoff.js`, `static/handoff.css`, `HANDOFF_GUIDE.md` | Shared badge/location/status controls, camera lifecycle, ordinary handoff page and operating instructions. |
 | `parts.py` | Optional spool parts plans, whole-piece requirement lines, unique physical allocations, quantity projections and audited scope controls. |
 | `static/parts.js`, `static/parts.css`, `PARTS_GUIDE.md` | Parts-list editor, QR allocation, current quantity progress and operating instructions. |
@@ -33,7 +35,7 @@ This guide describes the implemented tracking extension and the constraints that
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
 
 ## Data relationships
 
@@ -108,7 +110,7 @@ Existing `/api/items/{id}/inspect`, `/release`, and `/reopen` remain the interfa
 3. **Evidence is not acceptance.** A reference, pass result, or work event cannot accept a requirement. New evidence invalidates prior acceptance. Failed evidence cannot be accepted or hidden by N/A.
 4. **Current work needs current verification.** Physical work invalidates affected post-work evidence and approvals. Fit-up performed after approval needs new verification. Repairs preserve history and require the new cycle's work and reviews.
 5. **Templates retain core gates.** Material, procedure/qualification, fit-up, visual, NDE-plan, and final-QA controls remain. Templates add requirements or permitted core labels/source/assignment; they cannot weaken core checks. Saved revisions affect newly created welds only.
-6. **Release is derived.** Defined weld count must match the controlled plan; zero-weld scope needs a basis. Current requirements, physical completion, dimensions, holds, rework, and hierarchy are checked. Legacy summaries cannot override those checks.
+6. **Ordinary QA release is derived.** Defined weld count must match the controlled plan; zero-weld scope needs a basis. Current requirements, physical completion, dimensions, holds, rework, and hierarchy are checked. Legacy summaries cannot override those checks. The separately authorized administrative release records an explicit exception and its outstanding conditions; it does not create QA acceptance or passing work records.
 7. **Identity and history persist.** Corrections use versions and audit records. Never overwrite evidence, reviews, work, repairs, or a saved template revision to conceal a change.
 8. **Release scope is explicit.** Plain assembly links do not implement child-spool acceptance. Numbered assembly travelers additionally verify their declared children and descendant component readiness at their gates. Final release is not shipment or delivery.
 
@@ -185,6 +187,36 @@ Every transfer locks topology before the refreshed Item row, then validates tran
 Numbered handoff steps 6/8/9/12/13/16/20/23 share this validation and record within the same transaction as their checks and step/timer transition. They add `sender_badge`, `receiver_badge`, `location_id`, `operational_status` and `expected_transfer_version` to the ordinary flow form. Step 3 uses only `location_id` and transfer version for its location capture. Other steps reject supplied transfer fields. An ordinary handoff on a routed item appends `custody_transfer` and increments `FlowPlan.version` without changing its current step, status, entry time or process history. This invalidates stale traveler forms without claiming physical progress. Generic transfers remain prohibited after QA release; permitted numbered post-QA movements keep their existing controls.
 
 `static/handoff.js` supplies shared badge confirmation/location/status controls and camera cleanup for both ordinary and flow forms. Displaying the current custodian never preconfirms a sender scan. Item changes, successful saves and stale-state recovery clear both badge confirmations. Existing item/badge QR labels remain valid, and badge-link continuation retains the explicitly selected role. Read-only projections take no write/advisory locks. The two raw transfer sheets share the existing read-only Excel snapshot.
+
+## Administrator decisions and account access
+
+All `/api/admin` routes require a current active administrator. The shared topology lock serializes writes, then the actor's role, active state and authenticated session version are rechecked before a decision is applied. Employee authority is refreshed without taking an Employee write lock ahead of Item locks; target-account edits take their own lock. This preserves the existing item-before-history lock order.
+
+| Route | Request / response |
+| --- | --- |
+| `GET /api/admin/overview` | Application version, item/release/hold/account counts and administrative capabilities. |
+| `GET /api/admin/items?search=&limit=&offset=` | Paginated item identity, current custody, release mode/label and flow position. |
+| `GET /api/admin/items/{id}` | `{item, version, release, blockers, allowed_actions, history}`. `version` is an opaque 64-character SHA-256 decision token. |
+| `POST /api/admin/items/{id}/release` | `{expected_version, reason, reference?}` explicitly releases an unreleased item despite its blockers. |
+| `POST /api/admin/items/{id}/return-to-work` | Same decision fields; restores a current override's saved prior route or performs the guarded ordinary-QA reopen. |
+| `POST /api/admin/items/{id}/custody` | Same decision fields plus `handler`, `location_id` and `operational_status`; records an administrative correction without claimed badge scans. |
+| `GET /api/admin/employees` | `{employees, active_admins}`. Employee rows include permanent badge, name, role, active flag, integer version and allowed controls. |
+| `PATCH /api/admin/employees/{badge}` | `{expected_version, name, role, active, reason}`. No badge replacement or arbitrary field edits. |
+| `POST /api/admin/employees/{badge}/pin` | `{expected_version, pin, reason}`; resets the private PIN and revokes existing sessions. |
+
+Item actions return the refreshed admin detail. Employee actions return the updated employee snapshot plus `reauthenticate` when the caller changed their own access/PIN. Reasons are trimmed, 4–3,000 characters; optional references are at most 500. PINs retain their exact entered characters, require 8–128 characters and cannot be entirely whitespace. Unknown request fields and stale versions are rejected. PIN-bearing validation responses omit submitted values.
+
+No item-override table is added. `release_summary(s,item)` derives current release provenance from the released flag and latest relevant immutable `Audit` event. It returns `mode` (`not_released`, `qa`, `admin_override`), `label`, `qa_released`, `active_override` and optional `override` with audit ID, actor, time, reason, reference, bypassed blockers and prior flow. Item, tracking, flow and packet views expose this as `release_control`; progress rows carry explicit release mode/label and an administrative-release flag. An active override never qualifies as current ordinary QA release or a QA-issued packet.
+
+The decision token hashes the current item, flow, release blockers, transfer version and latest item audit ID. Writes recompute it under the topology/item/descendant locks. GET projections are pure and acquire no write/advisory locks. A duplicate release or a stale decision after an away-and-back change is rejected. Release uses `ADMIN_RELEASE_OVERRIDE`; return uses `ADMIN_RETURN_TO_WORK`; custody correction uses `ADMIN_CUSTODY_CORRECTION`. Historical events remain unchanged.
+
+Administrative release sets Item release fields but preserves actual inspections, holds, weld work, requirements and exception records. A distinct `admin_release` FlowEvent moves a spool to step 16 or assembly to step 23; a component becomes `admin_released` with no completion timestamp. No skipped `advance` events are created. Process timing follows that explicit disposition. Returning an override restores its original position with a new visit where applicable. `admin_return_to_work` resets current completion projections from the return step, retaining all prior events. It does not claim physical rework. Actual shipped/delivered state cannot be undone by this action. Ordinary QA return keeps its existing parent/review rules; the legacy `/reopen` rejects active overrides with instructions to use Admin controls.
+
+Custody corrections share selected-location validation and transfer versioning, but require no substitute sender badge and create no ordinary `TRANSFER` event. They explicitly set `badge_scans_recorded: false`. They remain available for released/blocked items and inactive previous custodians. An active receiving employee is required. Flow versions change to invalidate stale forms, while process steps/timing and QA remain unchanged.
+
+The only new table is `employee_access_states`: `badge`, `version`, `session_version`, `updated_by`, `updated_at`. Absent rows mean versions zero; initialization and reads create none. A name edit increments the account revision. Role/active changes and PIN resets also increment session version. JWT claim `sv` defaults to zero for compatible existing sessions; authentication compares it with current stored access. Login locks the employee while checking its PIN and issuing the current version, serializing against PIN reset. Last-active-admin protection runs under the topology lock so two simultaneous demotions cannot remove every administrator.
+
+Ordinary historical dossier fingerprints retain their original fields. Only an active administrator override adds its release basis; administrator metadata never enters physical construction fingerprints merely because a new software version was installed. Excel adds `Employee access states`, retains immutable administrative audit events, and adds release-mode columns to `Part progress`; PINs, hashes and session tokens remain excluded.
 
 ## Production process timing
 
@@ -271,6 +303,7 @@ node tests/dossier_ui_smoke.cjs
 node tests/guide_ui_smoke.cjs
 node tests/parts_ui_smoke.cjs
 node tests/handoff_ui_smoke.cjs
+node tests/admin_ui_smoke.cjs
 ```
 
 API fixtures use temporary SQLite databases, override imported database settings, and create synthetic employees and authenticated sessions. They cover legacy behavior, roles, stale decisions, evidence, scope, operations, repairs, holds, hierarchy, and release. SQLite tests do not establish PostgreSQL locking or trigger behavior.
@@ -315,7 +348,7 @@ Uploads read at most 8 MiB + 1 byte, check extension/content signature, sanitize
 
 Handover records are declarations of actual dispatch and separate receipt, not integrations that send messages. A dispatch must reference a current completed-project issue. A later receipt can acknowledge an older dispatched issue and does not grant new release. Printed acknowledgement blanks remain blank until an actual event.
 
-Excel explicitly allowlists seven dossier metadata tables, including immutable JSON issue/review snapshots and print hashes. It excludes `dossier_files` and retained HTML content. `Project progress`, `Part progress` and `Job Packet readiness` are calculated inside the same PostgreSQL REPEATABLE READ READ ONLY snapshot as the raw tables. Long snapshots use the existing lossless Text overflow mechanism; continuation/overflow worksheets can extend the current base workbook of 41 raw sheets, eight report/definition sheets and Export info.
+Excel explicitly allowlists seven dossier metadata tables, including immutable JSON issue/review snapshots and print hashes. It excludes `dossier_files` and retained HTML content. `Project progress`, `Part progress` and `Job Packet readiness` are calculated inside the same PostgreSQL REPEATABLE READ READ ONLY snapshot as the raw tables. Long snapshots use the existing lossless Text overflow mechanism; continuation/overflow worksheets can extend the current base workbook of 42 raw sheets, eight report/definition sheets and Export info.
 
 ## Read-only project progress
 

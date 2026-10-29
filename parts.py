@@ -178,7 +178,7 @@ def _component_open(plan):
 def _recorded_steps(events):
     completed = set()
     for event in events:
-        if event.action in ('fail', 'reopen'):
+        if event.action in ('fail', 'reopen', 'admin_return_to_work'):
             target = (event.data or {}).get('return_step', event.step)
             if target is not None:
                 completed = {number for number in completed if number < target}

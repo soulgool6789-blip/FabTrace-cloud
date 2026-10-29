@@ -333,6 +333,7 @@ def _physical_structure(s,item,plan,seen=None):
         'flow_events':[row_dict(x) for x in s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids)).order_by(FlowEvent.id))]})
 
 def _actual_records(s, item, plan, user):
+    from administration import release_summary
     tracking = spool_dict(s, item)
     # Operational handoffs and timers are included as records but kept out of
     # review fingerprints so routine logistics does not invalidate QA proof.
@@ -345,6 +346,7 @@ def _actual_records(s, item, plan, user):
     for cp in child_plans:
         child = s.get(Item, cp.item_id)
         children[child_plans.index(cp)].update(released=bool(child and child.released), description=child.description if child else '',
+            release_mode=release_summary(s,child)['mode'] if child else 'not_released',
             physical_basis=_physical_structure(s,child,cp,{item.id}) if child else {'error':'Missing child item'})
     inspections = [row_dict(x) for x in s.scalars(select(Inspection).where(Inspection.item_id.in_(ids)).order_by(Inspection.id))]
     reworks = [row_dict(x) for x in s.scalars(select(Rework).where(Rework.item_id.in_(ids)).order_by(Rework.id))]
@@ -437,6 +439,11 @@ def _check_basis(cfg, item, spec, entry, records, documents):
         data['actual']={'released':item.released,'at':_fmt(item.released_at),'by':item.released_by,
             'requirements':_requirements(records),'dimensional':item.dimensional,'dimension_at':_fmt(item.dimension_at),
             'holds':records['tracking']['holds'],'reworks':records['reworks']}
+        release_control=records['tracking']['item'].get('release_control',{})
+        if release_control.get('active_override'):
+            # Keep ordinary historical fingerprints byte-for-byte equivalent.
+            # Only a real administrative exception adds a new release basis.
+            data['actual']['administrative_override']=release_control['override']
     else:
         data['actual']=_structural(records)
     return data
@@ -486,7 +493,10 @@ def _entry_errors(cfg, item, spec, entry, basis, records):
         if any(not r['closed_at'] for r in records['reworks']):errors.append('Resolve open item/component rework')
         if any(not e['closed_at'] for e in records['flow_exceptions']):errors.append('Resolve open process exceptions')
         if any(a['status']!='closed' or a.get('closure_stale') for q in records['quality_records'] for a in q['actions']):errors.append('Resolve linked audit corrective actions and their effectiveness basis')
-    if code=='release' and not item.released:errors.append('Final QA release has not been recorded')
+    if code=='release':
+        if not item.released:errors.append('Final QA release has not been recorded')
+        elif records['tracking']['item'].get('release_control',{}).get('active_override'):
+            errors.append('Administrative release does not establish the final QA release required by this checklist')
     return list(dict.fromkeys(errors))
 
 def _check_view(cfg, item, spec, entry, review, records, documents):
@@ -533,6 +543,9 @@ def _packet(s,item,user,_seen=None,_cache=None):
         if row['status'] not in ('accepted','not_applicable'):
             blockers.extend(f"{row['title']}: {x}" for x in row['blockers'])
     release_errors=tracking_release_errors(s,item)
+    release_control=records['tracking']['item']['release_control']
+    if release_control['active_override']:
+        release_errors.append('Administrative release requires ordinary QA release before a QA-issued Job Packet')
     if not item.released:blockers.append('Item final QA release is required before packet issuance')
     blockers.extend(release_errors)
     child_basis=[]
@@ -557,9 +570,11 @@ def _packet(s,item,user,_seen=None,_cache=None):
         'checks':[{k:c[k] for k in ('code','status','fingerprint')}|{'review_id':(c['latest_review'] or {}).get('id')} for c in checks],
         'release':{'released':item.released,'released_at':_fmt(item.released_at),'released_by':item.released_by},
         'release_errors':release_errors,'structural':_structural(records),'child_packets':child_basis}
+    if release_control['active_override']:
+        issue_basis['release']['administrative_override']=release_control['override']
     accepted=sum(c['status'] in ('accepted','not_applicable') for c in checks)
     packet={'project':row_dict(_project(s,cfg.project_id)), 'config':row_dict(cfg),'version':cfg.version,
-        'item':row_dict(item), 'sections':[{**section,'checks':[c for c in checks if c['section']==section['code']]} for section in SECTIONS],
+        'item':{**row_dict(item),'release_control':release_control}, 'sections':[{**section,'checks':[c for c in checks if c['section']==section['code']]} for section in SECTIONS],
         'records':records,'documents':available,'blockers':list(dict.fromkeys(blockers)),
         'status':'ready_for_issue' if not blockers else ('stale' if any(c['status']=='stale' for c in checks) else 'in_progress'),
         'percent':round(100*accepted/len(checks),1),'permissions':_permissions(user),
@@ -1105,6 +1120,10 @@ def _render_item(snapshot,draft=False):
     body+=_table([{'project_id':packet['project']['id'],'project':packet['project']['name'],'item_id':item['id'],
         'description':item['description'],'drawing':item['drawing'],'revision':packet['records']['tracking']['plan']['drawing_revision'],
         'purchase_order':packet['config']['purchase_order'],'work_order':packet['config']['work_order']}])
+    release_control=item.get('release_control',{})
+    if release_control.get('active_override'):
+        override=release_control['override']
+        body+='<div class="banner draft"><strong>ADMINISTRATIVE RELEASE — QA RELEASE NOT VERIFIED</strong><p>'+_escape(override['reason'])+'</p><p>Recorded by '+_escape(override['actor'])+' at '+_escape(override['at'])+'. Existing inspection, hold and work records retain their actual status.</p></div>'
     body+='<p>'+_escape(snapshot['source_note'])+'</p><p><strong>Manufacturer:</strong> '+_escape(packet['config']['manufacturer_name'])+' · '+_escape(packet['config']['manufacturer_contact'])+'</p>'
     body+='<p><strong>Advisements:</strong> '+_escape(packet['config']['advisements'] or 'See reviewed applicability and records below.')+'</p>'
     body+='<h2>Table of contents</h2><ol>'+''.join('<li><a href="#section-'+s['code']+'">'+_escape(s['code']+' · '+s['title'])+'</a></li>' for s in packet['sections'])+'</ol>'
@@ -1130,7 +1149,7 @@ def _render_item(snapshot,draft=False):
     body+='<h3>Inspections and actual measurements</h3>'+_table(records['inspections'],['item_id','kind','result','report','measurements','inspector','at'])
     body+='<h3>Rework and process exceptions</h3>'+_table(records['reworks'])+_table(records['flow_exceptions'])
     body+='<h3>Process traveler records retained at issue</h3>'+_table(records['flow_events'],['item_id','sequence','step','action','reference','notes','actor','at','data'])
-    body+='<h3>Child spools and component links</h3>'+_table(records['child_spools'],['item_id','project_id','description','drawing_revision','released'])+_table(records['component_links'])
+    body+='<h3>Child spools and component links</h3>'+_table(records['child_spools'],['item_id','project_id','description','drawing_revision','released','release_mode'])+_table(records['component_links'])
     if records.get('parts'):
         body+='<h3>Required spool parts and quantities retained at issue</h3>'+_table(records['parts']['lines'],
             ['id','part_number','description','required_qty','assigned_qty','received_qty','prepared_qty','short_qty','remaining_qty'])

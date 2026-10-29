@@ -234,6 +234,8 @@ An administrator can use **Export Excel**. The **Audit readiness** worksheet pre
 
 ## Role reference
 
+Administrators also have **Admin controls** for explicit release exceptions, return to work, custody corrections and employee access. An administrative release can be recorded with incomplete normal checks, but it is labelled separately from QA release and retains the missing work/evidence and holds. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md). Normal inspection, acceptance and Job Packet decisions continue to use their actual supporting records.
+
 | Role | Tracking responsibilities |
 | --- | --- |
 | Handler | Record fit-up and submit evidence |

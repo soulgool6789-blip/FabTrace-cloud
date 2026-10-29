@@ -756,6 +756,7 @@ def _sync_legacy_counts(s, item):
 @_snapshot_response
 def tracking_summary(s, item):
     from production import compact_process_summary
+    from administration import release_summary
     plan = s.get(SpoolPlan, item.id)
     if not plan:
         return None
@@ -765,6 +766,9 @@ def tracking_summary(s, item):
     blockers = tracking_release_errors(s, item)
     from parts import parts_summary
     parts = parts_summary(s, item.id)
+    release_control = release_summary(s, item)
+    if release_control['active_override']:
+        blockers.append('Administrative release is recorded; ordinary QA release has not been verified')
     return {
         'item_id': item.id, 'description': item.description,
         'drawing': item.drawing, 'drawing_revision': plan.drawing_revision,
@@ -774,6 +778,7 @@ def tracking_summary(s, item):
         'welds_defined': len(welds), 'production_complete': sum(_production_complete(s, w) for w in welds),
         'qa_accepted': sum(_qa_accepted(s, w) for w in welds),
         'ready_to_release': not blockers, 'released': bool(item.released),
+        'release_control': release_control,
         'blockers': blockers, 'due_date': plan.due_date,
         'production_process': compact_process_summary(_snapshot(s, item.id)['production_process']),
         **({'parts': parts} if parts else {}),
@@ -818,10 +823,12 @@ def template_dict(row):
 def spool_dict(s, item):
     plan = s.get(SpoolPlan, item.id)
     from parts import parts_summary
+    from administration import release_summary
     parts = parts_summary(s, item.id)
     return {
         **({'parts': parts} if parts else {}),
-        'item': asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
+        'item': {**asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
+                 'release_control': release_summary(s, item)},
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
         'summary': tracking_summary(s, item),
         'production_process': _snapshot(s, item.id)['production_process'],

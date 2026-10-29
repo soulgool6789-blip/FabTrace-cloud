@@ -814,6 +814,136 @@ def verify_concurrent_transfers(application, api):
             "write_locks_on_reads": 0, "mutations_on_reads": 0}
 
 
+def verify_admin_dispositions(application, api):
+    from test_admin import detail, disposition_body
+    from test_flow import create_item, enroll
+    from test_progress import database_state
+
+    item_id = create_item(api, "PG-ADMIN-DISPOSITION", kind="Spool")
+    enroll(api, item_id, "spool")
+    original = detail(api, item_id)
+    transfer = ok(api.get(f"/api/transfers/items/{item_id}"))
+    release = {"expected_version": original["version"], "reason": "Concurrent isolated administrative disposition"}
+    handoff = {"sender_badge": transfer["handler"], "handler": BADGES["welder"],
+               "location_id": "fit_up", "operational_status": "queued", "expected_transfer_version": transfer["version"]}
+    gate, seen = Barrier(2), set()
+
+    def synchronize(connection, cursor, statement, parameters, context, many):
+        if "pg_advisory_xact_lock" in statement and id(connection) not in seen:
+            seen.add(id(connection))
+            gate.wait(timeout=15)
+
+    def submit(path, body):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.post(path, body)
+            return {"status": response.status_code, "body": response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, "before_cursor_execute", synchronize)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(submit, path, body) for path, body in (
+                (f"/api/admin/items/{item_id}/release", release),
+                (f"/api/items/{item_id}/transfer", handoff))]
+            responses = [future.result(timeout=30) for future in futures]
+    finally:
+        event.remove(application.engine, "before_cursor_execute", synchronize)
+    assert sorted(row["status"] for row in responses) == [200, 409], responses
+    current = detail(api, item_id)
+    if not current["item"]["released"]:
+        current = ok(api.post(f"/api/admin/items/{item_id}/release", disposition_body(api, item_id)))
+    assert current["release"]["mode"] == "admin_override" and current["release"]["qa_released"] is False
+    assert current["item"]["dimensional"] == "Not started" and current["item"]["welds_done"] == 0
+    assert current["item"]["flow_step"] == 16
+    assert current["release"]["override"]["bypassed_blockers"]
+    released_token = current["version"]
+    returned = ok(api.post(f"/api/admin/items/{item_id}/return-to-work", {
+        "expected_version": released_token, "reason": "Restore the original local production position",
+    }))
+    assert returned["item"]["flow_step"] == 9 and not returned["item"]["released"]
+    assert api.post(f"/api/admin/items/{item_id}/release", release).status_code == 409
+    assert api.post(f"/api/admin/items/{item_id}/release", {
+        "expected_version": released_token, "reason": "Reject old release-state token after reversal",
+    }).status_code == 409
+
+    before, unsafe = database_state(api), []
+
+    def observe(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if sql.startswith(("INSERT", "UPDATE", "DELETE")) or "FOR UPDATE" in sql or "PG_ADVISORY_XACT_LOCK" in sql:
+            unsafe.append(statement)
+
+    paths = ("/api/admin/overview", "/api/admin/items", f"/api/admin/items/{item_id}",
+             "/api/admin/employees", "/api/exports/excel")
+    event.listen(application.engine, "before_cursor_execute", observe)
+    try:
+        for path in paths:
+            response = api.get(path)
+            assert response.status_code == 200, response.text
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe)
+    assert unsafe == [] and database_state(api) == before
+    return {"override_vs_handoff": [200, 409], "ordinary_qa_not_fabricated": True,
+            "prior_route_restored": True, "stale_ABA_rejected": True,
+            "readonly_views_and_export": len(paths), "mutations_on_reads": 0, "write_locks_on_reads": 0}
+
+
+def verify_last_admin_concurrency(application, api):
+    """Run last: this deliberately revokes one original synthetic admin session."""
+    from administration import EmployeeAccessState
+
+    second = "PG-SECOND-ADMIN"
+    ok(api.post("/api/employees", {"badge": second, "name": "Second isolated administrator",
+        "role": "admin", "pin": TEST_PIN}), 201)
+    accounts = {row["badge"]: row for row in ok(api.get("/api/admin/employees"))["employees"]}
+    bodies = {badge: {"expected_version": accounts[badge]["version"], "name": accounts[badge]["name"],
+                      "role": "supervisor", "active": True, "reason": "Competing self-demotion in isolated last-admin test"}
+              for badge in (BADGES["admin"], second)}
+    gate, seen = Barrier(2), set()
+
+    def synchronize(connection, cursor, statement, parameters, context, many):
+        if "pg_advisory_xact_lock" in statement and id(connection) not in seen:
+            seen.add(id(connection))
+            gate.wait(timeout=15)
+
+    def submit(badge):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.patch(f"/api/admin/employees/{badge}", bodies[badge], role=badge)
+            return {"badge": badge, "status": response.status_code, "body": response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, "before_cursor_execute", synchronize)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = [future.result(timeout=30) for future in [pool.submit(submit, badge) for badge in bodies]]
+    finally:
+        event.remove(application.engine, "before_cursor_execute", synchronize)
+    assert sorted(row["status"] for row in responses) == [200, 409], responses
+    demoted = next(row["badge"] for row in responses if row["status"] == 200)
+    remaining = next(row["badge"] for row in responses if row["status"] == 409)
+    assert api.get("/api/me", role=demoted).status_code == 401
+    current = ok(api.get("/api/admin/employees", role=remaining))
+    assert current["active_admins"] == 1
+    target = next(row for row in current["employees"] if row["badge"] == BADGES["welder"])
+    assert api.get("/api/me", role="welder").status_code == 200
+    ok(api.post(f"/api/admin/employees/{target['badge']}/pin", {
+        "expected_version": target["version"], "pin": "new-synthetic-local-pin-123456789",
+        "reason": "Verify stale session revocation on PostgreSQL",
+    }, role=remaining))
+    assert api.get("/api/me", role="welder").status_code == 401
+    with application.SessionLocal() as session:
+        assert session.scalar(select(func.count()).select_from(application.Employee).where(
+            application.Employee.active.is_(True), application.Employee.role == "admin")) == 1
+        assert session.get(EmployeeAccessState, demoted).session_version == 1
+        assert session.get(EmployeeAccessState, BADGES["welder"]).session_version == 1
+    return {"competing_last_admin_demotions": [200, 409], "active_admins_retained": 1,
+            "demoted_admin_session_revoked": True, "pin_reset_session_revoked": True}
+
+
 def verify_excel_export(application, api):
     exports = importlib.import_module("exports")
     def row_counts():
@@ -912,6 +1042,7 @@ def verify(dsn):
         dossier = importlib.import_module("dossier")
         parts = importlib.import_module("parts")
         transfers = importlib.import_module("transfers")
+        administration = importlib.import_module("administration")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -943,6 +1074,7 @@ def verify(dsn):
                 assert session.query(model).count() == 0, "Migration invented parts requirements, allocations or history"
             for model in (transfers.ItemTransferState, transfers.TransferLocation):
                 assert session.query(model).count() == 0, "Migration invented transfer status or custom shop locations"
+            assert session.query(administration.EmployeeAccessState).count() == 0, "Migration changed existing employee access or sessions"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -966,6 +1098,7 @@ def verify(dsn):
         dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
         parts_concurrency = verify_concurrent_parts_allocation(application, api)
         transfer_concurrency = verify_concurrent_transfers(application, api)
+        admin_dispositions = verify_admin_dispositions(application, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -974,6 +1107,7 @@ def verify(dsn):
             item = session.get(application.Item, "LEGACY-UPGRADE-CHECK")
             assert item.welds_done == 3 and item.welds_required == 7 and item.on_hold is True
             assert session.scalar(select(application.Audit).where(application.Audit.event == "LEGACY_TEST_SEED")) is not None
+        admin_access = verify_last_admin_concurrency(application, api)
         return {
             "postgresql_version": server_version,
             "additive_upgrade": "passed",
@@ -988,6 +1122,8 @@ def verify(dsn):
             "concurrent_dossier_mutation": dossier_concurrency,
             "concurrent_parts_allocation": parts_concurrency,
             "concurrent_transfers": transfer_concurrency,
+            "administrative_dispositions": admin_dispositions,
+            "administrator_access": admin_access,
             "readonly_quality_gate_views": quality_read_views,
             "readonly_dossier_progress_and_exports": dossier_read_views,
             "excel_export": excel_export,
