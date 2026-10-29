@@ -45,7 +45,7 @@ const context={
   URL,URLSearchParams,Date,console,esc,
   history:{replaceState(_a,_b,url){context.lastUrl=url}},
   show(name){context.lastPage=name},stopCloudCamera(){},notify(message){messages.push(message)},
-  async openItem(id){context.lastItem=id},
+  async openItem(id){context.lastItem=id},FabParts:{open:options=>{context.openedParts=options;}},
   FormData:class {constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
   api:async(url,options={})=>{
     calls.push({url,...options});
@@ -82,6 +82,8 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   assert.doesNotMatch(html(),/unrelated search/);assert.match(html(),/<option value="" selected>All processes/);
   assert.equal(calls.at(-1).url,'/api/tracking/overview?project_id=P1','setup shortcut opens the whole exact project');
 
+  spool.parts={configured:true,totals:{required_qty:6,prepared_qty:2,assigned_qty:4,received_qty:3,short_qty:2}};
+  await context.FabTracking.open({spool:'S1'});assert.match(html(),/2 of 6 required pieces prepared/);await click('spool-parts','S1');assert.equal(context.openedParts.spool,'S1');assert.equal(context.openedParts.project,'P1');
   await context.FabTracking.open({spool:'S1',weld:'WLD1'});
   assert.match(context.lastUrl,/spool=S1/);assert.match(context.lastUrl,/weld=WLD1/);
   assert.match(html(),/Joint &lt;one&gt;/);

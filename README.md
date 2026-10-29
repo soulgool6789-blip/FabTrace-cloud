@@ -16,6 +16,7 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 - Spool process timers with start, move, pause, resume and finish controls; current-process age, visit history, repeat-visit totals, and Excel timing reports.
 - A numbered **Process flow** workspace following CLM's 24-step material-to-shipment chart, with linked components/spools/assemblies, scanned or entered identity checks, custody handoffs, QA gates, exception/rework returns, and separate shipment and delivery confirmation.
 - **Project progress** with progress bars for registered parts, WIP/finished/shipped/delivered filters, work-package and part-type filters, and links to each physical record.
+- **Spool parts** with required quantities by part type, actual QR-item allocations, receiving/preparation progress, shortages and versioned scope corrections.
 - **Job Packets / CLM Final Dossiers** organized into ten sections and 25 detailed checks, based on Kelvion QF-QAS-100 Rev B page 8. Current fabrication records, uploaded controlled files, signed QA reviews, immutable issued revisions, printable packets, ZIP downloads and separately recorded physical/digital handovers are linked by project and item.
 
 Existing item registration, bulk CSV import, employee QR badges, item QR labels, and custody handoffs remain available. Item types include **Part**, **Spool**, and **Assembly**.
@@ -26,7 +27,11 @@ Deploying this version does **not** convert existing items, invent individual we
 
 Enrollment is explicit. It preserves historical records, establishes the planned joint count, and makes individual weld work and requirements authoritative. Old aggregate weld logging and blanket weld inspection are then rejected for that spool. Historical work remains in audit history; displayed completion is calculated from individual records. Prior green inspection flags cannot bypass the new requirements. Released items must be reopened by an administrator before enrollment or other changes.
 
-See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow, [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for progress and completed-project packets, and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
+See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow, [PARTS_GUIDE.md](PARTS_GUIDE.md) for spool component quantities, [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for progress and completed-project packets, and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
+
+## Define required parts for each spool
+
+Open **Spool parts** or `/?parts=1`. A supervisor/administrator enters the approved part types and required whole-piece quantities for an existing tracked spool. Assign actual Part QR IDs to the lines; each physical piece counts once. Required, assigned, received and prepared quantities stay separate, and the bars use the required quantity so unregistered shortages remain visible. Receipt and preparation come from recorded component traveler steps and current readiness. Scope changes and allocations are versioned; enabled lists reconcile the numbered traveler's component count and participate in production/release and Job Packet checks. Existing spools without a list keep their previous workflow. See [PARTS_GUIDE.md](PARTS_GUIDE.md).
 
 ## Track project progress and assemble the final Job Packet
 
@@ -90,6 +95,8 @@ The **Audit readiness** report presents the five audit prompts, current source/v
 
 Seven **Packet** worksheets retain dossier configuration, checklist entries, file metadata, signed reviews, issued snapshots, handovers and events. **Project progress**, **Part progress** and **Job Packet readiness** report their current states from the same snapshot. Uploaded binary files are excluded from Excel; use the issued packet ZIP for the selected original files.
 
+**Spool parts plans**, **Spool part lines**, **Part allocations** and **Spool parts events** retain required component scope and its physical identities/history. **Spool parts progress** reports required, assigned, received, prepared, short and remaining quantities, with the required-piece denominator and actual component IDs.
+
 ## Run locally
 
 Use Python 3.12 and an existing local PostgreSQL database/user.
@@ -147,6 +154,7 @@ node tests/quality_ui_smoke.cjs
 node tests/progress_ui_smoke.cjs
 node tests/dossier_ui_smoke.cjs
 node tests/guide_ui_smoke.cjs
+node tests/parts_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.

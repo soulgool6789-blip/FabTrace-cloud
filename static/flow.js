@@ -243,6 +243,7 @@
     const detail=state.detail,item=detail.item,flow=detail.flow;
     let controls=action('board','Process board')+action('item-record','Item & QR record',item.id);
     if(['spool','assembly'].includes(flow?.route||detail.suggested_route)||['Spool','Assembly'].includes(item.kind))controls+=action('weld-record','Individual welds',item.id);
+    if((flow?.route||detail.suggested_route)==='spool'||item.kind==='Spool')controls+=action('spool-parts','Spool parts',item.id);
     let html=heading(item.id,item.description||'Fabrication item',controls)+lookup();
     if(state.notice)html+=`<div class="ff-error" role="alert">${esc(state.notice)}</div>`;
     if(!flow){
@@ -250,6 +251,7 @@
       return html+'<section class="card"><h2>The fabrication flow</h2>'+renderMap(false)+'</section>';
     }
     html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${route(flow.route)?.first_step}–${route(flow.route)?.last_step}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
+    if(detail.parts?.configured){const t=detail.parts.totals||{},required=num(t.required_qty),prepared=num(t.prepared_qty);html+=`<section class="card"><div class="ff-section-head"><h2>Required component pieces</h2>${action('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${num(t.assigned_qty)} assigned · ${num(t.received_qty)} receipt recorded · ${num(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}</section>`;}
     const boardRow=state.board.find(row=>row.item_id===item.id);
     html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',boardRow?.project_id||flow.project_id||item.project],['Subproject',boardRow?.subproject_id||flow.subproject_id],['Location',item.location],['Current handler',item.handler],['Drawing',item.drawing],['Quality release',item.released?'Released':'Not released']])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
     html+=`<section class="card"><details class="ff-fold"><summary>View the complete 24-step flow</summary><p class="ff-footer-note">Highlighted steps belong to this ${esc(routeNames[flow.route].toLowerCase())}. Other stages belong to its linked component, spool, or assembly records.</p>${renderMap(true)}</details></section>`;
@@ -323,12 +325,15 @@
   function startFlow(){
     if(!can('start'))return;
     const item=state.detail.item,initial=state.detail.suggested_route||(item.kind==='Spool'?'spool':item.kind==='Assembly'?'assembly':'component');
+    const configuredParts=state.detail.parts?.configured===true,requiredParts=num(state.detail.parts?.totals?.required_qty),expectedFor=id=>id==='spool'&&configuredParts?requiredParts:id==='component'?0:1;
+    if(initial==='spool'&&configuredParts&&(!Number.isInteger(requiredParts)||requiredParts<1))return notify('Refresh the required parts list before starting this spool route.');
     const stepOptions=id=>arr(state.catalog.steps).filter(step=>step.route===id).map(step=>[step.number,`${step.number} · ${step.title}`]);
-    const content='<p>A component, spool, and assembly are separate physical records. Start the route that matches this item.</p>'+fields(field('route','Route',initial,{required:true,options:arr(state.catalog.routes).map(row=>[row.id,`${row.label} · steps ${row.first_step}–${row.last_step}`])})+field('start_step','Start at step',route(initial)?.first_step,{required:true,options:stepOptions(initial)}))+`<div id="flowChildrenFields">${fields(field('expected_children','Expected child records',initial==='component'?0:1,{required:true,type:'number',min:0,max:10000,help:'Component records for a spool; spool records for an assembly.'})+field('material_reference','Existing material basis (if no components will be linked)','',{maxlength:500,help:'For an existing spool with zero linked components, identify its approved material records.'}))}</div><div id="flowBaselineFields" class="hidden">${fields(field('baseline_reference','Existing-work record / traveler reference','',{maxlength:500,full:true})+field('baseline_reason','Why this item starts after the first route step','',{type:'textarea',maxlength:3000,full:true}))}<p class="ff-form-help">Earlier steps will be marked “Not recorded.” This does not create historical completion or inspection approvals.</p></div>`+fields(field('notes','Setup notes','',{type:'textarea',maxlength:3000,full:true}));
+    const content='<p>A component, spool, and assembly are separate physical records. Start the route that matches this item.</p>'+(configuredParts?`<p class="notice">Required component count: <strong>${requiredParts}</strong>, from Spool parts (${esc(state.detail.parts.reference||'current list')}). To correct the quantity, close this dialog and open Spool parts.</p>`:'')+fields(field('route','Route',initial,{required:true,options:arr(state.catalog.routes).map(row=>[row.id,`${row.label} · steps ${row.first_step}–${row.last_step}`])})+field('start_step','Start at step',route(initial)?.first_step,{required:true,options:stepOptions(initial)}))+`<div id="flowChildrenFields">${fields(field('expected_children','Expected child records',expectedFor(initial),{required:true,type:'number',min:0,max:10000,readonly:initial==='spool'&&configuredParts,help:configuredParts?'Spool component quantities are managed in Spool parts.':'Component records for a spool; spool records for an assembly.'})+field('material_reference','Existing material basis (if no components will be linked)','',{maxlength:500,help:'For an existing spool with zero linked components, identify its approved material records.'}))}</div><div id="flowBaselineFields" class="hidden">${fields(field('baseline_reference','Existing-work record / traveler reference','',{maxlength:500,full:true})+field('baseline_reason','Why this item starts after the first route step','',{type:'textarea',maxlength:3000,full:true}))}<p class="ff-form-help">Earlier steps will be marked “Not recorded.” This does not create historical completion or inspection approvals.</p></div>`+fields(field('notes','Setup notes','',{type:'textarea',maxlength:3000,full:true}));
     dialog('Set up process route · '+item.id,content,async values=>{
       const selected=route(values.route),start=Number(values.start_step),expected=values.route==='component'?0:Number(values.expected_children);
       if(!selected||!Number.isInteger(start)||start<selected.first_step||start>selected.last_step)throw Error('Choose a step within this route.');
       if(!Number.isInteger(expected)||expected<0)throw Error('Expected linked items must be a whole number of zero or more.');
+      if(values.route==='spool'&&configuredParts&&expected!==requiredParts)throw Error('The component count must match the current required parts list. Edit quantities in Spool parts.');
       const payload={route:values.route,expected_children:expected,start_step:start,notes:String(values.notes||'').trim()};
       if(values.route==='assembly'&&expected<1)throw Error('An assembly needs at least one expected spool.');
       if(values.route==='spool'){payload.material_reference=String(values.material_reference||'').trim();if(!expected&&!payload.material_reference)throw Error('Identify the existing material records when no components will be linked.');}
@@ -339,12 +344,13 @@
       const selected=node('ff-field-route').value,first=route(selected)?.first_step;
       node('flowChildrenFields').classList.toggle('hidden',selected==='component');
       node('ff-field-expected_children').disabled=selected==='component';
+      node('ff-field-expected_children').readOnly=selected==='spool'&&configuredParts;
       node('ff-field-material_reference').disabled=selected!=='spool';
       const late=Number(node('ff-field-start_step').value)>first;
       node('flowBaselineFields').classList.toggle('hidden',!late);
       for(const key of ['baseline_reference','baseline_reason']){node('ff-field-'+key).required=late;node('ff-field-'+key).disabled=!late;}
     };
-    node('ff-field-route').onchange=()=>{const id=node('ff-field-route').value;node('ff-field-start_step').innerHTML=stepOptions(id).map(row=>option(row[0],row[1],route(id)?.first_step)).join('');node('ff-field-start_step').value=String(route(id)?.first_step);node('ff-field-expected_children').value=id==='component'?'0':'1';updateFields()};
+    node('ff-field-route').onchange=()=>{const id=node('ff-field-route').value;node('ff-field-start_step').innerHTML=stepOptions(id).map(row=>option(row[0],row[1],route(id)?.first_step)).join('');node('ff-field-start_step').value=String(route(id)?.first_step);node('ff-field-expected_children').value=String(expectedFor(id));updateFields()};
     node('ff-field-start_step').onchange=updateFields;updateFields();
   }
   function failStep(){
@@ -360,6 +366,7 @@
   function editScope(){
     if(!can('scope'))return;
     const detail=state.detail,flow=detail.flow,assembly=flow.route==='assembly',linked=arr(assembly?detail.spools:detail.components).length;
+    if(!assembly&&detail.parts?.configured)return window.FabParts.open({spool:detail.item.id,project:flow.project_id||state.project});
     dialog('Edit required '+(assembly?'spool':'component')+' count',`<p>${esc(detail.item.id)} has ${linked} linked ${assembly?'spools':'components'}. Record the corrected scope and its authorization reference.</p>`+fields(field('expected_children','Required '+(assembly?'spools':'components'),flow.expected_children,{required:true,type:'number',min:Math.max(linked,assembly?1:0),max:10000})+(!assembly?field('material_reference','Existing material basis (required for zero components)',flow.material_reference||'',{maxlength:500}):'')+field('reference','Scope / drawing / authorization reference','',{required:true,minlength:2,maxlength:500,full:true})+field('reason','Reason for the count correction','',{required:true,type:'textarea',maxlength:3000,full:true})),values=>{
       const expected=Number(values.expected_children),reason=String(values.reason||'').trim(),reference=String(values.reference||'').trim(),material=String(values.material_reference||'').trim();
       if(!Number.isInteger(expected)||expected<Math.max(linked,assembly?1:0))throw Error('The required count cannot be lower than the linked scope. Assemblies need at least one spool.');
@@ -396,6 +403,7 @@
     if(name==='item')return open({item:id});
     if(name==='item-record')return openItem(id);
     if(name==='weld-record')return window.FabTracking.open({spool:id});
+    if(name==='spool-parts')return window.FabParts.open({spool:id,project:state.project});
     if(name==='filter-step'){state.step=id;state.item='';state.detail=null;render();updateUrl();return;}
     if(name==='clear-step'){state.step='';render();return;}
     if(name==='start')return startFlow();

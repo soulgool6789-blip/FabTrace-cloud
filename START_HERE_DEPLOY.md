@@ -15,7 +15,7 @@
 
 ### What initialization changes
 
-`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on eighteen history/file tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool/traveler enrollment or process-time history is invented. The audit-readiness release adds seven quality tables and protects immutable document revisions, evidence, reviews and events. It does not alter existing table columns. No audit workspace, approved source, evidence or completed activity is seeded during deployment; users explicitly create draft workspaces after sign-in.
+`init_db.py` adds absent tables, installs PostgreSQL protection against updates/deletes on nineteen history/file tables, and creates a bootstrap administrator only when the employee table is empty. PostgreSQL setup is transactional and serialized with an advisory lock. Existing employee and item records are retained; no automatic spool/traveler enrollment or process-time history is invented. The audit-readiness release adds seven quality tables and protects immutable document revisions, evidence, reviews and events. It does not alter existing table columns. No audit workspace, approved source, evidence or completed activity is seeded during deployment; users explicitly create draft workspaces after sign-in.
 
 `create_all()` does not add columns to tables that already exist. Future column changes require an explicit migration. If upgrading a substantially older installation, compare its actual schema with the source before deployment; the earlier Google part-number migration is separate from this tracking addition.
 
@@ -69,3 +69,9 @@ After deployment, verify the new navigation/assets, `/healthz` version/commit an
 ## Guide and setup navigation update
 
 Version `2026.10.29-guide.1` adds the authenticated **Guide & setup** screen, project-scoped setup shortcuts, explicit planning-filter reset and persistent Job Packet tab links. Deploy `static/guide.js`, `static/guide.css` and the synchronized HTML shells with the rest of the source. There are no schema, infrastructure, credential or production-data changes. The existing pre-deploy initializer remains safe and idempotent. Verify `/?guide=1`, login/deep-link routing, mobile guide layout, empty-project states and the existing workflow screens after the update.
+
+## Spool parts quantity update
+
+Version `2026.10.29-parts.1` adds four parts-plan/requirement/allocation/history tables and the **Spool parts** workspace. Deploy `parts.py`, its backend integrations, `static/parts.js`, `static/parts.css` and both synchronized HTML entrypoints. The existing `python init_db.py` pre-deploy command creates the tables and protects the new parts history; no existing column migration or new infrastructure is required.
+
+Initialization does not create parts lists, physical items, allocations, receipts or preparation records. Existing spools are enrolled only by an authorized user. Verify health, new-table/history coverage, authenticated parts navigation, a synthetic local quantity/QR workflow and current Excel/Job Packet behavior. Retain all existing database and secret settings.

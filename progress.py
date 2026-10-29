@@ -172,6 +172,11 @@ def project_rows(s, project_id=None):
                     'current_title': STEP_BY_NUMBER[flow.current_step]['title'] if flow and flow.current_step else '',
                     'released': bool(item.released), 'location': item.location, 'handler': item.handler,
                     'updated_at': _stamp(item.updated_at)}
+                from parts import parts_summary
+                parts = parts_summary(s, item.id)
+                if parts:
+                    raw[item.id]['parts'] = parts
+                    errors.extend('Required parts: ' + message for message in parts['blockers'])
                 base_errors[item.id] = list(dict.fromkeys(errors))
         finally:
             if previous is None:
