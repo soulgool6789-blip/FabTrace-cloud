@@ -1,4 +1,10 @@
 /* Administrator controls. Scoped to the admin workspace and release labels. */
+.fa-employee-filters{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:16px}.fa-employee-filters .field{flex:1;min-width:min(100%,240px);margin:0}.fa-employee-filters .fa-choice{flex-shrink:0}
+.fa-removed-row{background:#f5f6f8}.fa-removed-note{border-left:3px solid #69778a;padding:12px 14px;background:#f5f7fa;margin:14px 0}.fa-removed-note p{margin:8px 0}
+.fa-review-identity{padding:12px 14px;border:1px solid #dce3ea;border-radius:8px;overflow-wrap:anywhere}.fa-review-identity strong,.fa-review-identity span{display:block}.fa-review-identity span{margin-top:5px;color:#617283;font-size:13px}
+.fa-assignment-note{background:#fff5df;border-left:3px solid #ad6c00;padding:12px 14px;margin:14px 0;overflow-wrap:anywhere}.fa-assignment-note p{margin:6px 0 0}
+.fa-danger{color:#a52222;border-color:#bd4242}.fa-danger:not(:disabled):hover{background:#fff0f0}.fa-danger-solid{background:#a52222;color:#fff}.fa-danger-solid:not(:disabled):hover{background:#841a1a}.fa-danger:disabled{opacity:.55}
+.fa-action-form.fa-removal-form{border-top-color:#bd4242}
 .fa-header{display:flex;align-items:start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
 .fa-header h1{margin-bottom:5px}.fa-header p{max-width:760px;color:#617283}.fa-header .actions{align-items:start}
 .fa-tabs{display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid #dce3ea;margin-bottom:18px;padding-bottom:12px}

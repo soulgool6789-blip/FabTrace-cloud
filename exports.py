@@ -38,7 +38,7 @@ from dossier import (DossierProject, DossierEntry, DossierDocument, DossierRevie
 from progress import project_rows, summarize as progress_summary
 from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_snapshot
 from transfers import ItemTransferState, TransferLocation
-from administration import EmployeeAccessState
+from administration import EmployeeAccessState, EmployeeRemovalState
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -78,6 +78,7 @@ def _spec(model, sheet, columns, keys='id'):
 TABLE_SPECS = (
     _spec(Employee, 'Employees', 'badge name role active created_at', 'badge'),
     _spec(EmployeeAccessState, 'Employee access states', 'badge version session_version updated_by updated_at', 'badge'),
+    _spec(EmployeeRemovalState, 'Employee removal states', 'badge removed removed_at removed_by removal_reason restored_at restored_by restoration_reason', 'badge'),
     _spec(Item, 'Items', 'id description kind project google_part_number drawing location handler welds_required welds_done dimensional weld dimension_at weld_at last_work_at reinspection_due on_hold released released_at released_by created_at updated_at'),
     _spec(Inspection, 'Inspections', 'id item_id kind result inspector report measurements at'),
     _spec(Rework, 'Reworks', 'id item_id kind reason assigned opened_at closed_at closed_by close_notes'),
@@ -184,6 +185,7 @@ RELATIONSHIPS = (
     'Operational transfer status does not change numbered process steps, timers, holds, inspection acceptance or release. A custody_transfer Flow event invalidates stale traveler forms without advancing their step.',
     'Items.released includes an explicit administrative release as well as ordinary QA release. Part progress release_mode and immutable ADMIN_RELEASE_OVERRIDE audit details identify that distinction. An override does not record passing inspections, completed welds or a QA-issued Job Packet.',
     'Employee access states records account-edit and session-revocation versions. Private PINs, PIN hashes and session tokens are excluded. Administrative custody corrections are separately identified; they do not claim employee badge scans.',
+    'Employee removal states records removal/restoration metadata keyed to Employees.badge. Employees retains all identities, including removed accounts, so historical work and custody references remain traceable. Removal disables access without reassigning items; restoration leaves the account inactive until explicitly enabled. Immutable EMPLOYEE_REMOVED and EMPLOYEE_RESTORED audit events retain each decision.',
     'Employees.role stores the assigned job position. Current supported roles are admin (Administrator), supervisor, handler (Material coordinator), welder, fitup_welder, process_welder, inspector (QA/QC), painter, finisher and misc (Miscellaneous). Position changes revoke existing sessions; historical actors and badge identities are not rewritten.',
     'Job permissions restrict actual work separately from visibility and custody. Shared badge handoffs do not grant fabrication or QA authority. Supervisors may coordinate process timing but cannot record specialized physical welding, painting or QA acceptance. Tracking requirement owner_role controls evidence submission, with administrator/supervisor/QA coordination access; QA acceptance remains separate.',
     'spool_parts_plans.spool_id -> the tracked spool items.id; spool_part_lines.spool_id -> its optional controlled parts plan. Quantities are whole physical pieces, not weld counts or length.',

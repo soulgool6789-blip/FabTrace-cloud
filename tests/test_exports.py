@@ -24,6 +24,7 @@ EXCLUDED_COLUMNS = {"Packet issues": {"print_html"}}
 TABLES = {
     "Employees": ("main", "Employee"),
     "Employee access states": ("administration", "EmployeeAccessState"),
+    "Employee removal states": ("administration", "EmployeeRemovalState"),
     "Items": ("main", "Item"),
     "Inspections": ("main", "Inspection"),
     "Reworks": ("main", "Rework"),
@@ -411,6 +412,38 @@ def test_admin_release_and_account_changes_export_without_fabricated_qa_or_secre
     with api.session_factory() as session:
         for current in session.scalars(select(api.application.Employee)):
             assert current.pin_hash.encode() not in workbook.xml
+    assert snapshot(api) == before
+
+
+def test_employee_removal_export_retains_identity_status_and_immutable_decision(api):
+    from test_admin import employee
+    from tracking_helpers import ok
+
+    item_id = 'EXPORT-REMOVED-CUSTODIAN'
+    api.item(item_id, welds_required=0)
+    badge = BADGES['welder']
+    account = employee(api, badge)
+    reason = 'Local export verification of employee removal'
+    ok(api.post(f'/api/admin/employees/{badge}/remove', {
+        'expected_version': account['version'], 'reason': reason,
+    }))
+    before = snapshot(api)
+    _, workbook = download(api)
+    removed = next(row for row in workbook.records('Employee removal states') if row['badge'].value == badge)
+    assert removed['removed'].value is True
+    assert removed['removed_by'].value == BADGES['admin']
+    assert removed['removal_reason'].value == reason
+    assert removed['removed_at'].value
+    retained = next(row for row in workbook.records('Employees') if row['badge'].value == badge)
+    assert retained['name'].value == account['name'] and retained['active'].value is False
+    item = next(row for row in workbook.records('Items') if row['id'].value == item_id)
+    assert item['handler'].value == badge
+    audit_row = next(row for row in workbook.records('Audit events') if row['event'].value == 'EMPLOYEE_REMOVED')
+    assert audit_row['actor'].value == BADGES['admin']
+    assert json.loads(workbook.full_text(audit_row, 'details'))['reason'] == reason
+    assert TEST_PIN.encode() not in workbook.xml
+    with api.session_factory() as session:
+        assert session.get(api.application.Employee, badge).pin_hash.encode() not in workbook.xml
     assert snapshot(api) == before
 
 

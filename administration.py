@@ -11,7 +11,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, func, select
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,30 @@ class EmployeeAccessState(Base):
     session_version = Column(Integer, nullable=False, default=0)
     updated_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class EmployeeRemovalState(Base):
+    """Current roster removal state; the employee identity is never deleted.
+
+    Each removal/restoration also appends a protected Audit event. Keeping this
+    additive table separate leaves existing employee records and foreign keys
+    intact during upgrades and preserves their historical meaning.
+    """
+    __tablename__ = 'employee_removal_states'
+    __table_args__ = (
+        CheckConstraint(
+            '(removed = true AND restored_at IS NULL AND restored_by IS NULL AND restoration_reason IS NULL) '
+            'OR (removed = false AND restored_at IS NOT NULL AND restored_by IS NOT NULL AND restoration_reason IS NOT NULL)',
+            name='ck_employee_removal_state'),
+    )
+    badge = Column(String(80), ForeignKey('employees.badge'), primary_key=True)
+    removed = Column(Boolean, nullable=False, default=True)
+    removed_at = Column(DateTime(timezone=True), nullable=False)
+    removed_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    removal_reason = Column(Text, nullable=False)
+    restored_at = Column(DateTime(timezone=True))
+    restored_by = Column(String(80), ForeignKey('employees.badge'))
+    restoration_reason = Column(Text)
 
 
 class Input(BaseModel):
@@ -91,6 +115,10 @@ class EmployeeUpdateIn(ReasonIn):
         return value.strip() if isinstance(value, str) else value
 
 
+class EmployeeRemovalIn(ReasonIn):
+    expected_version: int = Field(ge=0, strict=True)
+
+
 class PinIn(ReasonIn):
     expected_version: int = Field(ge=0, strict=True)
     pin: str = Field(min_length=8, max_length=128)
@@ -121,9 +149,22 @@ def session_version(s, badge):
     return state.session_version if state else 0
 
 
+def employee_not_removed():
+    """SQL predicate for operational rosters; never filter historical joins."""
+    return ~select(EmployeeRemovalState.badge).where(
+        EmployeeRemovalState.badge == Employee.badge,
+        EmployeeRemovalState.removed.is_(True)).exists()
+
+
+def employee_is_removed(s, badge):
+    state = s.scalar(select(EmployeeRemovalState).where(EmployeeRemovalState.badge == badge)
+        .execution_options(populate_existing=True))
+    return bool(state and state.removed)
+
+
 def validate_session(s, user, payload):
     version = payload.get('sv', 0)
-    if type(version) is not int or version != session_version(s, user.badge):
+    if employee_is_removed(s, user.badge) or type(version) is not int or version != session_version(s, user.badge):
         raise HTTPException(401, 'Your account access changed. Sign in again with your current badge and PIN.')
     s.info['authenticated_session'] = (user.badge, version)
 
@@ -143,7 +184,7 @@ def refresh_session_authority(s):
     access = s.scalar(select(EmployeeAccessState).where(EmployeeAccessState.badge == badge)
         .execution_options(populate_existing=True))
     version = access.session_version if access else 0
-    if not current or not current.active or version != validated_version:
+    if not current or not current.active or employee_is_removed(s, badge) or version != validated_version:
         raise HTTPException(401, 'Your account access changed while this request was waiting. Sign in again.')
     return current
 
@@ -181,7 +222,7 @@ def locked_admin(s, user):
     # after Item, so reversing those locks could deadlock a queued decision.
     current = s.scalar(select(Employee).where(Employee.badge == user.badge)
         .execution_options(populate_existing=True))
-    if not current or not current.active:
+    if not current or not current.active or employee_is_removed(s, user.badge):
         raise HTTPException(401, 'Inactive employee')
     permit(current, 'admin')
     access = s.scalar(select(EmployeeAccessState).where(EmployeeAccessState.badge == current.badge)
@@ -254,14 +295,17 @@ def admin_detail(s, item, user):
 @router.get('/overview')
 def overview(u: Employee = Depends(auth), s: Session = Depends(db)):
     permit(u, 'admin')
-    employees = s.scalars(select(Employee)).all()
+    employees = s.scalars(select(Employee).where(employee_not_removed())).all()
     items = s.scalars(select(Item)).all()
     return {'version': APP_VERSION, 'counts': {'items': len(items),
         'released': sum(bool(row.released) for row in items),
         'admin_released': sum(bool(active_override(s, row)) for row in items),
         'on_hold': sum(bool(row.on_hold) for row in items), 'employees': len(employees),
-        'active_admins': sum(row.active and row.role == 'admin' for row in employees)},
-        'capabilities': ['release_override', 'return_to_work', 'custody_correction', 'employee_access', 'pin_reset']}
+        'active_admins': sum(row.active and row.role == 'admin' for row in employees),
+        'removed_employees': s.scalar(select(func.count()).select_from(EmployeeRemovalState)
+            .where(EmployeeRemovalState.removed.is_(True)))},
+        'capabilities': ['release_override', 'return_to_work', 'custody_correction', 'employee_access',
+                         'pin_reset', 'employee_remove', 'employee_restore']}
 
 
 @router.get('/items')
@@ -381,7 +425,7 @@ def custody_correction(item_id: str, data: CustodyIn, u: Employee = Depends(auth
     selected = validate_location(s, item, expected_transfer_version=current['version'], location_id=data.location_id)
     receiver = s.scalar(select(Employee).where(Employee.badge == data.handler).with_for_update()
         .execution_options(populate_existing=True))
-    if not receiver or not receiver.active:
+    if not receiver or not receiver.active or employee_is_removed(s, data.handler):
         raise HTTPException(422, 'Select an active employee as the corrected custodian.')
     if (item.handler, item.location, current['operational_status']) == (receiver.badge, selected.location, data.operational_status):
         raise HTTPException(409, 'No change to the current custodian, location or work status.')
@@ -404,19 +448,48 @@ def custody_correction(item_id: str, data: CustodyIn, u: Employee = Depends(auth
     return admin_detail(s, item, actor)
 
 
-def _employee_dict(s, employee):
+def _active_admin_count(s):
+    return s.scalar(select(func.count()).select_from(Employee).where(
+        Employee.active.is_(True), Employee.role == 'admin', employee_not_removed()))
+
+
+def _employee_dict(s, employee, *, active_admins=None, assigned_item_count=None):
     access = s.get(EmployeeAccessState, employee.badge)
+    removal = s.get(EmployeeRemovalState, employee.badge)
+    removed = bool(removal and removal.removed)
+    active_admins = _active_admin_count(s) if active_admins is None else active_admins
+    last_admin = employee.active and employee.role == 'admin' and active_admins <= 1
+    if assigned_item_count is None:
+        assigned_item_count = s.scalar(select(func.count()).select_from(Item).where(Item.handler == employee.badge))
     return {**_dict(employee, ('badge', 'name', 'role', 'active')),
         'role_label': role_label(employee), 'permissions': user_permissions(employee),
-        'version': access.version if access else 0, 'can_edit': True, 'can_reset_pin': True}
+        'version': access.version if access else 0,
+        'removed': removed, 'removed_at': _stamp(removal.removed_at) if removal else None,
+        'removed_by': removal.removed_by if removal else None,
+        'removal_reason': removal.removal_reason if removal else None,
+        'restored_at': _stamp(removal.restored_at) if removal else None,
+        'restored_by': removal.restored_by if removal else None,
+        'restoration_reason': removal.restoration_reason if removal else None,
+        'can_edit': not removed, 'can_reset_pin': not removed,
+        'can_remove': not removed and not last_admin, 'can_restore': removed,
+        'remove_block_reason': 'Keep at least one active administrator.' if not removed and last_admin else None,
+        'assigned_item_count': assigned_item_count}
 
 
 @router.get('/employees')
-def employees(u: Employee = Depends(auth), s: Session = Depends(db)):
+def employees(include_removed: bool = False, u: Employee = Depends(auth), s: Session = Depends(db)):
     permit(u, 'admin')
-    rows = s.scalars(select(Employee).order_by(Employee.name, Employee.badge)).all()
-    return {'employees': [_employee_dict(s, row) for row in rows], 'roles': role_catalog(),
-            'active_admins': sum(row.active and row.role == 'admin' for row in rows)}
+    query = select(Employee).order_by(Employee.name, Employee.badge)
+    if not include_removed:
+        query = query.where(employee_not_removed())
+    rows = s.scalars(query).all()
+    active_admins = _active_admin_count(s)
+    assigned = dict(s.execute(select(Item.handler, func.count()).group_by(Item.handler)).all())
+    return {'employees': [_employee_dict(s, row, active_admins=active_admins,
+                                        assigned_item_count=assigned.get(row.badge, 0)) for row in rows],
+            'roles': role_catalog(), 'active_admins': active_admins,
+            'removed_count': s.scalar(select(func.count()).select_from(EmployeeRemovalState)
+                .where(EmployeeRemovalState.removed.is_(True)))}
 
 
 def _locked_employee(s, badge, user, expected):
@@ -446,11 +519,12 @@ def _update_access(s, employee, access, actor, now, revoke):
 @router.patch('/employees/{badge}')
 def update_employee(badge: str, data: EmployeeUpdateIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     employee, access, actor = _locked_employee(s, badge, u, data.expected_version)
+    if employee_is_removed(s, badge):
+        raise HTTPException(409, 'Restore this removed employee before editing their account.')
     if (employee.name, employee.role, employee.active) == (data.name, data.role, data.active):
         raise HTTPException(409, 'No change to the employee profile or access.')
     if employee.active and employee.role == 'admin' and not (data.active and data.role == 'admin'):
-        active_admins = s.scalar(select(func.count()).select_from(Employee).where(Employee.active.is_(True), Employee.role == 'admin'))
-        if active_admins <= 1:
+        if _active_admin_count(s) <= 1:
             raise HTTPException(409, 'Keep at least one active administrator. Add or promote another administrator before removing this access.')
     before = _employee_dict(s, employee)
     revoke = (employee.role, employee.active) != (data.role, data.active)
@@ -467,9 +541,62 @@ def update_employee(badge: str, data: EmployeeUpdateIn, u: Employee = Depends(au
 @router.post('/employees/{badge}/pin')
 def reset_pin(badge: str, data: PinIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     employee, access, actor = _locked_employee(s, badge, u, data.expected_version)
+    if employee_is_removed(s, badge):
+        raise HTTPException(409, 'Restore this removed employee before resetting their PIN.')
     employee.pin_hash = password_hash.hash(data.pin)
     access = _update_access(s, employee, access, actor, _utc(utcnow()), True)
     audit(s, None, actor.badge, 'EMPLOYEE_PIN_RESET', {'badge': employee.badge, 'reason': data.reason,
         'version': access.version, 'existing_sessions_revoked': True})
     _commit(s)
     return {**_employee_dict(s, employee), 'reauthenticate': actor.badge == employee.badge}
+
+
+@router.post('/employees/{badge}/remove')
+def remove_employee(badge: str, data: EmployeeRemovalIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    employee, access, actor = _locked_employee(s, badge, u, data.expected_version)
+    removal = s.scalar(select(EmployeeRemovalState).where(EmployeeRemovalState.badge == badge)
+        .with_for_update().execution_options(populate_existing=True))
+    if removal and removal.removed:
+        raise HTTPException(409, 'This employee has already been removed.')
+    if employee.active and employee.role == 'admin' and _active_admin_count(s) <= 1:
+        raise HTTPException(409, 'Keep at least one active administrator. Add or promote another administrator before removing this employee.')
+    before = _employee_dict(s, employee)
+    now = _utc(utcnow())
+    if removal is None:
+        removal = EmployeeRemovalState(badge=badge)
+        s.add(removal)
+    removal.removed, removal.removed_at, removal.removed_by = True, now, actor.badge
+    removal.removal_reason = data.reason
+    removal.restored_at, removal.restored_by, removal.restoration_reason = None, None, None
+    employee.active = False
+    _update_access(s, employee, access, actor, now, True)
+    s.flush()
+    after = _employee_dict(s, employee)
+    audit(s, None, actor.badge, 'EMPLOYEE_REMOVED', {'badge': badge, 'reason': data.reason,
+        'from': before, 'to': after, 'existing_sessions_revoked': True, 'custody_reassigned': False})
+    _commit(s)
+    return {**after, 'reauthenticate': actor.badge == badge}
+
+
+@router.post('/employees/{badge}/restore')
+def restore_employee(badge: str, data: EmployeeRemovalIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    employee, access, actor = _locked_employee(s, badge, u, data.expected_version)
+    removal = s.scalar(select(EmployeeRemovalState).where(EmployeeRemovalState.badge == badge)
+        .with_for_update().execution_options(populate_existing=True))
+    if not removal or not removal.removed:
+        raise HTTPException(409, 'This employee is not removed.')
+    before = _employee_dict(s, employee)
+    now = _utc(utcnow())
+    removal.removed, removal.restored_at, removal.restored_by = False, now, actor.badge
+    removal.restoration_reason = data.reason
+    # Roster restoration is explicit and does not silently re-enable access or
+    # revive a previously revoked session. The administrator can review the
+    # position/PIN and activate the account through the existing edit controls.
+    employee.active = False
+    _update_access(s, employee, access, actor, now, True)
+    s.flush()
+    after = _employee_dict(s, employee)
+    audit(s, None, actor.badge, 'EMPLOYEE_RESTORED', {'badge': badge, 'reason': data.reason,
+        'from': before, 'to': after, 'existing_sessions_revoked': True, 'access_restored': False})
+    _commit(s)
+    return {**after, 'reauthenticate': False}
