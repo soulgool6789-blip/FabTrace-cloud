@@ -1,0 +1,80 @@
+/* Read-only setup guidance and printable operating reference. */
+#guidePage{--fg-ink:#173247;--fg-muted:#556d7d;--fg-line:#d9e4ec;color:var(--fg-ink)}
+#guidePage .fg-head,#guidePage .fg-section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;margin:6px 0 18px}
+#guidePage .fg-head h1{font-size:28px;margin:3px 0 7px}
+#guidePage .fg-head p,#guidePage .fg-section-head p{max-width:760px;color:var(--fg-muted);margin:0}
+#guidePage .fg-eyebrow{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#37738a;font-weight:750}
+#guidePage .fg-role{padding:14px 17px;border:1px solid #c9deeb;background:#eaf4fb;border-radius:10px;font-size:13px;line-height:1.7;margin:0 0 24px}
+#guidePage .fg-card{background:white;border:1px solid var(--fg-line);border-radius:12px;padding:19px;margin:0 0 16px;overflow-wrap:anywhere}
+#guidePage .fg-card h2{font-size:18px;margin:0 0 10px}
+#guidePage .fg-card h3,#guidePage .fg-stage h3{font-size:16px;margin:0 0 7px}
+#guidePage .fg-card p,#guidePage .fg-stage p{font-size:13px;line-height:1.7}
+#guidePage .fg-card li{font-size:13px;line-height:1.7;margin:8px 0}
+#guidePage .fg-projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,275px),1fr));gap:14px}
+#guidePage .fg-projects .fg-card{margin:0}
+#guidePage .fg-projects .actions{margin-top:13px}
+#guidePage .fg-project-search{max-width:470px;margin:18px 0}
+#guidePage .fg-project-select{max-width:620px}
+#guidePage .fg-next{border-left:4px solid #2b789a;background:#edf6fa;border-radius:0 9px 9px 0;padding:13px 16px;margin:18px 0}
+#guidePage .fg-next p{font-size:13px;margin:5px 0 0;line-height:1.7}
+#guidePage .fg-checklist{list-style:none;margin:0 0 20px;padding:0;border:1px solid var(--fg-line);border-radius:12px;overflow:hidden;background:white}
+#guidePage .fg-stage{display:grid;grid-template-columns:32px minmax(0,1fr);gap:13px;padding:19px;border-bottom:1px solid var(--fg-line);break-inside:avoid}
+#guidePage .fg-stage:last-child{border-bottom:0}
+#guidePage .fg-stage-head{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:7px}
+#guidePage .fg-step{display:inline-flex;justify-content:center;align-items:center;border:1px solid #bed4e2;border-radius:50%;height:30px;width:30px;font-size:13px;font-weight:750;color:#245d7a;background:#edf5fa}
+#guidePage .fg-owner{color:var(--fg-muted);margin-bottom:6px}
+#guidePage .fg-badge{display:inline-flex;align-items:center;border-radius:6px;padding:4px 8px;background:#edf2f6;font-size:11px;font-weight:750;line-height:1.4;color:#486172}
+#guidePage .fg-done{background:#e6f4e9;color:#226342}
+#guidePage .fg-pending{background:#fff3d9;color:#795812}
+#guidePage .fg-historical{background:#fff0e7;color:#903f22}
+#guidePage .fg-optional{background:#eef1f5;color:#4f6172}
+#guidePage .fg-transfer-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:15px 0}
+#guidePage .fg-transfer{border:1px solid var(--fg-line);border-radius:10px;padding:15px;min-width:0}
+#guidePage .fg-transfer dl{margin:13px 0}
+#guidePage .fg-transfer dl>div{display:grid;grid-template-columns:70px minmax(0,1fr);gap:10px;padding:9px 0;border-top:1px solid var(--fg-line)}
+#guidePage .fg-transfer dt{font-size:12px;font-weight:700}
+#guidePage .fg-transfer dd{margin:0}
+#guidePage .fg-transfer small{display:block;margin-top:7px;font-size:12px;overflow-wrap:anywhere}
+#guidePage .fg-history{padding:10px;background:#f5f3f7;border-radius:7px;color:#5e526e}
+#guidePage .fg-records{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
+#guidePage .fg-records article{border-top:1px solid var(--fg-line);padding-top:12px;min-width:0}
+#guidePage .fg-note{font-size:12px;line-height:1.7;color:var(--fg-muted)}
+#guidePage .fg-state,#guidePage .fg-empty{padding:22px;background:#f9fcfd;border:1px dashed #bfced8;border-radius:10px;color:var(--fg-muted);margin:15px 0}
+#guidePage .fg-empty strong{display:block;color:var(--fg-ink);margin-bottom:8px}
+#guidePage .fg-error{background:#fff2ed;border:1px solid #e5c4b9;border-radius:10px;color:#853b28;padding:17px;white-space:pre-wrap;overflow-wrap:anywhere}
+#guidePage .fg-error button{margin:4px 8px 0 0}
+#guidePage .fg-operating{margin-top:32px;padding-top:24px;border-top:2px solid var(--fg-line)}
+#guidePage .fg-filters{display:flex;align-items:end;flex-wrap:wrap;gap:12px;margin:18px 0}
+#guidePage .fg-filters .field{flex:1;min-width:min(100%,240px);margin:0}
+#guidePage .fg-filters .fg-search{flex:1.2}
+#guidePage .fg-topic h3{font-size:20px;margin-bottom:7px}
+#guidePage .fg-topic .fg-topic-summary{font-weight:650;color:#3e687e;margin-bottom:17px}
+#guidePage .fg-topic .actions{margin-top:17px;padding-top:14px;border-top:1px solid var(--fg-line)}
+#guidePage .fg-topic ol,#guidePage .fg-topic ul{padding-left:23px}
+#guidePage .fg-topic table{min-width:520px;margin:12px 0}
+#guidePage caption{text-align:left;font-size:12px;font-weight:700;color:var(--fg-muted);margin-bottom:8px}
+#guidePage .fg-topic th{font-size:11px}
+#guidePage .fg-topic td{line-height:1.65}
+#guidePage .fg-sections{columns:2;column-gap:30px}
+#guidePage .fg-sections li{break-inside:avoid}
+#guidePage summary{font-size:13px;font-weight:700;cursor:pointer;color:#1b6487}
+#guidePage :focus-visible{outline:3px solid #78b4d6;outline-offset:3px}
+@media(max-width:720px){#guidePage .fg-transfer-grid,#guidePage .fg-records{grid-template-columns:1fr}#guidePage .fg-sections{columns:1}#guidePage .fg-stage{padding:15px;gap:10px}#guidePage .fg-card{padding:16px}}
+@media(max-width:450px){#guidePage .fg-head h1{font-size:23px}#guidePage .fg-topic h3{font-size:18px}#guidePage .fg-stage{grid-template-columns:1fr}#guidePage .fg-step{display:none}#guidePage .fg-filters{display:block}#guidePage .fg-filters .field{margin-bottom:12px}}
+@media print{
+  body.fg-printing{background:white;color:#111;font-size:10pt}
+  body.fg-printing>header,body.fg-printing nav,body.fg-printing #message,body.fg-printing dialog,body.fg-printing #guidePage button,body.fg-printing #guidePage .field,body.fg-printing #guidePage .fg-result-count{display:none!important}
+  body.fg-printing main{max-width:none;padding:0}
+  body.fg-printing #guidePage{color:#111;--fg-muted:#333}
+  body.fg-printing #guidePage .fg-card{box-shadow:none;border-radius:0;padding:12px;margin-bottom:14px}
+  body.fg-printing #guidePage .fg-head h1{font-size:23pt}
+  body.fg-printing #guidePage .fg-card p,body.fg-printing #guidePage .fg-card li,body.fg-printing #guidePage .fg-stage p{font-size:10pt}
+  body.fg-printing #guidePage .fg-topic h3{break-after:avoid;font-size:15pt}
+  body.fg-printing #guidePage .fg-topic .tablewrap{overflow:visible}
+  body.fg-printing #guidePage table{min-width:0;width:100%;font-size:9pt}
+  body.fg-printing #guidePage tr{break-inside:avoid}
+  body.fg-printing #guidePage .fg-transfer,body.fg-printing #guidePage .fg-records article{break-inside:avoid}
+  body.fg-printing #guidePage .fg-operating{break-before:page}
+  body.fg-printing #guidePage .fg-sections{columns:1}
+  body.fg-printing #guidePage .fg-badge{border:1px solid #aab5bc;background:white;color:#111}
+}

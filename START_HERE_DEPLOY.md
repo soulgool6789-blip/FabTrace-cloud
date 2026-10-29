@@ -64,3 +64,8 @@ Version `2026.10.29-dossier.1` adds eight dossier tables and two read-only progr
 Initialization creates the tables and six new immutable-history/file triggers without altering existing table columns or seeding real packet approvals, files or handovers. The existing main service remains the deployment target. A project administrator/supervisor must explicitly configure each intended Job Packet project, and QA must confirm its actual PO/source applicability. Do not enable gates by writing invented approvals into existing jobs.
 
 After deployment, verify the new navigation/assets, `/healthz` version/commit and database trigger coverage. Run workflow acceptance with synthetic local fixtures; do not fabricate production inspection, issuance or transfer records as a smoke test. Once gates are used, a rollback to older code would ignore them; prefer a controlled forward fix preserving all issued history.
+
+
+## Guide and setup navigation update
+
+Version `2026.10.29-guide.1` adds the authenticated **Guide & setup** screen, project-scoped setup shortcuts, explicit planning-filter reset and persistent Job Packet tab links. Deploy `static/guide.js`, `static/guide.css` and the synchronized HTML shells with the rest of the source. There are no schema, infrastructure, credential or production-data changes. The existing pre-deploy initializer remains safe and idempotent. Verify `/?guide=1`, login/deep-link routing, mobile guide layout, empty-project states and the existing workflow screens after the update.

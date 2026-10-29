@@ -72,6 +72,16 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   assert.match(html(),/Final release/);
   assert.match(html(),/Ready for final release<\/span><strong>0 \/ 2/,'released spools must not remain in the ready queue');
 
+  await context.FabTracking.open({project:'P1',subproject:'SUB1',view:'spools'});
+  elements.get('ftSearch').value='unrelated search';elements.get('ftSearch').oninput();
+  elements.get('ftProcessFilter').value='unrelated process';elements.get('ftProcessFilter').onchange();
+  await context.FabTracking.open({project:'P1',view:'spools'});
+  assert.match(html(),/value="unrelated search"/,'ordinary navigation preserves existing filters');
+  await context.FabTracking.open({project:'P1',subproject:'',view:'spools',resetFilters:true});
+  assert.match(html(),/Spool &lt;one&gt;/,'setup shortcut clears an unrelated prior search and process filter');
+  assert.doesNotMatch(html(),/unrelated search/);assert.match(html(),/<option value="" selected>All processes/);
+  assert.equal(calls.at(-1).url,'/api/tracking/overview?project_id=P1','setup shortcut opens the whole exact project');
+
   await context.FabTracking.open({spool:'S1',weld:'WLD1'});
   assert.match(context.lastUrl,/spool=S1/);assert.match(context.lastUrl,/weld=WLD1/);
   assert.match(html(),/Joint &lt;one&gt;/);
