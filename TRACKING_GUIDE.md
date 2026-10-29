@@ -162,6 +162,74 @@ Step 23 verifies shipping readiness, records the move to the shipping area and r
 
 The process board can be filtered by project, subproject, route status, step or search. Open parent and child cards to follow the linked work. **Export Excel** includes Flow plans/events/exceptions, Component links and the Flow steps lookup. The existing Process visits/totals reports include numbered-step timing and current project/subproject assignments, including a component's assigned parent spool.
 
+## 10. Prepare the audit requirement and evidence matrix
+
+Open **Audit readiness**. An administrator or supervisor chooses **New workspace**, names the audit preparation effort, selects CLM-wide or an existing project, and records the customer, PO, owner and audit date where known. Select the Kelvion starter matrix to copy the supplied prompts as drafts, or start blank. Deployment and opening the page do not create business records.
+
+### Use the five sections of each requirement
+
+| Section | What to record |
+| --- | --- |
+| Customer requirement | What the auditor expects, the actual source document/revision/section, and the PO or project applicability. |
+| CLM response | A formal, supportable statement of what CLM actually does. Replace the starter's draft wording after checking implementation. |
+| Supporting documentation | QMS, SOP, 6S policy, process-flow, weld-register or other document references, linked to exact controlled revisions. |
+| Required evidence | What CLM must demonstrate or produce, plus the actual dated records collected to meet that need. |
+| Gaps and corrective actions | Missing implementation/records, assigned owners, due dates, containment, root cause, implementation and effectiveness evidence. |
+
+The starter keeps items **3–6** and **10–12** grouped because the supplied summary did not provide each original question. It includes distinct priority records for **7** (approved audit schedule), **9** (actual Quality Alerts and training), **13** (completed audit and findings), and **14** (corrective actions and effectiveness). Additional **K-01–K-07** prompts cover customer/PO review, traceability, examinations/testing, coating, dispositions/change approval, FAI/dossier/preservation, and retention/provider controls. The K labels are local preparation references, not invented Kelvion checklist numbers.
+
+The seven customer document names and cited revisions come from CLM's planning summary. Their complete original files were not inspected by the software change. All source confirmations begin unverified. A reviewer must check the actual governing documents and project amendments, enter the correct revision/clause/reference, and explicitly confirm the source. A template does not select a universal NDE percentage, test pressure/duration, paint system or supplier corrective-action deadline.
+
+### Register and approve controlled documents
+
+Add a document code, title, revision, record location/reference and effective date. An inspector or administrator records its approval using a real approval reference and review notes. New revisions are separate records; the earlier revision and approval remain visible. Approval of the later revision supersedes older approved entries of that code in the same workspace.
+
+Link the exact document revision to the requirement. A missing, unapproved, superseded or not-yet-effective revision blocks readiness. If employee training is required, identify the affected active employee badges and record completed training against that exact document ID. Approval alone does not prove that employees were trained. A new revision requires its own applicable training records and renewed verification.
+
+References may identify a shared document location or an HTTP(S) URL. FabTrace stores the reference and review record, not the binary file. Keep the actual approved documents and signed records in CLM's controlled document location and be ready to retrieve them during the audit.
+
+### Submit actual records, then review them
+
+Evidence begins **Submitted**. The recorder identifies its actual occurrence date, title, record reference, relevant details and any linked project item or individual weld. Optional production links must belong to the selected project. An inspector or administrator reviews the record and marks it accepted or rejected with a reference and notes. Acceptance of an individual record does not automatically verify a requirement or advance a traveler.
+
+Use the record type matching what happened:
+
+- **Approved audit schedule:** issue/approval date, planned audit date, scope, assigned auditor and schedule approval reference. A future planned date is allowed; the schedule's issue date must be real.
+- **Completed internal audit:** actual audit date, auditor, scope, findings or a supported no-finding statement, outcome and report reference. A schedule cannot satisfy this evidence type.
+- **Issued Quality Alert:** actual issue date, problem communicated, containment/response and affected employees when training is required. The alert template is a controlled document, not an issued alert.
+- **Completed training:** actual date, trainer's badge, participant badges, topic, assessment and the exact document revision or issued alert addressed. Typing a recipient's badge does not impersonate their acknowledgment; the recorder and reviewer retain their own identities.
+- **Investment / capability:** real purchase, asset, commissioning or capability evidence supporting the statements made to the auditor.
+- **Inspection / test:** actual result, measurements, acceptance basis and controlled report. Record measured values where required; a general PASS label does not replace the underlying report.
+- **Customer approval:** written disposition/change approval, its scope, authority and customer-issued reference.
+- **Corrective action / effectiveness:** actual implementation evidence and the subsequent effectiveness check, linked to the applicable finding/requirement.
+
+Future performed-activity dates are rejected. Evidence entries are retained unchanged. Correct a mistake by submitting the corrected record and recording rejection of the superseded/mistaken evidence; do not erase audit history.
+
+### Resolve findings and verify effectiveness
+
+Create an action with a responsible employee, due date and clear problem. Record containment, root cause, correction and the corrective action. Mark it implemented when the work is actually done and link accepted implementation records and a passing effectiveness check. Where customer approval is required for the disposition, identify that requirement and link the accepted written customer approval.
+
+An inspector or administrator separately closes the action. Missing implementation evidence, missing effectiveness verification, incomplete cause/action details or missing required customer approval prevents closure. Closed actions require an explicit reviewer reopen before further editing. Prior closure history remains available. The audit-readiness action record does not automatically resolve a physical weld repair, production hold or flow exception; those remain subject to their existing controls.
+
+### Review readiness and applicability
+
+The workspace displays verified requirements, items needing attention, priority items still open, and open/overdue actions. A requirement's blocker list identifies what remains. **Ready for review** means the recorded prerequisites are present; **Verified** requires a current signed reviewer decision as well.
+
+Conditional requirements remain unresolved until their project applicability is determined. **Not applicable** requires a rationale, confirmed source basis and a separate inspector/administrator decision. It cannot be used to hide open corrective actions. Editing a source or response, superseding a linked document, changing the evidence/review basis or reopening an action invalidates the previous requirement verification. Earlier reviews remain history. Relevant changes to linked physical work or quality state also require renewed evidence verification; routine process-clock and custody movements do not fabricate new quality approval.
+
+### Optional production checks
+
+A reviewer may bind an identified **project** requirement to **Pre-coating** or **Shipment**. Requirements start with **None**. CLM-wide organizational workspaces cannot impose production gates without project scope.
+
+- **Pre-coating** is checked at step **20**, release to sandblast/paint, and again at step **21**, completion of coating. Selected preceding inspections/tests and coating-system approvals must remain verified.
+- **Shipment** is checked at step **23**, ready-to-ship release, and step **24**, actual shipment. Selected dossier, preservation or applicable customer approval requirements must remain verified.
+
+A gate blocks while its requirement is unverified, conditional, stale or has unresolved gaps. A currently reviewed not-applicable decision satisfies it. A failed transition does not change the traveler or its timing history. Existing weld/inspection/hold checks continue to apply. These optional checks govern numbered assembly travelers; they do not turn a manual process timer into an inspection plan or apply an unreviewed summary to every job.
+
+### Export the audit preparation records
+
+An administrator can use **Export Excel**. The **Audit readiness** worksheet presents the five prompts with source status, current verification, evidence references, blockers, owners and due dates. Seven raw **Quality** worksheets retain the workspaces, requirements, immutable document revisions, immutable evidence, actions, reviews and events. All data comes from the same read-only snapshot as the other business worksheets. External files are referenced, not embedded. A draft or missing record remains draft or missing in the export.
+
 ## Role reference
 
 | Role | Tracking responsibilities |
@@ -172,4 +240,4 @@ The process board can be filtered by project, subproject, route status, step or 
 | Inspector | Review requirements, record dimensional inspections, resolve holds, open repairs and approve final release |
 | Administrator | All tracking capabilities, employee administration and reopening released items |
 
-All active staff can read records, submit evidence and pause/resume process timing. Numbered-step actions follow the displayed responsible roles; QA approval remains restricted. Applicable codes, NDE selection and extent, qualification limits and pressure-test packages rely on approved procedures or separate systems. Shipment and delivery are recorded explicitly through the numbered traveler; neither is inferred from quality approval.
+All active staff can read production records, submit weld evidence and pause/resume process timing. In Audit readiness, all active staff can read; administrators, supervisors and inspectors submit records, and inspectors/administrators perform reviews. Numbered-step actions follow the displayed responsible roles; QA approval remains restricted. Applicable codes, NDE selection and extent, qualification limits and pressure-test packages rely on approved procedures or separate systems. Shipment and delivery are recorded explicitly through the numbered traveler; neither is inferred from quality approval.

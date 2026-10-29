@@ -10,18 +10,21 @@ This guide describes the implemented tracking extension and the constraints that
 | `tracking.py` | Tracking tables, validated request models, project/spool/weld APIs, authoritative work and acceptance checks, versions, holds, repairs, and rollups. |
 | `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
-| `exports.py` | Administrator-only Excel snapshot of business records and history, excluding authentication secrets. |
+| `quality.py`, `quality_templates.py` | Audit workspaces, draft customer matrix, controlled document revisions, actual evidence, corrective actions, signed reviews and optional project gates. |
+| `QUALITY_API.md` | Quality endpoint contracts, payloads, state meanings, review permissions and dependency rules. |
+| `exports.py` | Administrator-only Excel snapshot of business records/history and calculated timing/readiness reports, excluding authentication secrets. |
 | `init_db.py` | Additive schema initialization, first-account bootstrap, PostgreSQL transaction/advisory lock, and immutable-history triggers. |
 | `static/index.html` | Canonical application shell and existing login, inventory, custody, and QR interface; tracking workspace/dialog hooks. |
 | `static/tracking.js` | Framework-free tracking UI, forms, role-aware actions, API requests, and direct-link routing. |
 | `static/tracking.css` | Styles scoped to the tracking workspace and dialog. |
 | `static/flow.js`, `static/flow.css` | Numbered process map, production board, route forms, hierarchy links, timer controls and mobile layout. |
+| `static/quality.js`, `static/quality.css` | Five-prompt audit workspace, role-aware forms, evidence and document registers, corrective actions, printable audit view and Excel shortcut. |
 | `index.html` | Distribution copy of the shell. Keep synchronized with `static/index.html`; the server serves the latter. |
 | `migrate_google_part_numbers.py` | Earlier explicit migration for the Google part-number column. Review the actual schema before using an older migration. |
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, quality and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
 
 ## Data relationships
 
@@ -106,7 +109,7 @@ Tracking mutations lock the owning `Item` row before changing related state. Hie
 
 Keep validation, inserts, invalidation, counter synchronization, and audit creation in one transaction. Read-snapshot helpers preload records for one spool calculation; they are not a durable cache and must not be reused after writes.
 
-`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on eight history tables:
+`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on twelve history tables:
 
 - `audit_events`
 - `tracking_requirement_evidence`
@@ -116,6 +119,10 @@ Keep validation, inserts, invalidation, counter synchronization, and audit creat
 - `tracking_requirement_templates`
 - `tracking_process_events`
 - `flow_events`
+- `quality_documents`
+- `quality_evidence`
+- `quality_reviews`
+- `quality_events`
 
 These triggers prevent ordinary mutation, not deliberate removal by a database owner. Requirements, holds, plans, and weld metadata are current-state records and remain mutable through controlled APIs.
 
@@ -166,6 +173,29 @@ Failures at 11 invalidate before-welding requirement approvals; failures at 15 i
 
 Excel exports explicitly allowlist all four flow tables, plus a `Flow steps` definition sheet. Flow event JSON retains its captured checklist definition. The process reports join a component through `ComponentLink` to its parent's current project/subproject; unassigned component report project IDs are blank and the original free-text Item project remains in the Items sheet. Definition/report rows are distinguished from raw database records in Export info.
 
+## Audit-readiness extension
+
+The quality extension adds seven tables: `quality_workspaces`, `quality_requirements`, `quality_documents`, `quality_evidence`, `quality_actions`, `quality_reviews` and `quality_events`. The protected immutable tables are **documents, evidence, reviews and events**; actions remain editable through controlled APIs until closure. Workspace creation is explicit and may copy draft `CLM-KELVION-AUDIT-2026-10-29-v1` prompts; initialization and GET requests never seed actual activities or accepted records.
+
+The prompts preserve the known audit item groupings and priority items from CLM's supplied summary. Additional K-01–K-07 labels identify local preparation prompts, not customer clause numbers. Source document names/revisions are provisional references; source confirmation requires the actual clause, revision, reference and resolved project applicability. No technical percentage, pressure, coating system, retention period or customer deadline is activated by the template.
+
+See [QUALITY_API.md](QUALITY_API.md) for full payloads. Every quality mutation after workspace creation requires the current **workspace** `expected_version`, not the requirement's independent version. Writes acquire the shared flow topology advisory lock, then the workspace row lock; the workspace event sequence equals the resulting version. All signed actors and recording timestamps come from the authenticated session/server. Request bodies forbid extra fields.
+
+Quality source, evidence, requirement and action decisions are separate immutable reviews. Current status is projected from data and the latest relevant review fingerprint. Source fingerprints include source text, revision, section, reference, applicability and the workspace customer/project/PO. Requirement fingerprints include the current linked revisions, related training, actual evidence/reviews and action state. Changing an unrelated requirement does not invalidate another requirement's verification.
+
+Document approvals refer to immutable exact revision entries. Later effective approved revisions supersede older revisions; rejecting/superseding a newer revision must not silently resurrect an old approved revision. Training references an exact document ID or an actual issued alert. Document approval and alert acceptance are dependencies of relevant evidence, including documents referenced only indirectly through the evidence. Dependency changes stale acceptance without modifying the original record or review. Actual inspection/effectiveness evidence with fail/recorded results cannot be accepted as satisfactory evidence.
+
+Physical evidence stores a snapshot of relevant item/weld state. It includes project membership, material-component parent assignment where applicable, drawing revision, physical work/inspection timestamps, reinspection/hold state, open rework/holds and current weld requirement cycle/version/status. Routine custody/location and process-timer changes are excluded. Component project membership resolves through `ComponentLink` to its parent's `SpoolPlan`; legacy free-text `Item.project` is not a project key. A changed physical basis requires a new current evidence record and review.
+
+Signed review and real production gate validation lock the relevant physical Item rows after the topology lock because some existing tracking writes serialize on those Item rows. **Read-only views never acquire these locks.** `production_gate_errors(..., for_update=False)` defaults to a read projection; only `flow.advance` calls `_step_errors(..., quality_for_update=True)` while the topology and traveler locks are already held. Keep this separation to avoid a GET holding a workspace lock while waiting on a traveler held by a writer.
+
+Verification blocks on an unconfirmed source, unresolved conditional applicability, draft response, nonempty remaining gap, missing required accepted evidence, a newer required record that remains submitted/rejected, unapproved/superseded/not-yet-effective linked documents, missing training, open actions or stale closure evidence. Items 3–6 and 8 additionally require an approved linked document. NA requires a reviewed rationale and source confirmation; it cannot hide open actions. Closing an action requires implementation details, accepted implementation and passing effectiveness evidence, valid chronology, and accepted customer disposition when configured. A closed action must be explicitly reopened before edits.
+
+Optional project-level gates default to `none`. Enabling/changing/removing them requires an inspector or administrator, and the workspace must have a real project ID. `pre_coating` is checked at flow steps 20 and 21; `shipment` at steps 23 and 24. Every bound requirement must currently be verified or reviewed NA. Gate failure leaves traveler/timing/history unchanged. The gates do not compute per-spool inspection coverage, NDE sample selection, technical acceptance limits or automatic customer approval. Existing per-item welding/inspection/hold requirements continue to apply.
+
+The full Excel workbook contains seven raw quality sheets and a calculated **Audit readiness** report in the same PostgreSQL `REPEATABLE READ READ ONLY` transaction as all other exports. The report calls the grouped `workspace_detail(..., as_of=created_at)` projection through an ORM session bound to the existing connection, with no commit or autoflush. It processes one workspace at a time, spools report rows, and uses the same row-continuation and long-text overflow rules. The report includes the five prompts, status, blockers, source fields, actual record references, action owners/dates and snapshot timestamp. Raw rows do not contain derived acceptance flags; consumers must use the projected report or the documented review logic.
+
+
 ## Testing
 
 ```bash
@@ -175,6 +205,7 @@ node tests/tracking_ui_smoke.cjs
 node tests/export_ui_smoke.cjs
 node tests/process_ui_smoke.cjs
 node tests/flow_ui_smoke.cjs
+node tests/quality_ui_smoke.cjs
 ```
 
 API fixtures use temporary SQLite databases, override imported database settings, and create synthetic employees and authenticated sessions. They cover legacy behavior, roles, stale decisions, evidence, scope, operations, repairs, holds, hierarchy, and release. SQLite tests do not establish PostgreSQL locking or trigger behavior.
@@ -188,7 +219,7 @@ python tests/verify_postgres.py --help
 python tests/verify_postgres.py --dsn 'postgresql+psycopg://USER@localhost/fabtrace_test_upgrade'
 ```
 
-Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all eight history triggers, competing evidence/process/flow writes, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
+Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all twelve history triggers, competing weld-evidence/process/flow/quality writes, lock-free quality/flow GET projections, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
 
 ## Adding the next feature
 

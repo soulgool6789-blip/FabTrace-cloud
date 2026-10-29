@@ -31,6 +31,8 @@ from tracking import (
 )
 from production import SpoolProcessEvent, process_snapshot
 from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, STEPS as FLOW_STEPS, VERSION as FLOW_VERSION
+from quality import (QualityWorkspace, QualityRequirement, QualityDocument, QualityEvidence,
+                     QualityAction, QualityReview, QualityEvent, workspace_detail)
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -89,6 +91,24 @@ TABLE_SPECS = (
     _spec(FlowEvent, 'Flow events', 'id item_id sequence action step actor at reference notes data'),
     _spec(FlowException, 'Flow exceptions', 'id item_id step return_step reason reference opened_by opened_at closed_by closed_at resolution'),
     _spec(ComponentLink, 'Component links', 'component_id spool_id assigned_by assigned_at', 'component_id'),
+    _spec(QualityWorkspace, 'Quality workspaces', 'id name customer project_id purchase_order audit_date owner_badge template_version version created_by created_at updated_at'),
+    _spec(QualityRequirement, 'Quality requirements', 'id workspace_id item_number title requirement_text response_text source_document source_revision source_section source_reference supporting_documents required_evidence gaps priority owner_badge due_date applicability applicability_reason required_evidence_types document_ids requires_closed_action requires_approved_document gate version created_by created_at updated_at'),
+    _spec(QualityDocument, 'Quality documents', 'id workspace_id code title revision reference effective_date requires_training required_badges notes created_by created_at'),
+    _spec(QualityEvidence, 'Quality evidence', 'id workspace_id requirement_id type title reference occurred_on notes document_id related_evidence_id item_id weld_id participants performed_by data production_snapshot created_by created_at'),
+    _spec(QualityAction, 'Quality actions', 'id workspace_id requirement_id title owner_badge due_date problem containment root_cause correction corrective_action status closure_evidence_ids effectiveness_evidence_id customer_approval_required customer_approval_evidence_id version closed_by closed_at created_by created_at updated_at'),
+    _spec(QualityReview, 'Quality reviews', 'id workspace_id target_type target_id decision reference notes fingerprint snapshot actor at'),
+    _spec(QualityEvent, 'Quality events', 'id workspace_id sequence event target_type target_id details actor at'),
+)
+
+QUALITY_REPORT_COLUMNS = (
+    'workspace_id', 'workspace_name', 'customer', 'project_id', 'purchase_order', 'audit_date',
+    'requirement_id', 'item_number', 'title', 'priority', 'owner_badge', 'due_date',
+    'applicability', 'applicability_reason', 'production_gate',
+    'customer_requirement', 'clm_response', 'supporting_documentation',
+    'required_evidence', 'collected_evidence', 'gaps_and_corrective_actions',
+    'verification_status', 'source_status', 'source_document', 'source_revision',
+    'source_section', 'source_reference', 'blockers', 'last_review_decision',
+    'last_reviewer', 'last_review_at', 'last_review_reference', 'as_of',
 )
 
 FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'route', 'section', 'roles', 'checks',
@@ -134,6 +154,13 @@ RELATIONSHIPS = (
     'Process reports use the current SpoolPlan project/subproject, or the assigned parent spool plan for a component. Unassigned component project/subproject cells remain blank; past project assignments are not frozen in timing events.',
     'Flow steps contains the current numbered CLM process definitions. Recorded event data retains its own definition version and step/checklist snapshot.',
     'Flow plans stores shipment and receipt details. shipped_at confirms dispatch; delivered_at exists only after a separately recorded delivery receipt.',
+    'quality_workspaces.project_id -> tracking_projects.id when project-scoped; blank means organizational audit preparation. Templates create draft requirements only.',
+    'quality_requirements.workspace_id -> quality_workspaces.id. document_ids links exact quality_documents revisions; the named source still requires a signed source review.',
+    'quality_evidence.requirement_id -> quality_requirements.id; document_id -> quality_documents.id; related_evidence_id -> quality_evidence.id (for training against an issued alert). Optional item_id and weld_id link actual production records.',
+    'quality_actions.requirement_id -> quality_requirements.id; closure/effectiveness/customer approval IDs reference quality_evidence. An action row marked closed can still have stale evidence; use Audit readiness for current verification.',
+    'quality_reviews.target_type and target_id identify a source/requirement, document, evidence or action within the same workspace. Reviews retain the signed snapshot and fingerprint; later reviews never rewrite earlier ones.',
+    'quality_events.workspace_id and sequence retain each workspace change. Document revisions, evidence, reviews and events are immutable; their current statuses are derived, not stored acceptance flags.',
+    'Audit readiness is a calculated report from the same snapshot as raw Quality tables. Verified requires a current signed review and current prerequisites. It does not certify compliance or establish that a referenced external file exists.',
     'created_by, actor, completed_by, opened_by and closed_by badge fields retain the recorded employee identities.',
     'Audit details, template requirements and required_operations are JSON text. Preserve the JSON when using these records elsewhere.',
 )
@@ -199,7 +226,9 @@ def _json_text(value):
 
 
 def _width(header):
-    if header in ('details', 'requirements', 'notes', 'measurements', 'reason', 'close_notes', 'text', 'value'):
+    if header in ('details', 'requirements', 'notes', 'measurements', 'reason', 'close_notes', 'text', 'value',
+                  'customer_requirement', 'clm_response', 'supporting_documentation', 'required_evidence',
+                  'collected_evidence', 'gaps_and_corrective_actions', 'blockers'):
         return 64
     if header in ('description', 'source', 'reference', 'label'):
         return 44
@@ -372,7 +401,7 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Export', 'Exporter name', exporter.name)
     add('Export', 'Exporter role', exporter.role)
     add('Export', 'Snapshot method', 'PostgreSQL REPEATABLE READ READ ONLY, separate connection' if database_kind == 'postgresql' else 'SQLite explicit read transaction, separate connection')
-    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events and numbered travelers. Two process reports summarize recorded visits and totals; Flow steps supplies the current 24-step definition lookup. No screen pagination limits.')
+    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events and numbered travelers plus audit-readiness records. Two process reports summarize recorded visits and totals; Flow steps supplies the current 24-step definition lookup; Audit readiness presents the current five-prompt matrix and verification blockers. No screen pagination limits.')
     add('Export', 'Database writes', 'None. This export does not append audit records or alter application data.')
     add('Exclusions', 'Authentication', 'Employee PIN hashes, PINs, passwords, session tokens, JWT secrets, database credentials and environment variables are excluded. Employee roster includes badge, name, role, active and created_at only.')
     add('Exclusions', 'External documents', 'References and URLs are exported as stored. External report/MTR contents and linked files are not fetched or embedded.')
@@ -388,13 +417,16 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Process flow', 'Route scopes', 'Components use steps 1-8; spools use 9-16; assemblies use 17-24. Parent/child IDs link the routes. Advancing a traveler records a checklist, handoff or review; underlying weld and quality gates remain authoritative.')
     add('Process flow', 'History and baselines', 'Earlier steps before an explicitly documented baseline are not recorded completions. Failed inspections append exceptions and return to a recorded rework step; earlier attempts remain in Flow events and Process visits. Generic quality release cannot bypass the required traveler inspection.')
     add('Process flow', 'References and receipts', 'References identify external purchase orders, BOMs, reports, shipping documents and delivery receipts. Files are not embedded. A shipment confirmation does not infer delivery; receipt confirmation records its own time, recipient and reference.')
+    add('Audit readiness', 'Evidence and verification', 'Quality tables preserve the five audit prompts, document revisions, submitted records, corrective actions and signed review history. The Audit readiness report recalculates current verification against those records at the snapshot time. Draft wording, a planned audit and an issued/approved blank template do not prove that an activity occurred.')
+    add('Audit readiness', 'Sources and scope', 'Kelvion starter prompts are based on the supplied planning summary. Original documents, PO applicability, technical criteria and revisions require human source confirmation. No universal NDE, pressure, coating or customer-deadline rule is inferred. Optional project gates require deliberate configuration.')
+    add('Audit readiness', 'Dates', 'Actual activity dates, due dates and audit dates are stored as ISO calendar dates. Review and recording timestamps are UTC. A future planned audit date is different from a completed audit date. The report as_of timestamp matches the export snapshot timestamp.')
     add('Format', 'Continuation sheets', f'Each sheet holds at most {EXCEL_MAX_ROWS:,} rows including its repeated header. Additional data continues on sheets named with a numeric suffix.')
     add('Format', 'Long text', f'Values exceeding {EXCEL_MAX_CELL_CHARS:,} UTF-16 units are replaced by an OVF reference. Reconstruct the full original value by concatenating Text overflow chunks for that overflow_id in chunk_index order.')
     add('Format', 'Long-text cells', writer.overflow_cells)
     add('Format', 'Overflow chunk rows', writer.overflow_rows)
     for index, relationship in enumerate(RELATIONSHIPS, start=1):
         add('Relationships', f'R{index:02}', relationship)
-    add('Counts', 'How to read counts', 'Data-row counts exclude headers. Continuation-sheet counts are separate. Process reports are calculated rows and Flow steps is definition data; neither adds database records. Manifest sheets are descriptive metadata.')
+    add('Counts', 'How to read counts', 'Data-row counts exclude headers. Continuation-sheet counts are separate. Process reports and Audit readiness are calculated rows and Flow steps is definition data; none adds database records. Manifest sheets are descriptive metadata.')
     for sheet in writer.sheets:
         add('Sheet rows', sheet.name, sheet.rows)
         add('Source table', sheet.name, sheet.table)
@@ -471,6 +503,124 @@ def _write_flow_steps(writer):
                       json_columns={'roles', 'checks', 'return_steps'}, group='definition')
 
 
+def _write_quality_report(connection, writer, created_at, exporter):
+    """Project the five audit prompts using the existing read-only snapshot.
+
+    The quality module batches dependencies once per workspace. Hold only one
+    workspace at a time and spool report rows so the XLSX row/long-text limits
+    remain identical to the raw export. The joined session never commits and
+    cannot write through PostgreSQL's READ ONLY transaction.
+    """
+    count = 0
+    with tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as report:
+        with Session(bind=connection, autoflush=False, expire_on_commit=False,
+                     join_transaction_mode='rollback_only') as session:
+            workspace_ids = connection.scalars(select(QualityWorkspace.id).order_by(QualityWorkspace.id))
+            for workspace_id in workspace_ids:
+                workspace = session.get(QualityWorkspace, workspace_id)
+                detail = workspace_detail(session, workspace, exporter, as_of=created_at)
+                documents = {doc['id']: doc for doc in detail['documents']}
+                evidence_by_requirement = {}
+                training_by_document = {}
+                training_by_alert = {}
+                actions_by_requirement = {}
+                for evidence in detail['evidence']:
+                    evidence_by_requirement.setdefault(evidence['requirement_id'], []).append(evidence)
+                    if evidence['type'] == 'training':
+                        if evidence['document_id']:
+                            training_by_document.setdefault(evidence['document_id'], []).append(evidence)
+                        if evidence['related_evidence_id']:
+                            training_by_alert.setdefault(evidence['related_evidence_id'], []).append(evidence)
+                for action in detail['actions']:
+                    actions_by_requirement.setdefault(action['requirement_id'], []).append(action)
+                for requirement in detail['requirements']:
+                    direct = evidence_by_requirement.get(requirement['id'], [])
+                    relevant = {record['id']: record for record in direct}
+                    for identifier in requirement['document_ids']:
+                        relevant.update((record['id'], record) for record in training_by_document.get(identifier, []))
+                    for record in direct:
+                        relevant.update((training['id'], training) for training in training_by_alert.get(record['id'], []))
+                    linked_documents = set(requirement['document_ids']) | {
+                        record['document_id'] for record in relevant.values() if record['document_id']}
+                    supporting = [requirement['supporting_documents']] if requirement['supporting_documents'] else []
+                    for identifier in sorted(linked_documents):
+                        doc = documents.get(identifier)
+                        if doc is None:
+                            supporting.append(f'Document {identifier}: missing from workspace')
+                            continue
+                        supporting.append(f"{doc['code']} Rev {doc['revision']} — {doc['title']} | {doc['status']} | "
+                                          f"effective {doc['effective_date'] or 'not recorded'} | {doc['reference']}")
+                        if doc['training_gaps']:
+                            supporting.append('Training missing: ' + ', '.join(doc['training_gaps']))
+                    collected = []
+                    for record in sorted(relevant.values(), key=lambda value: value['id']):
+                        collected.append(f"#{record['id']} {record['type']} | {record['occurred_on']} | "
+                                         f"{record['status']}{' (stale)' if record.get('stale') else ''} | "
+                                         f"{record['title']} | {record['reference']}")
+                        if record['requirement_id'] != requirement['id']:
+                            collected.append('Supporting training recorded under requirement ID ' + str(record['requirement_id']))
+                        if record['participants']:
+                            collected.append('Participants: ' + ', '.join(record['participants']))
+                        if record['performed_by']:
+                            collected.append('Performed by: ' + record['performed_by'])
+                        if record['document_id']:
+                            collected.append('Exact document revision ID: ' + str(record['document_id']))
+                        if record['related_evidence_id']:
+                            collected.append('Related evidence ID: ' + str(record['related_evidence_id']))
+                        if record['notes']:
+                            collected.append(record['notes'])
+                    gaps = [requirement['gaps']] if requirement['gaps'] else []
+                    for action in actions_by_requirement.get(requirement['id'], []):
+                        gaps.append(f"Action #{action['id']}: {action['title']} | {action['status']}"
+                                    f"{' (closure evidence stale)' if action.get('closure_stale') else ''} | "
+                                    f"owner {action['owner_badge']} | due {action['due_date']}")
+                        for key, label in (('problem', 'Problem'), ('containment', 'Containment'),
+                                           ('root_cause', 'Root cause'), ('correction', 'Correction'),
+                                           ('corrective_action', 'Corrective action')):
+                            if action[key]:
+                                gaps.append(label + ': ' + action[key])
+                        if action['customer_approval_required']:
+                            gaps.append('Customer approval required; evidence ID: ' + str(action['customer_approval_evidence_id'] or 'missing'))
+                    review = requirement['latest_review'] or {}
+                    row = {
+                        'workspace_id': workspace.id, 'workspace_name': workspace.name,
+                        'customer': workspace.customer, 'project_id': workspace.project_id,
+                        'purchase_order': workspace.purchase_order, 'audit_date': workspace.audit_date,
+                        'requirement_id': requirement['id'], 'item_number': requirement['item_number'],
+                        'title': requirement['title'], 'priority': requirement['priority'],
+                        'owner_badge': requirement['owner_badge'], 'due_date': requirement['due_date'],
+                        'applicability': requirement['applicability'], 'applicability_reason': requirement['applicability_reason'],
+                        'production_gate': requirement['gate'], 'customer_requirement': requirement['requirement_text'],
+                        'clm_response': requirement['response_text'], 'supporting_documentation': '\n'.join(supporting),
+                        'required_evidence': requirement['required_evidence'], 'collected_evidence': '\n'.join(collected),
+                        'gaps_and_corrective_actions': '\n'.join(gaps), 'verification_status': requirement['status'],
+                        'source_status': requirement['source_status'], 'source_document': requirement['source_document'],
+                        'source_revision': requirement['source_revision'], 'source_section': requirement['source_section'],
+                        'source_reference': requirement['source_reference'], 'blockers': '\n'.join(requirement['blockers']),
+                        'last_review_decision': review.get('decision'), 'last_reviewer': review.get('actor'),
+                        'last_review_at': review.get('at'), 'last_review_reference': review.get('reference'),
+                        'as_of': _utc(created_at).isoformat(),
+                    }
+                    report.write((json.dumps([row[key] for key in QUALITY_REPORT_COLUMNS], ensure_ascii=True) + '\n').encode())
+                    count += 1
+                # Detach completed workspace objects so report memory does not
+                # grow with all workspaces. The outer transaction stays open.
+                session.expunge_all()
+        report.seek(0)
+
+        def rows():
+            for line in report:
+                values = json.loads(line)
+                for key in ('last_review_at', 'as_of'):
+                    index = QUALITY_REPORT_COLUMNS.index(key)
+                    if values[index]:
+                        values[index] = dt.datetime.fromisoformat(values[index].replace('Z', '+00:00'))
+                yield values, _json_text({'workspace_id': values[0], 'requirement_id': values[6]})
+
+        writer.write_rows('Audit readiness', 'derived:quality_readiness', QUALITY_REPORT_COLUMNS,
+                          rows(), count, group='report')
+
+
 def build_workbook(bind, exporter, created_at=None):
     """Return a rewound temporary XLSX; caller owns and must close the file."""
     created_at = created_at or utcnow()
@@ -509,6 +659,7 @@ def build_workbook(bind, exporter, created_at=None):
                                 result.close()
                         _write_process_reports(connection, writer, created_at)
                         _write_flow_steps(writer)
+                        _write_quality_report(connection, writer, created_at, exporter)
                         writer.write_overflow()
                         manifest = _manifest_rows(created_at, exporter, writer, kind)
                         writer.write_rows('Export info', 'export_manifest', ('section', 'entry', 'part', 'value'),
