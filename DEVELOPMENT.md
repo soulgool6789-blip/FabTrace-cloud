@@ -12,6 +12,9 @@ This guide describes the implemented tracking extension and the constraints that
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
 | `quality.py`, `quality_templates.py` | Audit workspaces, draft customer matrix, controlled document revisions, actual evidence, corrective actions, signed reviews and optional project gates. |
 | `QUALITY_API.md` | Quality endpoint contracts, payloads, state meanings, review permissions and dependency rules. |
+| `dossier.py`, `dossier_templates.py` | Project-scoped Job Packet checklist, immutable uploaded files/reviews/issues, physical/digital handovers, currentness and coating/shipment gates. |
+| `progress.py` | Read-only project/part scope, recorded progress, physical completion, filters and sorting. |
+| `DOSSIER_API.md`, `DOSSIER_GUIDE.md` | Packet/progress contracts and the operating guide for preparation, issue and transfer. |
 | `exports.py` | Administrator-only Excel snapshot of business records/history and calculated timing/readiness reports, excluding authentication secrets. |
 | `init_db.py` | Additive schema initialization, first-account bootstrap, PostgreSQL transaction/advisory lock, and immutable-history triggers. |
 | `static/index.html` | Canonical application shell and existing login, inventory, custody, and QR interface; tracking workspace/dialog hooks. |
@@ -19,12 +22,13 @@ This guide describes the implemented tracking extension and the constraints that
 | `static/tracking.css` | Styles scoped to the tracking workspace and dialog. |
 | `static/flow.js`, `static/flow.css` | Numbered process map, production board, route forms, hierarchy links, timer controls and mobile layout. |
 | `static/quality.js`, `static/quality.css` | Five-prompt audit workspace, role-aware forms, evidence and document registers, corrective actions, printable audit view and Excel shortcut. |
+| `static/progress.js`, `static/progress.css`, `static/dossier.js`, `static/dossier.css` | Registered-parts dashboard and Job Packet preparation, review, upload, issue, print/download and handover forms. |
 | `index.html` | Distribution copy of the shell. Keep synchronized with `static/index.html`; the server serves the latter. |
 | `migrate_google_part_numbers.py` | Earlier explicit migration for the Google part-number column. Review the actual schema before using an older migration. |
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow, quality and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, quality, dossier, progress and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
 
 ## Data relationships
 
@@ -109,7 +113,7 @@ Tracking mutations lock the owning `Item` row before changing related state. Hie
 
 Keep validation, inserts, invalidation, counter synchronization, and audit creation in one transaction. Read-snapshot helpers preload records for one spool calculation; they are not a durable cache and must not be reused after writes.
 
-`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on twelve history tables:
+`init_db.py` initializes PostgreSQL under an advisory lock in one transaction. It creates missing tables and installs `BEFORE UPDATE OR DELETE` protection on eighteen history/file tables:
 
 - `audit_events`
 - `tracking_requirement_evidence`
@@ -123,6 +127,12 @@ Keep validation, inserts, invalidation, counter synchronization, and audit creat
 - `quality_evidence`
 - `quality_reviews`
 - `quality_events`
+- `dossier_documents`
+- `dossier_files`
+- `dossier_reviews`
+- `dossier_issues`
+- `dossier_handovers`
+- `dossier_events`
 
 These triggers prevent ordinary mutation, not deliberate removal by a database owner. Requirements, holds, plans, and weld metadata are current-state records and remain mutable through controlled APIs.
 
@@ -219,7 +229,7 @@ python tests/verify_postgres.py --help
 python tests/verify_postgres.py --dsn 'postgresql+psycopg://USER@localhost/fabtrace_test_upgrade'
 ```
 
-Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all twelve history triggers, competing weld-evidence/process/flow/quality writes, lock-free quality/flow GET projections, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
+Replace `USER` with the local test user and supply the local connection settings. The script requires an explicit local loopback or Unix-socket DSN, rejects remote/service overrides and operational database names, and does not inherit a production `DATABASE_URL`. Each run creates a UUID-named schema and removes that schema afterward. It verifies legacy-row preservation, repeated initialization, all eighteen history/file triggers, competing weld-evidence/process/flow/quality/dossier writes, lock-free quality/flow/dossier/progress GET projections, and the read-only Excel snapshot. Do not loosen its guard to use the operational database.
 
 ## Adding the next feature
 
@@ -234,3 +244,30 @@ Features that need deliberate additional models:
 - **NDE sampling, pressure-test packages, cross-spool field tie-ins, carrier/document integrations and richer field-return workflows:** each needs explicit scope and lifecycle rules. Basic child assembly readiness and shipment/delivery confirmation are already implemented in the numbered traveler.
 
 Project-specific NDE, PMI, PWHT, hardness, and other requirements can already be configured. Approved project documents supply their technical criteria and extent; this release infers no universal code rule or NDE percentage.
+
+
+## Job Packet model and release controls
+
+`dossier.py` adds `dossier_projects`, `dossier_entries`, `dossier_documents`, `dossier_files`, `dossier_reviews`, `dossier_issues`, `dossier_handovers` and `dossier_events`. Project configuration and saved checklist entries are mutable current state; the other six tables are protected history. File content and issue snapshots/print content are deferred ORM columns so normal metadata reads do not load binary documents or large retained packets. See [DOSSIER_API.md](DOSSIER_API.md) for exact payloads and permission rules.
+
+Every write takes the shared flow topology lock, then the project configuration row lock and relevant sorted Item locks, and checks the project `expected_version`. The event sequence equals the new configuration version. GET projections, previews, immutable downloads and exports acquire no write locks and append no history. Never silently enroll a project, seed signed evidence or backfill an unrecorded production step.
+
+Checklist fingerprints use the relevant record basis, exact selected document revisions and actual project/PO applicability. Structural work in an assembly includes its child scope and relevant physical changes. Pressure approval must become stale after a repair, but normal coating completion or shipping custody alone must not make a pre-coating pressure approval stale. A full packet also depends on current physical release, relevant requirements and current child packets. Issued data and print content remain fixed; later currentness is derived separately.
+
+When a project explicitly enables its dossier gate, `flow._step_errors` calls `dossier_gate_errors` at 20/21 for pre-coating pressure/customer hold/source checks and at 23/24 for current complete issued packets. Actual advance passes `for_update=True` inside the existing locked transaction; board/detail reads leave it false. Pre-coating must not require final coating or final physical release, which would create a circular workflow. Existing tracking, flow and audit gates continue to apply.
+
+Uploads read at most 8 MiB + 1 byte, check extension/content signature, sanitize filenames, retain SHA-256 and cap project file revisions at 256 MiB. Office ZIPs reject unsafe/encrypted/macro content or excessive declared expansion. Files are downloaded as attachments with no-sniff headers and are never executed or rendered in application HTML. Exact issued ZIPs contain selected original documents; linked external references are never fetched.
+
+Handover records are declarations of actual dispatch and separate receipt, not integrations that send messages. A dispatch must reference a current completed-project issue. A later receipt can acknowledge an older dispatched issue and does not grant new release. Printed acknowledgement blanks remain blank until an actual event.
+
+Excel explicitly allowlists seven dossier metadata tables, including immutable JSON issue/review snapshots and print hashes. It excludes `dossier_files` and retained HTML content. `Project progress`, `Part progress` and `Job Packet readiness` are calculated inside the same PostgreSQL REPEATABLE READ READ ONLY snapshot as the raw tables. Long snapshots use the existing lossless Text overflow mechanism; worksheets may exceed the base 43-sheet count when continuation or overflow is needed.
+
+## Read-only project progress
+
+`GET /api/progress/projects` returns `{as_of,definitions,projects}`. Project rows contain actual registered counts, WIP/current-finished/shipped/delivered/blocked counts, finished percentage, recorded step totals and percentage, planning-needed count, and whether dossier configuration exists.
+
+`GET /api/progress/projects/{project_id}` accepts `status=all|wip|finished|shipped|delivered`, `subproject_id`, `kind=all|component|spool|assembly|unplanned`, `search` and `sort=status|progress_asc|progress_desc|id`. It returns `{project,as_of,definitions,counts,subprojects,items,total}`. `counts` is full project scope; `items` and `total` follow the filters. Finished includes current finished items whose traveler subsequently shipped/delivered.
+
+`project_rows(session, project_id=None)` is the shared no-write helper used by the dashboard, completed-project eligibility and Excel. Membership precedence is SpoolPlan, linked component's parent plan, then exact Item.project project ID. Never fuzzy-match a project label or invent BOM entries. Components, spools and assemblies count as separate physical records.
+
+A row records `id`, `kind`, scope/source IDs, `status`, `fabrication_finished`, `blockers`, `progress_percent`, `progress_basis`, actual step counters, planned/completed/accepted weld counters, current route step and custody details. Recorded-route percentages replay successful advances and controlled failure/reopen returns. Earlier baseline steps remain `not_recorded`. Unrouted planned welds use actual current-cycle completion; a zero-weld plan uses current QA release. The percentage alone never issues a packet or creates shipment evidence.

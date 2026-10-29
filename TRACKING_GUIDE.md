@@ -241,3 +241,14 @@ An administrator can use **Export Excel**. The **Audit readiness** worksheet pre
 | Administrator | All tracking capabilities, employee administration and reopening released items |
 
 All active staff can read production records, submit weld evidence and pause/resume process timing. In Audit readiness, all active staff can read; administrators, supervisors and inspectors submit records, and inspectors/administrators perform reviews. Numbered-step actions follow the displayed responsible roles; QA approval remains restricted. Applicable codes, NDE selection and extent, qualification limits and pressure-test packages rely on approved procedures or separate systems. Shipment and delivery are recorded explicitly through the numbered traveler; neither is inferred from quality approval.
+
+
+## 11. Project progress and final Job Packets
+
+Open **Project progress** for per-project registered-parts completion, WIP/finished/shipped/delivered filtering, work-package/type filters, sorting and links to actual item records. Each route percentage reflects real recorded steps. Historical baselines stay unrecorded; missing BOM records are not counted as complete. Current physical release is separate from dossier approval and handover.
+
+Open **Job Packets** to configure the intended spool/assembly packet count, actual manufacturer contact, PO, sources and optional project gates. The ten CLM sections and 25 checks organize the eight contents in Kelvion QF-QAS-100 Rev B p8. Upload shared project files and item-specific records, select exact revisions, enter actual typed results where required, and request signed QA decisions. Conditional non-applicability needs a reviewed reason.
+
+QA issues each complete current item packet, followed by a completed-project revision after the declared scope and all current packets are reconciled. Print or download the issued package; record actual physical and digital dispatches separately and then their actual acknowledgements. Downloading does not send a packet. New evidence or rework can invalidate current approval without rewriting an issued snapshot.
+
+See [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for the full step-by-step setup, customer-document crosswalk, coating/shipping gates, file revision controls, print/ZIP output, transfer records and troubleshooting.

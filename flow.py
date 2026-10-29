@@ -414,6 +414,9 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
         from quality import production_gate_errors
         errors.extend(production_gate_errors(s, item, 'pre_coating' if step in (20, 21) else 'shipment',
                                             for_update=quality_for_update))
+        from dossier import dossier_gate_errors
+        errors.extend(dossier_gate_errors(s, item, phase='pre_coating' if step in (20, 21) else 'shipment',
+                                          for_update=quality_for_update))
     if step in (5, 8) and not s.get(ComponentLink, item.id):
         errors.append('Assign this component to its target spool first')
     for exception in _exceptions(s, item.id, True):

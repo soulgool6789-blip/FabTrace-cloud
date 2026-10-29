@@ -21,6 +21,7 @@ Every run creates one UUID-named schema and removes it in a finally block.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import importlib
+import hashlib
 import ipaddress
 import io
 import json
@@ -157,19 +158,26 @@ def verify_history_protection(application, initializer, schema):
         "tracking_weld_work", "tracking_weld_repairs", "tracking_requirement_templates",
         "tracking_process_events", "flow_events",
         "quality_documents", "quality_evidence", "quality_reviews", "quality_events",
+        "dossier_documents", "dossier_files", "dossier_reviews", "dossier_issues",
+        "dossier_handovers", "dossier_events",
     }
     results = {}
     for name in initializer.HISTORY_TABLES:
         assert name in application.Base.metadata.tables
+        declared = application.Base.metadata.tables[name]
+        key_columns = list(declared.primary_key.columns)
+        assert len(key_columns) == 1, f"Use the declared history key for {name}"
+        key = key_columns[0].name
         # Both identifiers come from fixed code / generated UUIDs, never user SQL.
         table = f'"{schema}"."{name}"'
         with application.engine.connect() as connection:
-            record_id = connection.scalar(text(f"SELECT id FROM {table} ORDER BY id LIMIT 1"))
+            record_id = connection.scalar(text(f'SELECT "{key}" FROM {table} ORDER BY "{key}" LIMIT 1'))
             before = connection.scalar(text(f"SELECT count(*) FROM {table}"))
+            original = dict(connection.execute(select(declared).where(key_columns[0] == record_id)).mappings().one()) if record_id is not None else None
         assert record_id is not None, f"History table has no representative row: {name}"
         for operation, statement in (
-            ("UPDATE", f"UPDATE {table} SET id = id WHERE id = :record_id"),
-            ("DELETE", f"DELETE FROM {table} WHERE id = :record_id"),
+            ("UPDATE", f'UPDATE {table} SET "{key}" = "{key}" WHERE "{key}" = :record_id'),
+            ("DELETE", f'DELETE FROM {table} WHERE "{key}" = :record_id'),
         ):
             try:
                 with application.engine.begin() as connection:
@@ -182,10 +190,24 @@ def verify_history_protection(application, initializer, schema):
         with application.engine.connect() as connection:
             assert connection.scalar(text(f"SELECT count(*) FROM {table}")) == before
             assert connection.scalar(
-                text(f"SELECT id FROM {table} WHERE id = :record_id"),
+                text(f'SELECT "{key}" FROM {table} WHERE "{key}" = :record_id'),
                 {"record_id": record_id},
             ) == record_id
+            assert dict(connection.execute(select(declared).where(key_columns[0] == record_id)).mappings().one()) == original
         results[name] = {"update_blocked": True, "delete_blocked": True}
+        if name == "dossier_files":
+            try:
+                with application.engine.begin() as connection:
+                    connection.execute(text(f'UPDATE {table} SET content = :content WHERE "{key}" = :record_id'),
+                        {"content": b"REPLACEMENT-BYTES-MUST-NOT-BE-SAVED", "record_id": record_id})
+            except DBAPIError as error:
+                assert getattr(error.orig, "sqlstate", None) == "P0001", str(error)
+                assert "history modification forbidden" in str(error.orig), str(error)
+            else:
+                raise AssertionError("Issued evidence file bytes unexpectedly allowed replacement")
+            with application.engine.connect() as connection:
+                assert connection.scalar(select(declared.c.content).where(key_columns[0] == record_id)) == original["content"]
+            results[name]["content_replacement_blocked"] = True
     return results
 
 
@@ -448,6 +470,126 @@ def verify_concurrent_quality_evidence(application, quality, api):
             "new_audit_rows": 1, "verification_invented": False}
 
 
+def verify_concurrent_dossier_mutation(application, dossier, api):
+    from test_dossier import make_project, packet, project, version
+
+    project_id = "PG-DOSSIER-RACE"
+    item_id = make_project(api, "PG-DOSSIER-RACE-SPOOL", project_id=project_id)
+    initial_version = version(api, project_id)
+    with application.SessionLocal() as session:
+        events_before = session.scalar(select(func.count()).select_from(dossier.DossierEvent).where(
+            dossier.DossierEvent.project_id == project_id))
+        audits_before = session.scalar(select(func.count()).select_from(application.Audit))
+
+    gate = Barrier(2)
+    synchronized_connections = set()
+
+    def synchronize_topology_lock(connection, cursor, statement, parameters, context, many):
+        # Synchronize before the global topology lock. A barrier inside a
+        # project/Item row lock would deadlock the other legitimate writer.
+        if "pg_advisory_xact_lock" in statement and id(connection) not in synchronized_connections:
+            synchronized_connections.add(id(connection))
+            gate.wait(timeout=15)
+
+    def change_one(code):
+        worker = TestAPI(application, application.SessionLocal)
+        try:
+            response = worker.put(f"/api/dossier/items/{item_id}/checks/{code}", {
+                "expected_version": initial_version, "applicability": "required",
+                "reference": "PG-CONCURRENT-" + code,
+                "notes": "Independent synthetic document record entered concurrently.",
+                "document_ids": [], "values": {},
+            }, role="supervisor")
+            return {"status": response.status_code, "code": code, "body": response.json()}
+        finally:
+            worker.client.close()
+
+    event.listen(application.engine, "before_cursor_execute", synchronize_topology_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = [future.result(timeout=30) for future in [
+                pool.submit(change_one, "advisements"), pool.submit(change_one, "product_data"),
+            ]]
+    finally:
+        event.remove(application.engine, "before_cursor_execute", synchronize_topology_lock)
+    assert sorted(row["status"] for row in responses) == [200, 409], responses
+    winner = next(row for row in responses if row["status"] == 200)
+    assert version(api, project_id) == initial_version + 1
+    with application.SessionLocal() as session:
+        entries = session.scalars(select(dossier.DossierEntry).where(
+            dossier.DossierEntry.project_id == project_id)).all()
+        assert len(entries) == 1 and entries[0].code == winner["code"]
+        assert entries[0].updated_by == BADGES["supervisor"]
+        assert session.scalar(select(func.count()).select_from(dossier.DossierEvent).where(
+            dossier.DossierEvent.project_id == project_id)) == events_before + 1
+        assert session.scalar(select(func.count()).select_from(application.Audit)) == audits_before + 1
+        assert session.scalar(select(func.count()).select_from(dossier.DossierReview).where(
+            dossier.DossierReview.project_id == project_id)) == 0
+    assert packet(api, item_id)["percent"] == 0
+    return {"response_codes": [200, 409], "new_check_entries": 1, "new_events": 1,
+            "new_audit_rows": 1, "approval_invented": False}
+
+
+def verify_readonly_dossier_progress_and_immutable_downloads(application, api):
+    from test_dossier import TODAY, issued_fixture, issue_project, project, signed, version
+    from test_progress import database_state
+
+    project_id = "PG-DOSSIER-SNAPSHOT"
+    item_id = "PG-DOSSIER-SNAPSHOT-SPOOL"
+    item_issue = issued_fixture(api, item_id, project_id=project_id)
+    signed(issue_project(api, project_id))
+    project_issue = project(api, project_id)["latest_project_issue"]
+    assert len(item_issue["print_sha256"]) == len(project_issue["print_sha256"]) == 64
+    signed(api.post(f"/api/dossier/projects/{project_id}/handovers", {
+        "expected_version": version(api, project_id), "issue_id": project_issue["id"],
+        "channel": "physical", "recipient": "Synthetic PostgreSQL receiver",
+        "organization": "Local isolated QA fixture", "reference": "PG-PHYSICAL-DISPATCH",
+        "notes": "Printed test packet dispatch actually recorded for this fixture.", "occurred_on": TODAY,
+    }, role="supervisor"))
+    dispatch = project(api, project_id)["handovers"][-1]
+    signed(api.post(f"/api/dossier/handovers/{dispatch['id']}/receipt", {
+        "expected_version": version(api, project_id), "recipient": "Synthetic PostgreSQL receiver",
+        "reference": "PG-PHYSICAL-RECEIPT", "notes": "The separate receipt was explicitly recorded.",
+        "occurred_on": TODAY,
+    }, role="supervisor"))
+    before = database_state(api)
+    unsafe_statements = []
+
+    def observe_queries(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if sql.startswith(("INSERT", "UPDATE", "DELETE")) or "FOR UPDATE" in sql or "PG_ADVISORY_XACT_LOCK" in sql:
+            unsafe_statements.append(statement)
+
+    event.listen(application.engine, "before_cursor_execute", observe_queries)
+    try:
+        for path in ("/api/dossier/catalog", "/api/dossier/projects", f"/api/dossier/projects/{project_id}",
+                     f"/api/dossier/items/{item_id}", f"/api/dossier/issues/{item_issue['id']}",
+                     f"/api/dossier/issues/{project_issue['id']}/print", "/api/progress/projects",
+                     f"/api/progress/projects/{project_id}"):
+            response = api.get(path)
+            assert response.status_code == 200, response.text
+        for issue in (item_issue, project_issue):
+            printed = api.get(f"/api/dossier/issues/{issue['id']}/print")
+            assert printed.status_code == 200
+            assert hashlib.sha256(printed.content).hexdigest() == issue["print_sha256"]
+            response = api.get(f"/api/dossier/issues/{issue['id']}/download")
+            assert response.status_code == 200, response.text
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                assert archive.testzip() is None
+                assert any(name.endswith(".pdf") for name in archive.namelist())
+        # Exercise the same no-lock guarantee when these projections are
+        # consumed from the PostgreSQL read-only Excel snapshot transaction.
+        response = api.get("/api/exports/excel")
+        assert response.status_code == 200, response.text
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe_queries)
+    assert unsafe_statements == [], "A GET/export wrote data or acquired production write locks"
+    assert database_state(api) == before, "Read-only views or export changed existing records"
+    return {"progress_and_dossier_read_views": 12, "write_locks": 0, "mutations": 0,
+            "immutable_snapshot_downloads": 2, "retained_print_hashes_verified": 2,
+            "download_does_not_dispatch": True}
+
+
 def verify_readonly_quality_gate_views(application, api):
     from test_flow import PROJECT
     from test_quality import assembly_at_step, create_requirement, workspace
@@ -515,7 +657,14 @@ def verify_excel_export(application, api):
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
         sheets = [sheet.attrib["name"] for sheet in workbook.findall("s:sheets/s:sheet", namespace)]
-    assert sheets == ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS], "Process visits", "Process totals", "Flow steps", "Audit readiness"]
+    expected_sheets = ["Export info", *[spec.sheet for spec in exports.TABLE_SPECS],
+        "Process visits", "Process totals", "Flow steps", "Audit readiness",
+        "Project progress", "Part progress", "Job Packet readiness"]
+    assert sheets[:len(expected_sheets)] == expected_sheets, sheets
+    # A complete retained packet exceeds Excel's per-cell text limit. Its
+    # exact JSON is preserved through normal Text overflow continuation rows.
+    assert all(re.fullmatch(r"Text overflow(?: [0-9]+)?", name)
+               for name in sheets[len(expected_sheets):]), sheets
     # Raw tables, the joined process query, and batched audit-readiness
     # dependency queries all stay in one physical read-only snapshot.
     assert len(export_reads) >= len(exports.TABLE_SPECS) + 2, export_reads
@@ -524,7 +673,7 @@ def verify_excel_export(application, api):
     assert len({backend_pid for _, _, backend_pid, _ in export_reads}) == 1
     assert row_counts() == before, "Excel export changed database row counts"
     return {
-        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 4, "rows_unchanged": True,
+        "response_code": 200, "business_sheets": len(exports.TABLE_SPECS) + 7, "rows_unchanged": True,
         "isolation": "repeatable read", "read_only": True, "server_side_queries": len(export_reads),
     }
 
@@ -562,6 +711,7 @@ def verify(dsn):
         production = importlib.import_module("production")
         flow = importlib.import_module("flow")
         quality = importlib.import_module("quality")
+        dossier = importlib.import_module("dossier")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -572,6 +722,8 @@ def verify(dsn):
             initializer.initialize()
             assert snapshot_legacy(application) == legacy, "Initialization rewrote legacy records"
         assert set(inspect(application.engine).get_table_names(schema=schema)) == set(application.Base.metadata.tables)
+        issue_columns = {column["name"] for column in inspect(application.engine).get_columns("dossier_issues", schema=schema)}
+        assert {"print_html", "print_sha256", "snapshot", "sha256"} <= issue_columns
         with application.SessionLocal() as session:
             assert session.query(tracking.SpoolPlan).count() == 0, "Migration silently enrolled legacy items"
             assert session.query(tracking.Weld).count() == 0, "Migration invented individual welds"
@@ -583,6 +735,10 @@ def verify(dsn):
             for model in (quality.QualityWorkspace, quality.QualityRequirement, quality.QualityDocument,
                           quality.QualityEvidence, quality.QualityAction, quality.QualityReview, quality.QualityEvent):
                 assert session.query(model).count() == 0, "Migration invented audit readiness or actual evidence"
+            for model in (dossier.DossierProject, dossier.DossierEntry, dossier.DossierDocument,
+                          dossier.DossierFile, dossier.DossierReview, dossier.DossierIssue,
+                          dossier.DossierHandover, dossier.DossierEvent):
+                assert session.query(model).count() == 0, "Migration invented packet scope, evidence, approval, or handover"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -602,6 +758,8 @@ def verify(dsn):
         flow_concurrency = verify_concurrent_flow_step(application, flow, production, api)
         quality_concurrency = verify_concurrent_quality_evidence(application, quality, api)
         quality_read_views = verify_readonly_quality_gate_views(application, api)
+        dossier_concurrency = verify_concurrent_dossier_mutation(application, dossier, api)
+        dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
         history = verify_history_protection(application, initializer, schema)
         concurrency = verify_concurrent_evidence(application, tracking, api, item_id, record["id"])
         excel_export = verify_excel_export(application, api)
@@ -614,13 +772,16 @@ def verify(dsn):
             "postgresql_version": server_version,
             "additive_upgrade": "passed",
             "idempotent_initializations": 2,
+            "frozen_print_schema": {"print_html": True, "print_sha256": True},
             "legacy_rows_preserved": {name: len(rows) for name, rows in legacy.items()},
             "history_protection": history,
             "concurrent_evidence": concurrency,
             "concurrent_process_transition": process_concurrency,
             "concurrent_flow_step": flow_concurrency,
             "concurrent_quality_evidence": quality_concurrency,
+            "concurrent_dossier_mutation": dossier_concurrency,
             "readonly_quality_gate_views": quality_read_views,
+            "readonly_dossier_progress_and_exports": dossier_read_views,
             "excel_export": excel_export,
             "health": health["status"],
             "schema_cleanup": "completed",

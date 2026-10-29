@@ -33,6 +33,9 @@ from production import SpoolProcessEvent, process_snapshot
 from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, STEPS as FLOW_STEPS, VERSION as FLOW_VERSION
 from quality import (QualityWorkspace, QualityRequirement, QualityDocument, QualityEvidence,
                      QualityAction, QualityReview, QualityEvent, workspace_detail)
+from dossier import (DossierProject, DossierEntry, DossierDocument, DossierReview,
+                     DossierIssue, DossierHandover, DossierEvent, item_detail)
+from progress import project_rows, summarize as progress_summary
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -98,6 +101,34 @@ TABLE_SPECS = (
     _spec(QualityAction, 'Quality actions', 'id workspace_id requirement_id title owner_badge due_date problem containment root_cause correction corrective_action status closure_evidence_ids effectiveness_evidence_id customer_approval_required customer_approval_evidence_id version closed_by closed_at created_by created_at updated_at'),
     _spec(QualityReview, 'Quality reviews', 'id workspace_id target_type target_id decision reference notes fingerprint snapshot actor at'),
     _spec(QualityEvent, 'Quality events', 'id workspace_id sequence event target_type target_id details actor at'),
+    _spec(DossierProject, 'Packet projects', 'project_id manufacturer_name manufacturer_contact purchase_order work_order advisements source_reference expected_packets shipping_gate customer_approval_required notes version created_by created_at updated_at', 'project_id'),
+    _spec(DossierEntry, 'Packet checklist', 'id project_id item_id code applicability reference notes document_ids values version updated_by updated_at'),
+    _spec(DossierDocument, 'Packet documents', 'id project_id item_id scope_key code title revision section reference filename media_type size_bytes sha256 actor at'),
+    _spec(DossierReview, 'Packet reviews', 'id project_id item_id code decision reference notes fingerprint snapshot actor at'),
+    _spec(DossierIssue, 'Packet issues', 'id project_id item_id scope_key kind revision fingerprint sha256 snapshot print_sha256 reference notes actor at'),
+    _spec(DossierHandover, 'Packet handovers', 'id project_id issue_id channel event dispatch_id recipient organization reference notes occurred_on actor at'),
+    _spec(DossierEvent, 'Packet events', 'id project_id sequence event item_id details actor at'),
+)
+
+PROJECT_PROGRESS_COLUMNS = (
+    'project_id', 'name', 'client', 'total_parts', 'wip', 'finished', 'shipped', 'delivered',
+    'blocked', 'finished_percent', 'recorded_steps_completed', 'recorded_steps_total',
+    'recorded_percent', 'planning_needed', 'has_dossier', 'as_of',
+)
+PART_PROGRESS_COLUMNS = (
+    'project_id', 'subproject_id', 'item_id', 'description', 'google_part_number',
+    'kind', 'item_kind', 'parent_id', 'scope_source', 'status', 'fabrication_finished',
+    'blocked', 'blockers', 'progress_percent', 'progress_basis', 'completed_steps',
+    'total_steps', 'not_recorded_steps', 'planned_welds', 'completed_welds', 'qa_accepted',
+    'flow_status', 'current_step', 'current_title', 'released', 'location', 'handler',
+    'updated_at', 'as_of',
+)
+PACKET_READINESS_COLUMNS = (
+    'project_id', 'item_id', 'purchase_order', 'packet_status', 'source_status',
+    'packet_percent', 'section', 'code', 'title', 'applicability', 'check_status',
+    'reference', 'notes', 'document_ids', 'values', 'blockers', 'packet_blockers', 'last_review_decision',
+    'last_reviewer', 'last_review_at', 'last_review_reference', 'latest_issue_id',
+    'latest_issue_revision', 'issue_current', 'as_of',
 )
 
 QUALITY_REPORT_COLUMNS = (
@@ -161,6 +192,12 @@ RELATIONSHIPS = (
     'quality_reviews.target_type and target_id identify a source/requirement, document, evidence or action within the same workspace. Reviews retain the signed snapshot and fingerprint; later reviews never rewrite earlier ones.',
     'quality_events.workspace_id and sequence retain each workspace change. Document revisions, evidence, reviews and events are immutable; their current statuses are derived, not stored acceptance flags.',
     'Audit readiness is a calculated report from the same snapshot as raw Quality tables. Verified requires a current signed review and current prerequisites. It does not certify compliance or establish that a referenced external file exists.',
+    'dossier_projects.project_id -> tracking_projects.id. expected_packets is the declared number of spool/assembly packets, excluding individual preparation components. The progress denominator remains actual registered parts.',
+    'dossier_entries.item_id -> items.id; document_ids reference exact dossier_documents revisions. Documents can be shared at project level or scoped to one item. Superseded files and reviews remain historical.',
+    'dossier_documents retains file size, SHA-256 and upload identity. Binary dossier_files.content is deliberately excluded; use an issued Job Packet ZIP to retrieve its selected original files.',
+    'dossier_reviews and dossier_issues retain signed immutable snapshots and fingerprints. Packet readiness recalculates current applicability and blockers; an old issued snapshot is never rewritten.',
+    'dossier_handovers.issue_id -> dossier_issues.id; dispatch_id identifies the dispatch acknowledged by a receipt. Download, recorded dispatch and recorded receipt are separate events. dossier_events.sequence is the project edit version.',
+    'Project progress and Part progress are calculated from registered records, real route events and current physical quality checks. Historical baseline steps stay not recorded. Fabrication completion is separate from packet approval or handover.',
     'created_by, actor, completed_by, opened_by and closed_by badge fields retain the recorded employee identities.',
     'Audit details, template requirements and required_operations are JSON text. Preserve the JSON when using these records elsewhere.',
 )
@@ -401,10 +438,11 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Export', 'Exporter name', exporter.name)
     add('Export', 'Exporter role', exporter.role)
     add('Export', 'Snapshot method', 'PostgreSQL REPEATABLE READ READ ONLY, separate connection' if database_kind == 'postgresql' else 'SQLite explicit read transaction, separate connection')
-    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events and numbered travelers plus audit-readiness records. Two process reports summarize recorded visits and totals; Flow steps supplies the current 24-step definition lookup; Audit readiness presents the current five-prompt matrix and verification blockers. No screen pagination limits.')
+    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events, numbered travelers, audit-readiness records and Job Packet metadata/snapshots. Calculated reports cover process time, audit readiness, project and part progress, and current Job Packet checks. Flow steps supplies the current 24-step definition lookup. No screen pagination limits.')
     add('Export', 'Database writes', 'None. This export does not append audit records or alter application data.')
     add('Exclusions', 'Authentication', 'Employee PIN hashes, PINs, passwords, session tokens, JWT secrets, database credentials and environment variables are excluded. Employee roster includes badge, name, role, active and created_at only.')
     add('Exclusions', 'External documents', 'References and URLs are exported as stored. External report/MTR contents and linked files are not fetched or embedded.')
+    add('Exclusions', 'Uploaded file bytes', 'The dossier_files binary table and retained dossier_issues.print_html are excluded. Packet documents includes file identity, scope, size and SHA-256; Packet issues retains structured snapshots and print hashes. Download an issued packet ZIP for its frozen HTML and selected original files. An Excel export is not a replacement for the issued Job Packet.')
     add('Exclusions', 'Unknown tables', 'Future or unlisted tables/columns are not exported automatically. This is a business-data workbook, not a complete database restore backup.')
     add('Format', 'Literal text', 'Text and identifiers, including integer primary/foreign keys, are literal Excel strings. This preserves identifiers beyond Excel numeric precision and leading zeros. Values beginning with =,+,-,@ remain text. No formulas, macros or external-link objects are generated.')
     add('Format', 'Date/time', 'Date/time cells are native Excel numeric date/time values normalized to UTC. Naive database timestamps are interpreted as UTC; Excel display uses milliseconds.')
@@ -420,13 +458,16 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Audit readiness', 'Evidence and verification', 'Quality tables preserve the five audit prompts, document revisions, submitted records, corrective actions and signed review history. The Audit readiness report recalculates current verification against those records at the snapshot time. Draft wording, a planned audit and an issued/approved blank template do not prove that an activity occurred.')
     add('Audit readiness', 'Sources and scope', 'Kelvion starter prompts are based on the supplied planning summary. Original documents, PO applicability, technical criteria and revisions require human source confirmation. No universal NDE, pressure, coating or customer-deadline rule is inferred. Optional project gates require deliberate configuration.')
     add('Audit readiness', 'Dates', 'Actual activity dates, due dates and audit dates are stored as ISO calendar dates. Review and recording timestamps are UTC. A future planned audit date is different from a completed audit date. The report as_of timestamp matches the export snapshot timestamp.')
+    add('Job Packets', 'Structure and source', 'Kelvion QF-QAS-100 Rev B p8 defines eight Job Packet contents. CLM organizes them into ten sections. Project/PO applicability and source confirmation remain explicit QA reviews; no default test pressure, NDE sampling rate or acceptance value is inferred.')
+    add('Job Packets', 'Issue and transfer', 'Packet issues are immutable issued snapshots. Packet readiness reports the current checks, so it may show a blocker after a later edit or repair. Physical and digital dispatch and receipt are recorded against an exact project issue. Downloading or printing does not record delivery.')
+    add('Project progress', 'Denominators', 'Project percentages describe registered parts only, not an unregistered BOM. Components, spools and assemblies are counted as their own traceable records. Per-part recorded-step percentages exclude unrecorded baseline steps and roll back affected steps after rework. Finished is determined separately from current physical release checks.')
     add('Format', 'Continuation sheets', f'Each sheet holds at most {EXCEL_MAX_ROWS:,} rows including its repeated header. Additional data continues on sheets named with a numeric suffix.')
     add('Format', 'Long text', f'Values exceeding {EXCEL_MAX_CELL_CHARS:,} UTF-16 units are replaced by an OVF reference. Reconstruct the full original value by concatenating Text overflow chunks for that overflow_id in chunk_index order.')
     add('Format', 'Long-text cells', writer.overflow_cells)
     add('Format', 'Overflow chunk rows', writer.overflow_rows)
     for index, relationship in enumerate(RELATIONSHIPS, start=1):
         add('Relationships', f'R{index:02}', relationship)
-    add('Counts', 'How to read counts', 'Data-row counts exclude headers. Continuation-sheet counts are separate. Process reports and Audit readiness are calculated rows and Flow steps is definition data; none adds database records. Manifest sheets are descriptive metadata.')
+    add('Counts', 'How to read counts', 'Data-row counts exclude headers. Continuation-sheet counts are separate. Process, audit, progress and packet-readiness reports are calculated rows and Flow steps is definition data; none adds database records. Manifest sheets are descriptive metadata.')
     for sheet in writer.sheets:
         add('Sheet rows', sheet.name, sheet.rows)
         add('Source table', sheet.name, sheet.table)
@@ -621,6 +662,78 @@ def _write_quality_report(connection, writer, created_at, exporter):
                           rows(), count, group='report')
 
 
+def _write_delivery_reports(connection, writer, created_at, exporter):
+    """Progress and packet checks share the raw workbook's read-only snapshot.
+
+    Keep one project in the ORM identity map and spool the derived rows, so
+    large report text uses the normal continuation/overflow path. File bytes
+    are never loaded by these metadata projections.
+    """
+    as_of = _utc(created_at).isoformat()
+    with tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as projects_file, \
+            tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as parts_file, \
+            tempfile.SpooledTemporaryFile(max_size=TEMP_MEMORY_BYTES, mode='w+b') as packets_file:
+        counts = [0, 0, 0]
+        with Session(bind=connection, autoflush=False, expire_on_commit=False,
+                     join_transaction_mode='rollback_only') as session:
+            configured = set(connection.scalars(select(DossierProject.project_id)))
+            project_ids = connection.scalars(select(Project.id).order_by(Project.id))
+            for project_id in project_ids:
+                project = session.get(Project, project_id)
+                parts = project_rows(session, project_id)
+                summary = progress_summary(project, parts, project_id in configured)
+                summary.update(project_id=project_id, as_of=as_of)
+                projects_file.write((json.dumps([summary[k] for k in PROJECT_PROGRESS_COLUMNS], ensure_ascii=True) + '\n').encode())
+                counts[0] += 1
+                for part in parts:
+                    part.update(item_id=part['id'], as_of=as_of)
+                    part['blockers'] = '\n'.join(part['blockers'])
+                    parts_file.write((json.dumps([part[k] for k in PART_PROGRESS_COLUMNS], ensure_ascii=True) + '\n').encode())
+                    counts[1] += 1
+                    if project_id not in configured or part['kind'] not in ('spool', 'assembly'):
+                        continue
+                    packet = item_detail(session, session.get(Item, part['item_id']), exporter)
+                    issue = packet['latest_issue'] or {}
+                    for section in packet['sections']:
+                        for check in section['checks']:
+                            review = check['latest_review'] or {}
+                            record = {
+                                'project_id': project_id, 'item_id': part['item_id'],
+                                'purchase_order': packet['config']['purchase_order'],
+                                'packet_status': packet['status'], 'source_status': packet['source_status'],
+                                'packet_percent': packet['percent'], 'section': section['code'],
+                                'code': check['code'], 'title': check['title'],
+                                'applicability': check['applicability'], 'check_status': check['status'],
+                                'reference': check['reference'], 'notes': check['notes'],
+                                'document_ids': check['document_ids'], 'values': check['values'],
+                                'blockers': '\n'.join(check['blockers']), 'packet_blockers': '\n'.join(packet['blockers']),
+                                'last_review_decision': review.get('decision'), 'last_reviewer': review.get('actor'),
+                                'last_review_at': review.get('at'), 'last_review_reference': review.get('reference'),
+                                'latest_issue_id': issue.get('id'), 'latest_issue_revision': issue.get('revision'),
+                                'issue_current': issue.get('current', False), 'as_of': as_of,
+                            }
+                            packets_file.write((json.dumps([record[k] for k in PACKET_READINESS_COLUMNS], ensure_ascii=True) + '\n').encode())
+                            counts[2] += 1
+                session.expunge_all()
+
+        for report, name, table, columns, count, dates, json_columns in (
+            (projects_file, 'Project progress', 'derived:project_progress', PROJECT_PROGRESS_COLUMNS, counts[0], ('as_of',), set()),
+            (parts_file, 'Part progress', 'derived:part_progress', PART_PROGRESS_COLUMNS, counts[1], ('updated_at', 'as_of'), set()),
+            (packets_file, 'Job Packet readiness', 'derived:packet_readiness', PACKET_READINESS_COLUMNS, counts[2], ('last_review_at', 'as_of'), {'document_ids', 'values'}),
+        ):
+            report.seek(0)
+            def rows(report=report, columns=columns, dates=dates):
+                for line in report:
+                    values = json.loads(line)
+                    for key in dates:
+                        index = columns.index(key)
+                        if values[index]:
+                            values[index] = dt.datetime.fromisoformat(values[index].replace('Z', '+00:00'))
+                    identity = {key: values[columns.index(key)] for key in ('project_id', 'item_id', 'code') if key in columns}
+                    yield values, _json_text(identity)
+            writer.write_rows(name, table, columns, rows(), count, json_columns=json_columns, group='report')
+
+
 def build_workbook(bind, exporter, created_at=None):
     """Return a rewound temporary XLSX; caller owns and must close the file."""
     created_at = created_at or utcnow()
@@ -660,6 +773,7 @@ def build_workbook(bind, exporter, created_at=None):
                         _write_process_reports(connection, writer, created_at)
                         _write_flow_steps(writer)
                         _write_quality_report(connection, writer, created_at, exporter)
+                        _write_delivery_reports(connection, writer, created_at, exporter)
                         writer.write_overflow()
                         manifest = _manifest_rows(created_at, exporter, writer, kind)
                         writer.write_rows('Export info', 'export_manifest', ('section', 'entry', 'part', 'value'),
