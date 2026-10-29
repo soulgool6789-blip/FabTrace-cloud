@@ -158,7 +158,7 @@ Assembly work and coating require fresh dimensional verification afterward. An o
 
 ### Release, shipment and delivery
 
-Passing spool step 15 or assembly step 22 performs the corresponding quality release using the existing release rules. The next handoff/shipping step starts automatically. The ordinary **Final release** action cannot bypass these traveler checkpoints. A permitted administrative reopen returns a numbered spool to QA step 15 or an assembly to QA step 22 and records a new timed visit.
+Passing spool step 15 or assembly step 22 performs the corresponding quality release using the existing release rules. The next handoff/shipping step starts automatically. The ordinary **Final release** action cannot bypass these traveler checkpoints. A permitted reopen of an ordinary QA release returns a numbered spool to QA step 15 or an assembly to QA step 22 and records a new timed visit. **Admin controls → Return to work** for an administrative release instead restores the saved pre-override route position, preserving the actual work and inspection records.
 
 Step 23 verifies shipping readiness, records the move to the shipping area and requires the controlled shipping-document reference. The referenced documents remain in the company's document system. At step 24, record the actual carrier, shipment reference and destination. The status becomes **Shipped**. Later, **Confirm delivery** records the delivery receipt reference and recipient; only that action changes the status to **Delivered**.
 
