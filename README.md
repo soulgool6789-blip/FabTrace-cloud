@@ -15,6 +15,8 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 - Audit-readiness workspaces with the five-prompt Kelvion matrix, controlled document revisions, actual evidence, signed reviews, corrective actions and current-state Excel reports.
 - Spool process timers with start, move, pause, resume and finish controls; current-process age, visit history, repeat-visit totals, and Excel timing reports.
 - A numbered **Process flow** workspace following CLM's 24-step material-to-shipment chart, with linked components/spools/assemblies, scanned or entered identity checks, custody handoffs, QA gates, exception/rework returns, and separate shipment and delivery confirmation.
+- **Project progress** with progress bars for registered parts, WIP/finished/shipped/delivered filters, work-package and part-type filters, and links to each physical record.
+- **Job Packets / CLM Final Dossiers** organized into ten sections and 25 detailed checks, based on Kelvion QF-QAS-100 Rev B page 8. Current fabrication records, uploaded controlled files, signed QA reviews, immutable issued revisions, printable packets, ZIP downloads and separately recorded physical/digital handovers are linked by project and item.
 
 Existing item registration, bulk CSV import, employee QR badges, item QR labels, and custody handoffs remain available. Item types include **Part**, **Spool**, and **Assembly**.
 
@@ -24,7 +26,19 @@ Deploying this version does **not** convert existing items, invent individual we
 
 Enrollment is explicit. It preserves historical records, establishes the planned joint count, and makes individual weld work and requirements authoritative. Old aggregate weld logging and blanket weld inspection are then rejected for that spool. Historical work remains in audit history; displayed completion is calculated from individual records. Prior green inspection flags cannot bypass the new requirements. Released items must be reopened by an administrator before enrollment or other changes.
 
-See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
+See [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the shop workflow, [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for progress and completed-project packets, and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
+
+## Track project progress and assemble the final Job Packet
+
+Open **Project progress** or `/?progress=1`. Each project shows registered parts finished, WIP and shipping milestones. Open a project to sort **WIP to finished**, filter by work package or type, and inspect each part's recorded route/weld progress and actual blockers. A documented late starting point leaves earlier steps **Not recorded**. A progress bar does not invent missing BOM items or certify a dossier.
+
+Open **Job Packets** or `/?dossier=1`. Explicitly configure the project's manufacturer contact, PO, source/applicability reference and expected spool/assembly packet count. Upload shared approved project records once and item-specific reports under their own item IDs. Each check links the exact file revisions and relevant FabTrace weld, inspection, rework, release and traveler records. QA records a separate decision on evidence and non-applicability after submission.
+
+The dossier catalog was cross-checked against the original ITP and the five supporting customer documents. Its ten sections are CLM's organization of the eight Job Packet contents; project/PO applicability still needs an authorized review. Conditional tests retain their actual measurements, units, approved basis and approval references. No universal pressure, duration, coating thickness or NDE method is imposed.
+
+For projects with the Job Packet gate enabled, the numbered assembly workflow checks approved pressure-test/customer hold evidence before coating at steps 20/21, and current QA-issued packets before ready-to-ship/shipment at steps 23/24. Applicable written customer pre-shipment approval is a separate record. QA can issue an item packet after current release and complete checks; the completed-project package additionally requires the declared scope and current item packets. Changed evidence or physical work makes affected approvals stale while issued snapshots remain intact.
+
+Download an issued **ZIP** for digital transfer or open its **Print** view for paper/PDF. The ZIP contains the issued manifest, readable packet and selected original files. Record the actual digital or physical dispatch against that exact project revision, then record the recipient's separate acknowledgement. Generating, downloading or printing a packet does not send it or record receipt. See [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for the full sequence.
 
 ## Follow the CLM process chart
 
@@ -72,6 +86,8 @@ The workbook includes the current business records and their histories on separa
 
 The **Audit readiness** report presents the five audit prompts, current source/verification status, evidence references and blockers in one row per requirement. Separate **Quality** worksheets preserve workspaces, requirements, document revisions, evidence, corrective actions, reviews and change history. They share the same read-only snapshot as the production data. Draft responses remain explicitly unverified; an exported matrix does not certify compliance.
 
+Seven **Packet** worksheets retain dossier configuration, checklist entries, file metadata, signed reviews, issued snapshots, handovers and events. **Project progress**, **Part progress** and **Job Packet readiness** report their current states from the same snapshot. Uploaded binary files are excluded from Excel; use the issued packet ZIP for the selected original files.
+
 ## Run locally
 
 Use Python 3.12 and an existing local PostgreSQL database/user.
@@ -110,7 +126,7 @@ Open `http://localhost:8000`, sign in with the configured bootstrap account, and
 
 Use the current web service and its current PostgreSQL database. This feature update does not require a new service, database, or Blueprint.
 
-Deploy the complete source, including `tracking.py`, `production.py`, `flow.py`, `exports.py`, and the tracking/flow JavaScript and CSS under `static/`. Run `python init_db.py` against the existing database before the new application receives traffic. The supplied `render.yaml` uses this as its `preDeployCommand`; an existing service must actually have that command configured, or initialization must run as a controlled manual rollout step.
+Deploy the complete source, including `tracking.py`, `production.py`, `flow.py`, `quality.py`, `quality_templates.py`, `dossier.py`, `dossier_templates.py`, `progress.py`, `exports.py`, and all JavaScript/CSS under `static/`. Run `python init_db.py` against the existing database before the new application receives traffic. The supplied `render.yaml` uses this as its `preDeployCommand`; an existing service must actually have that command configured, or initialization must run as a controlled manual rollout step.
 
 Initialization creates missing tables, installs history-protection triggers, and skips account bootstrap when employees already exist. PostgreSQL initialization runs in one transaction under an advisory lock. It does not seed production projects or alter existing item rows. `create_all()` does not add future columns to existing tables; later schema changes need explicit migrations.
 
@@ -126,6 +142,8 @@ node tests/export_ui_smoke.cjs
 node tests/process_ui_smoke.cjs
 node tests/flow_ui_smoke.cjs
 node tests/quality_ui_smoke.cjs
+node tests/progress_ui_smoke.cjs
+node tests/dossier_ui_smoke.cjs
 ```
 
 The API suite creates isolated temporary databases and does not use a deployed `DATABASE_URL`. It covers the legacy workflow and individual-weld gates. The Node smoke harness uses synthetic fixtures to check routing, metrics, role controls, evidence rendering, and write payloads without contacting a service.
@@ -140,8 +158,8 @@ See the developer guide before running that local check.
 
 ## Scope and limits
 
-Evidence is a controlled report/reference or HTTP(S) link with notes; this version does not upload or store report files. Procedure and qualification applicability are reviewed by an authorized inspector using that evidence. The application does not calculate qualification ranges or choose governing acceptance criteria.
+Tracking and Audit readiness retain controlled report references and notes. Job Packets additionally accept PDF, PNG/JPEG, TXT/CSV, DOCX and XLSX files, up to 8 MiB per file and 256 MiB of retained uploads per project. File bytes are stored in PostgreSQL with immutable metadata and SHA-256; no persistent Render disk or additional storage service is required. Procedure and qualification applicability remain authorized reviews. The application does not calculate qualification ranges or choose governing acceptance criteria.
 
-Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. No universal NDE percentage is assumed. Measured test results can be recorded as audit inspection evidence; a dedicated pressure-test package or automatic acceptance calculation is not modeled. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Assemblies outside that workflow retain the original behavior: their release checks their own welds and requirements. Document references identify controlled files; the app does not generate carrier labels or archive the referenced report/shipping files.
+Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. Job Packet pressure, torque, NDE and coating checks retain actual result fields and supporting reports; technical acceptance remains the authorized reviewer's decision. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Assemblies outside that workflow retain the original physical-release behavior; dossier issuance separately verifies current child packets. Carrier labels, automated emails, customer portal submission and cryptographic customer signatures are not generated. Use the print/ZIP output and record the actual transfer and receipt.
 
 Badge/PIN sign-in and audit records are the current controls. PostgreSQL history triggers reject routine updates and deletes, but do not protect against a database owner deliberately removing those controls. Validate configured work and acceptance rules with the people responsible for the job before using them for fabrication release. This application is not a certification of compliance.

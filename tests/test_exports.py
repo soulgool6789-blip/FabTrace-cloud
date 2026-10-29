@@ -20,6 +20,7 @@ NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 EMPLOYEE_COLUMNS = ["badge", "name", "role", "active", "created_at"]
+EXCLUDED_COLUMNS = {"Packet issues": {"print_html"}}
 TABLES = {
     "Employees": ("main", "Employee"),
     "Items": ("main", "Item"),
@@ -49,10 +50,18 @@ TABLES = {
     "Quality actions": ("quality", "QualityAction"),
     "Quality reviews": ("quality", "QualityReview"),
     "Quality events": ("quality", "QualityEvent"),
+    "Packet projects": ("dossier", "DossierProject"),
+    "Packet checklist": ("dossier", "DossierEntry"),
+    "Packet documents": ("dossier", "DossierDocument"),
+    "Packet reviews": ("dossier", "DossierReview"),
+    "Packet issues": ("dossier", "DossierIssue"),
+    "Packet handovers": ("dossier", "DossierHandover"),
+    "Packet events": ("dossier", "DossierEvent"),
 }
 PROCESS_REPORTS = ["Process visits", "Process totals"]
 FLOW_DEFINITIONS = ["Flow steps"]
 QUALITY_REPORTS = ["Audit readiness"]
+DELIVERY_REPORTS = ["Project progress", "Part progress", "Job Packet readiness"]
 
 
 @dataclass
@@ -130,6 +139,18 @@ class Workbook:
             for row in self.sheets[name][1:]
         ]
 
+    def full_text(self, record, column):
+        value = record[column].value
+        match = re.fullmatch(r'\[Text overflow (OVF-[0-9]+); ([0-9]+) chunks\]', value or '')
+        if not match:
+            return value
+        parts = [row for name in self.sheets if name == 'Text overflow' or name.startswith('Text overflow ')
+                 for row in self.records(name) if row['overflow_id'].value == match[1]]
+        parts.sort(key=lambda row: row['chunk_index'].value)
+        assert len(parts) == int(match[2])
+        assert [row['chunk_index'].value for row in parts] == list(range(1, len(parts) + 1))
+        return ''.join(row['text'].value for row in parts)
+
 
 def download(api):
     response = api.get("/api/exports/excel")
@@ -148,7 +169,7 @@ def snapshot(api):
     result = {}
     with api.session_factory() as session:
         for name, model in models().items():
-            columns = EMPLOYEE_COLUMNS if name == "Employees" else list(model.__table__.columns.keys())
+            columns = EMPLOYEE_COLUMNS if name == "Employees" else [key for key in model.__table__.columns.keys() if key not in EXCLUDED_COLUMNS.get(name, set())]
             result[name] = {
                 "columns": columns,
                 "keys": [column.name for column in model.__table__.primary_key.columns],
@@ -270,7 +291,7 @@ def test_full_database_export_requires_an_administrator(api, role, status):
 
 def test_export_contains_every_business_record_and_column(api, populated_export, tmp_path):
     response, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS, *QUALITY_REPORTS]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS, *QUALITY_REPORTS, *DELIVERY_REPORTS]
     assert workbook.formulas == []
     for name, expected in populated_export.items():
         assert workbook.headers(name) == expected["columns"]
@@ -307,10 +328,13 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
     counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
     sources = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Source table"}
     assert counts == {**{name: len(expected["rows"]) for name, expected in populated_export.items()},
-                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24, "Audit readiness": 0}
+                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24, "Audit readiness": 0,
+                      "Project progress": 1, "Part progress": 1, "Job Packet readiness": 0}
     assert sources == {**{name: model.__tablename__ for name, model in models().items()},
                        **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS},
-                       "Flow steps": "definition:CLM-process-flow", "Audit readiness": "derived:quality_readiness"}
+                       "Flow steps": "definition:CLM-process-flow", "Audit readiness": "derived:quality_readiness",
+                       "Project progress": "derived:project_progress", "Part progress": "derived:part_progress",
+                       "Job Packet readiness": "derived:packet_readiness"}
     # Downloading must not edit business records or silently log into the data snapshot.
     assert snapshot(api) == populated_export
     assert "pin_hash" not in workbook.headers("Employees")
@@ -324,9 +348,9 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
 
 def test_empty_tables_keep_their_column_headers(api):
     _, workbook = download(api)
-    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS, *QUALITY_REPORTS]
+    assert list(workbook.sheets) == ["Export info", *TABLES, *PROCESS_REPORTS, *FLOW_DEFINITIONS, *QUALITY_REPORTS, *DELIVERY_REPORTS]
     for name, model in models().items():
-        expected_columns = EMPLOYEE_COLUMNS if name == "Employees" else list(model.__table__.columns.keys())
+        expected_columns = EMPLOYEE_COLUMNS if name == "Employees" else [key for key in model.__table__.columns.keys() if key not in EXCLUDED_COLUMNS.get(name, set())]
         assert workbook.headers(name) == expected_columns
         assert len(workbook.records(name)) == (len(BADGES) if name == "Employees" else 0)
     exporter = importlib.import_module("exports")
@@ -337,6 +361,61 @@ def test_empty_tables_keep_their_column_headers(api):
     assert not workbook.records("Audit readiness")
     assert workbook.headers("Flow steps") == list(exporter.FLOW_STEP_COLUMNS)
     assert [row["number"].value for row in workbook.records("Flow steps")] == list(range(1, 25))
+    for name, columns in (("Project progress", exporter.PROJECT_PROGRESS_COLUMNS),
+                          ("Part progress", exporter.PART_PROGRESS_COLUMNS),
+                          ("Job Packet readiness", exporter.PACKET_READINESS_COLUMNS)):
+        assert workbook.headers(name) == list(columns)
+        assert not workbook.records(name)
+
+
+def test_packet_export_keeps_immutable_issues_and_current_readiness_separate_from_progress(api):
+    from test_dossier import (PDF, PROJECT, checks, entry, issued_fixture, packet,
+                              signed, issue_project)
+    from test_progress import database_state
+
+    item_id = 'EXPORT-PACKET-SPOOL'
+    issue = issued_fixture(api, item_id)
+    signed(issue_project(api))
+    original = packet(api, item_id)
+    before = database_state(api)
+    _, workbook = download(api)
+    assert database_state(api) == before
+    assert workbook.formulas == []
+    metadata = workbook.records('Packet documents')
+    assert metadata and all(row['sha256'].value and row['size_bytes'].value == len(PDF) for row in metadata)
+    assert PDF not in workbook.xml
+    assert all('content' not in workbook.headers(name) for name in TABLES)
+    assert 'dossier_files' not in {spec.table for spec in importlib.import_module('exports').TABLE_SPECS}
+    issues = workbook.records('Packet issues')
+    item_issue = next(row for row in issues if row['id'].value == str(issue['id']))
+    preserved = json.loads(workbook.full_text(item_issue, 'snapshot'))
+    assert item_issue['sha256'].value == issue['sha256']
+    assert preserved and len(issues) == 2
+    readiness = workbook.records('Job Packet readiness')
+    assert len(readiness) == len(checks(original))
+    assert all(row['packet_status'].value == 'issued' and row['issue_current'].value for row in readiness)
+    assert all(row['latest_issue_id'].value == str(issue['id']) for row in readiness)
+    assert all(row['as_of'].style in workbook.date_styles for row in readiness)
+    assert all(row['last_review_at'].style in workbook.date_styles for row in readiness)
+    summary = workbook.records('Project progress')[0]
+    part = workbook.records('Part progress')[0]
+    assert summary['project_id'].value == PROJECT and summary['finished'].value == 1
+    assert summary['finished_percent'].value == 100
+    assert part['fabrication_finished'].value and part['progress_percent'].value == 100
+    assert part['progress_basis'].value == 'qa_release'
+
+    signed(entry(api, item_id, 'contact', notes='Revised synthetic contact needs a new QA review.'))
+    before = database_state(api)
+    _, changed = download(api)
+    assert database_state(api) == before
+    current = changed.records('Job Packet readiness')
+    contact = next(row for row in current if row['code'].value == 'contact')
+    assert contact['check_status'].value == 'stale' and contact['packet_status'].value == 'stale'
+    assert not contact['issue_current'].value
+    assert changed.records('Part progress')[0]['fabrication_finished'].value
+    historical = next(row for row in changed.records('Packet issues') if row['id'].value == str(issue['id']))
+    assert historical['sha256'].value == issue['sha256']
+    assert json.loads(changed.full_text(historical, 'snapshot')) == preserved
 
 
 def test_process_export_retains_events_and_reports_repeated_visits_and_pauses(api, monkeypatch):

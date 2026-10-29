@@ -1,0 +1,48 @@
+/* Project progress is based on registered physical records. */
+#progressPage{--fp-ink:#173247;--fp-muted:#607584;--fp-line:#d8e3ea;color:var(--fp-ink)}
+#progressPage .fp-head{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;align-items:flex-start;margin:6px 0 20px}
+#progressPage .fp-head h1{font-size:28px;margin:3px 0 7px}
+#progressPage .fp-head p{max-width:770px;color:var(--fp-muted);margin:0}
+#progressPage .fp-eyebrow{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#37738a;font-weight:750}
+#progressPage .fp-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:15px}
+#progressPage .fp-card{background:white;border:1px solid var(--fp-line);border-radius:12px;padding:18px;margin-bottom:16px;overflow-wrap:anywhere}
+#progressPage .fp-cards .fp-card{margin-bottom:0}
+#progressPage .fp-card h2{font-size:18px;margin:0 0 8px}
+#progressPage .fp-card p{font-size:13px;color:var(--fp-muted)}
+#progressPage .fp-link{border:0;background:none;color:#135e8b;padding:0;border-radius:0;text-align:left}
+#progressPage .fp-link:hover{text-decoration:underline}
+#progressPage .fp-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:17px 0}
+#progressPage .fp-metric{background:white;border:1px solid var(--fp-line);border-radius:10px;padding:15px}
+#progressPage .fp-metric span,#progressPage .fp-metric small{display:block;color:var(--fp-muted);font-size:12px}
+#progressPage .fp-metric strong{font-size:29px;display:block;margin:4px 0;font-variant-numeric:tabular-nums}
+#progressPage .fp-meter{margin:13px 0}
+#progressPage .fp-meter-label{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-bottom:6px}
+#progressPage progress{display:block;width:100%;height:13px;border:0;border-radius:12px;overflow:hidden;background:#e8eef3;accent-color:#19769b}
+#progressPage progress::-webkit-progress-bar{background:#e8eef3;border-radius:12px}
+#progressPage progress::-webkit-progress-value{background:#19769b;border-radius:12px}
+#progressPage progress::-moz-progress-bar{background:#19769b;border-radius:12px}
+#progressPage .fp-finished progress{accent-color:#317950}
+#progressPage .fp-finished progress::-webkit-progress-value{background:#317950}
+#progressPage .fp-finished progress::-moz-progress-bar{background:#317950}
+#progressPage .fp-tags{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:7px 0}
+#progressPage .fp-tag{display:inline-block;background:#edf2f6;border-radius:5px;padding:3px 7px;font-size:11px;font-weight:750;color:#4c6475}
+#progressPage .fp-tag.finished,#progressPage .fp-tag.approved,#progressPage .fp-tag.delivered{background:#e6f4e9;color:#226342}
+#progressPage .fp-tag.wip,#progressPage .fp-tag.pending{background:#fff5df;color:#7c5b10}
+#progressPage .fp-tag.blocked,#progressPage .fp-tag.stale{background:#fff0e7;color:#943e1b}
+#progressPage .fp-tag.shipped{background:#e8f0ff;color:#28578d}
+#progressPage .fp-filters{display:flex;align-items:end;flex-wrap:wrap;gap:10px;margin:16px 0}
+#progressPage .fp-filters .field{flex:1;min-width:135px;margin:0}
+#progressPage .fp-filters .fp-search{flex:2;min-width:210px}
+#progressPage .fp-table{min-width:970px}
+#progressPage .fp-table td{vertical-align:middle;max-width:270px}
+#progressPage .fp-table td small{display:block;color:var(--fp-muted);margin-top:5px}
+#progressPage .fp-table .fp-meter{min-width:155px;margin:3px 0}
+#progressPage .fp-table .actions{min-width:200px;gap:5px}
+#progressPage .fp-table .actions button{padding:6px 8px;font-size:12px}
+#progressPage .fp-note{font-size:12px;line-height:1.6;color:var(--fp-muted)}
+#progressPage .fp-state{padding:24px;background:white;border:1px solid var(--fp-line);border-radius:11px}
+#progressPage .fp-error{background:#fff2ed;border-color:#e5c4b9;color:#8c3d29;white-space:pre-wrap}
+#progressPage .fp-empty{padding:26px 18px;text-align:center;border:1px dashed #bdccd6;border-radius:10px;background:#fafcfd;color:var(--fp-muted)}
+#progressPage .fp-empty strong{display:block;color:var(--fp-ink);margin-bottom:8px}
+@media(max-width:800px){#progressPage .fp-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){#progressPage .fp-head h1{font-size:23px}#progressPage .fp-card{padding:15px}#progressPage .fp-metrics{gap:8px}#progressPage .fp-metric{padding:12px}}

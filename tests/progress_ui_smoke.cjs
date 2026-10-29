@@ -1,0 +1,42 @@
+/* Synthetic project-progress UI contract tests; never connects to production. */
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const elements=new Map();
+class Element{
+  constructor(id){this.id=id;this.listeners={};this.attributes={};this.children=[];this.value='';this.disabled=false;this.classes=new Set();this.classList={add:x=>this.classes.add(x),remove:x=>this.classes.delete(x),toggle:(x,on)=>on?this.classes.add(x):this.classes.delete(x)};}
+  set innerHTML(html){for(const id of this.children)elements.delete(id);this.children=[];this.html=html;for(const match of html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)){const child=new Element(match[1]);child.value=match[0].match(/\bvalue="([^"]*)"/)?.[1]||'';elements.set(child.id,child);this.children.push(child.id);}for(const match of html.matchAll(/<select[^>]+id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)){const opts=[...match[2].matchAll(/<option value="([^"]*)"([^>]*)>/g)];elements.get(match[1]).value=(opts.find(v=>v[2].includes('selected'))||opts[0])?.[1]||'';}}
+  get innerHTML(){return this.html||'';}addEventListener(name,fn){this.listeners[name]=fn;}setAttribute(name,value){this.attributes[name]=value;}focus(){}setSelectionRange(){}
+}
+for(const id of ['progressContent','navProgress'])elements.set(id,new Element(id));
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const project={id:'P1',name:'Kelvion <project>',client:'Customer & team',total_parts:4,wip:1,finished:3,shipped:1,delivered:1,blocked:1,finished_percent:75,planning_needed:1};
+const rows=[
+  {id:'C1',description:'Cut pipe <component>',kind:'component',subproject_id:'AREA1',status:'wip',progress_basis:'recorded_steps',progress_percent:25,completed_steps:1,total_steps:4,not_recorded_steps:2,current_step:6,current_title:'Material kit',blocked:true,blockers:['Actual MTR is missing'],parent_id:'S1',location:'Bay 1',handler:'H1'},
+  {id:'S1',description:'Finished spool',kind:'spool',subproject_id:'AREA1',status:'finished',progress_basis:'recorded_steps',progress_percent:60,completed_steps:6,total_steps:10,not_recorded_steps:4,current_title:'Ready to ship',released:true,blockers:[]},
+  {id:'S2',description:'Shipped spool',kind:'spool',subproject_id:'AREA2',status:'shipped',progress_basis:'weld_completion',progress_percent:100,planned_welds:2,completed_welds:2,qa_accepted:2,blockers:[]},
+  {id:'S3',description:'Delivered spool',kind:'spool',subproject_id:'AREA2',status:'delivered',progress_basis:'qa_release',progress_percent:100,released:true,blockers:[]}
+];
+const calls=[],messages=[];let hold=null,fail=null;
+const context={document:{getElementById:id=>elements.get(id)||null},me:{role:'handler'},current:null,URLSearchParams,Date,esc,history:{replaceState(_a,_b,url){context.url=url;}},show(page){context.page=page;},stopCloudCamera(){},notify:x=>messages.push(x),openItem:id=>{context.openedItem=id;},FabFlow:{open:v=>{context.openedFlow=v;}},FabTracking:{open:v=>{context.openedWeld=v;}},FabDossier:{open:v=>{context.openedDossier=v;}},api:async(url,options={})=>{
+  calls.push({url,...options});if(hold)await hold;if(fail)throw fail;if(url==='/api/progress/projects')return {projects:[project,{...project,id:'P2',name:'Unrelated project'}]};
+  const q=new URL('https://example.test'+url);if(q.pathname==='/api/progress/projects/P1'){const status=q.searchParams.get('status'),kind=q.searchParams.get('kind'),sub=q.searchParams.get('subproject_id'),search=q.searchParams.get('search')?.toLowerCase();return {project,counts:project,subprojects:[{id:'AREA1',name:'Area 1'},{id:'AREA2',name:'Area 2'}],items:rows.filter(r=>(status==='all'||r.status===status||status==='finished'&&['shipped','delivered'].includes(r.status))&&(kind==='all'||r.kind===kind)&&(!sub||r.subproject_id===sub)&&(!search||[r.id,r.description].some(v=>v.toLowerCase().includes(search)))),as_of:'2026-10-29T12:00:00Z'};}
+  throw Error('Unexpected route '+url);
+}};
+context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/progress.js'),'utf8'),context);
+const html=()=>elements.get('progressContent').innerHTML,click=(action,id='')=>elements.get('progressContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{progressAction:action,progressId:id}})}});
+(async()=>{
+  await context.FabProgress.open();assert.equal(context.page,'progressPage');assert.match(html(),/Registered parts finished/);assert.match(html(),/Kelvion &lt;project&gt;/);assert.match(html(),/3 of 4/);assert.match(html(),/Missing BOM items are not assumed complete/);assert.equal(calls.filter(c=>c.method).length,0);
+  elements.get('progressProjectSearch').value='P1';elements.get('progressProjectSearch').oninput();assert.doesNotMatch(html(),/Unrelated project/);
+  await click('project','P1');assert.match(context.url,/progress=1&project=P1/);assert.match(html(),/WIP to finished/);assert.match(html(),/Recorded route steps/);assert.match(html(),/4 earlier step\(s\) not recorded/);assert.match(html(),/value="60"/);assert.match(html(),/Actual MTR is missing/);assert.match(html(),/Cut pipe &lt;component&gt;/);assert.match(html(),/Recorded weld completion/);assert.match(html(),/QA release/);
+  assert.doesNotMatch(html(),/data-progress-action="dossier-item" data-progress-id="C1"/,'components link to their physical parent, not an invented packet');
+  elements.get('progressStatus').value='finished';await elements.get('progressStatus').onchange();assert.doesNotMatch(html(),/Cut pipe/);assert.match(html(),/Shipped spool/);assert.match(html(),/Delivered spool/);assert.match(calls.at(-1).url,/status=finished/);
+  elements.get('progressSubproject').value='AREA1';await elements.get('progressSubproject').onchange();assert.doesNotMatch(html(),/Shipped spool/);assert.match(html(),/Finished spool/);assert.match(calls.at(-1).url,/subproject_id=AREA1/);
+  elements.get('progressKind').value='spool';await elements.get('progressKind').onchange();elements.get('progressSort').value='progress_desc';await elements.get('progressSort').onchange();assert.match(calls.at(-1).url,/kind=spool/);assert.match(calls.at(-1).url,/sort=progress_desc/);
+  elements.get('progressSearch').value='missing';await click('search');assert.match(html(),/No parts match these filters/);assert.match(calls.at(-1).url,/search=missing/);
+  await context.FabProgress.open({project:'P1'});await click('flow','S1');assert.equal(context.openedFlow.item,'S1');assert.equal(context.openedFlow.project,'P1');await click('item','C1');assert.equal(context.openedItem,'C1');await click('weld','S1');assert.equal(context.openedWeld.spool,'S1');await click('dossier-item','S1');assert.equal(context.openedDossier.item,'S1');await click('dossier-project','P1');assert.equal(context.openedDossier.project,'P1');
+  fail=Error('Service <temporarily> unavailable');await context.FabProgress.refresh();assert.match(html(),/Service &lt;temporarily&gt; unavailable/);assert.match(html(),/Try again/);fail=null;
+  let release;hold=new Promise(r=>release=r);const pending=context.FabProgress.refresh();context.FabProgress.cancelPending();elements.get('progressContent').innerHTML='Another page owns navigation';release();await pending;hold=null;assert.equal(html(),'Another page owns navigation','late progress responses cannot overwrite navigation');
+  assert.equal(calls.filter(c=>c.method).length,0,'progress is read-only for every role');
+  const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');for(const phrase of ['id="navProgress"','id="progressPage"','/static/progress.js','/static/progress.css','FabProgress.cancelPending'])assert.ok(index.includes(phrase));assert.match(index,/params\.has\('progress'\)[\s\S]*FabProgress\.open/);assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));
+  console.log('PASS: registered project/part progress, honest baseline history, WIP/finished/dispatched filters, work-package/type/search/sort, module links, escaping, read-only behavior, error recovery, and stale navigation.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
