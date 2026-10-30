@@ -1,5 +1,10 @@
 # Purchase-order browser smoke test
 
+The default Purchase orders screen now uses the simple quantity setup. The
+older physical-record test below explicitly opens `/?orders=1`; the new
+`order_setup_browser_smoke.cjs` verifies the primary three-step setup and the
+manager's default landing.
+
 `orders_browser_smoke.cjs` exercises the actual website and API with synthetic
 records: PO creation, GPN and assembly registration, spool linking, BOM editing,
 scoped Excel downloads, leading-zero identifiers, mobile layout, conflicting
@@ -78,3 +83,21 @@ account. Removed synthetic orders are absent from the active selector.
 The runner rejects remote hosts and writes screenshots plus `report.json` to
 `PRODUCTION_PROGRESS_TEST_OUT`. A passing report has `status: "passed"` and no
 page errors. Stop the fixture after the checks; its database is disposable.
+
+## Simple P.O. setup verification
+
+With the same isolated fixture and browser environment, run:
+
+```bash
+ORDER_SETUP_TEST_OUT=/tmp/fabtrace-order-setup-review \
+  node tests/order_setup_browser_smoke.cjs
+```
+
+This test verifies the one-field P.O. step, multiple Google part number / assembly
+quantities, multiple spool numbers and quantities per assembly, calculated P.O.
+totals and one atomic final save. It confirms no physical Items are created by
+planning, and exercises later additions, corrections, an actual stale-version
+conflict, legacy quantities, physical history locks, read-only QA/QC access,
+secondary production links and desktop/390px mobile layout. Screenshots and
+`report.json` are written to `ORDER_SETUP_TEST_OUT`. It rejects remote hosts and
+uses only the disposable fixture's synthetic records.

@@ -591,6 +591,141 @@ def verify_readonly_dossier_progress_and_immutable_downloads(application, api):
             "download_does_not_dispatch": True}
 
 
+def verify_simple_order_setup(application, api):
+    """Setup is atomic under real locks and its readers remain pure snapshots."""
+    from orders import OrderGpn, PurchaseOrder
+    from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
+    from test_progress import database_state
+
+    def race(calls):
+        gate, seen = Barrier(2), set()
+
+        def synchronize(connection, cursor, statement, parameters, context, many):
+            if 'pg_advisory_xact_lock' in statement and id(connection) not in seen:
+                seen.add(id(connection))
+                gate.wait(timeout=15)
+
+        def submit(call):
+            worker = TestAPI(application, application.SessionLocal)
+            try:
+                path, body = call
+                response = worker.post(path, body)
+                return {'status': response.status_code, 'body': response.json()}
+            finally:
+                worker.client.close()
+
+        event.listen(application.engine, 'before_cursor_execute', synchronize)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = [future.result(timeout=30) for future in [
+                    pool.submit(submit, call) for call in calls]]
+        finally:
+            event.remove(application.engine, 'before_cursor_execute', synchronize)
+        assert sorted(row['status'] for row in responses) == [201, 409], responses
+        return next(row['body'] for row in responses if row['status'] == 201)
+
+    body = {'expected_version': 0, 'purchase_order': '000-PG-SETUP-ATOMIC', 'assemblies': [
+        {'gpn': '000-PG-ASSEMBLY-A', 'assembly_quantity': 2, 'spools': [
+            {'spool_number': '000-PG-SPOOL-A', 'quantity_per_assembly': 2},
+            {'spool_number': '000-PG-SPOOL-B', 'quantity_per_assembly': 1}]},
+        {'gpn': '000-PG-ASSEMBLY-B', 'assembly_quantity': 4, 'spools': [
+            {'spool_number': '000-PG-SPOOL-C', 'quantity_per_assembly': 3}]},
+    ]}
+    before_creation = json.loads(database_state(api))
+    initial = race([('/api/order-setup', body), ('/api/order-setup', body)])
+    after_creation = json.loads(database_state(api))
+    allowed = {'tracking_projects', 'purchase_orders', 'order_gpns', 'audit_events',
+               OrderAssemblyRequirement.__tablename__, OrderSpoolRequirement.__tablename__}
+    for table, rows in before_creation.items():
+        if table not in allowed:
+            assert after_creation[table] == rows, 'Setup invented production data in ' + table
+    for table, added in [('tracking_projects', 1), ('purchase_orders', 1), ('order_gpns', 2),
+                         (OrderAssemblyRequirement.__tablename__, 2),
+                         (OrderSpoolRequirement.__tablename__, 3), ('audit_events', 1)]:
+        assert len(after_creation[table]) == len(before_creation[table]) + added, table
+    assert initial['order']['purchase_order'] == body['purchase_order']
+    assert initial['order']['version'] == 1
+    assert sorted(row['total_spools'] for row in initial['assemblies']) == [6, 12]
+    assert all(row['registered_assemblies'] == 0 for row in initial['assemblies'])
+    project_id = initial['order']['project_id']
+    path = '/api/order-setup/' + project_id
+
+    addition = {'expected_version': 1, 'assembly_quantity': 1, 'spools': [
+        {'spool_number': '000-PG-SPOOL-D', 'quantity_per_assembly': 4}]}
+    before_append = json.loads(database_state(api))
+    appended = race([(path + '/assemblies', {**addition, 'gpn': number})
+                     for number in ('000-PG-ASSEMBLY-C', '000-PG-ASSEMBLY-D')])
+    after_append = json.loads(database_state(api))
+    assert appended['order']['version'] == 2 and len(appended['assemblies']) == 3
+    for table, added in [('tracking_projects', 0), ('purchase_orders', 0), ('order_gpns', 1),
+                         (OrderAssemblyRequirement.__tablename__, 1),
+                         (OrderSpoolRequirement.__tablename__, 1), ('audit_events', 1)]:
+        assert len(after_append[table]) == len(before_append[table]) + added, table
+    with application.SessionLocal() as session:
+        assert session.get(PurchaseOrder, project_id).version == 2
+        groups = session.scalars(select(OrderGpn).where(OrderGpn.project_id == project_id)).all()
+        assert len(groups) == 3
+        assert len({group.normalized_gpn for group in groups}) == 3
+
+    before_reads = database_state(api)
+    unsafe, snapshots, borrowed = [], [], set()
+    peak = 0
+
+    def checkout(connection, record, proxy):
+        nonlocal peak
+        borrowed.add(id(record))
+        peak = max(peak, len(borrowed))
+
+    def checkin(connection, record):
+        borrowed.discard(id(record))
+
+    def observe(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if (sql.startswith(('INSERT', 'UPDATE', 'DELETE', 'LOCK '))
+                or re.search(r'\bFOR\s+(?:NO KEY UPDATE|KEY SHARE|UPDATE|SHARE)\b', sql)
+                or 'PG_ADVISORY' in sql):
+            unsafe.append(statement)
+        isolation_option = str(connection.get_execution_options().get('isolation_level', '')).lower()
+        if sql.startswith('SELECT') and isolation_option == 'repeatable read':
+            with connection.connection.cursor() as probe:
+                probe.execute('SHOW transaction_read_only')
+                read_only = probe.fetchone()[0]
+                probe.execute('SHOW transaction_isolation')
+                isolation = probe.fetchone()[0]
+                probe.execute('SELECT pg_backend_pid()')
+                backend_pid = probe.fetchone()[0]
+            snapshots.append((read_only, isolation, backend_pid))
+
+    event.listen(application.engine, 'before_cursor_execute', observe)
+    event.listen(application.engine, 'checkout', checkout)
+    event.listen(application.engine, 'checkin', checkin)
+    query_counts = []
+    try:
+        for endpoint in ('/api/order-setup', path):
+            snapshots.clear()
+            response = api.get(endpoint)
+            assert response.status_code == 200, response.text
+            assert snapshots, 'Setup reads must use an explicit read snapshot'
+            assert all(read_only == 'on' and isolation == 'repeatable read'
+                       for read_only, isolation, _ in snapshots), snapshots
+            assert len({pid for _, _, pid in snapshots}) == 1
+            assert not borrowed, 'Setup read leaked a borrowed connection'
+            query_counts.append(len(snapshots))
+    finally:
+        event.remove(application.engine, 'before_cursor_execute', observe)
+        event.remove(application.engine, 'checkout', checkout)
+        event.remove(application.engine, 'checkin', checkin)
+    assert unsafe == []
+    assert peak == 1, 'Release authentication before borrowing the snapshot connection'
+    assert database_state(api) == before_reads
+    return {'duplicate_atomic_creation': [201, 409], 'same_revision_append': [201, 409],
+            'orphan_plans': 0, 'physical_records_created': 0,
+            'read_only_views': 2, 'isolation': 'repeatable read',
+            'read_only': True, 'mutations_on_reads': 0, 'production_locks_on_reads': 0,
+            'peak_borrowed_connections': peak, 'snapshot_query_counts': query_counts,
+            'rows_unchanged_by_reads': True}
+
+
 def verify_readonly_order_flow_progress(application, api):
     """Both all-P.O. and one-P.O. views use one released-auth read snapshot."""
     from test_orders import new_order, group, add_assembly, plan
@@ -1419,6 +1554,7 @@ def verify(dsn):
         transfers = importlib.import_module("transfers")
         administration = importlib.import_module("administration")
         orders = importlib.import_module("orders")
+        order_setup = importlib.import_module("order_setup")
         removals = importlib.import_module("removals")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
@@ -1455,6 +1591,8 @@ def verify(dsn):
             assert session.query(administration.EmployeeRemovalState).count() == 0, "Migration removed an existing employee"
             for model in (orders.PurchaseOrder, orders.OrderGpn, orders.OrderAssembly):
                 assert session.query(model).count() == 0, "Migration invented purchase-order scope"
+            for model in (order_setup.OrderAssemblyRequirement, order_setup.OrderSpoolRequirement):
+                assert session.query(model).count() == 0, "Migration invented assembly or spool quantities"
             assert session.query(removals.RecordRemoval).count() == 0, "Migration removed an existing record"
 
         api = TestAPI(application, application.SessionLocal)
@@ -1479,6 +1617,7 @@ def verify(dsn):
         dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
         parts_concurrency = verify_concurrent_parts_allocation(application, api)
         order_concurrency = verify_purchase_order_transactions(application, api)
+        simple_order_setup = verify_simple_order_setup(application, api)
         from removal_postgres import verify_record_removals
         removal_concurrency = verify_record_removals(application, api)
         order_flow_progress = verify_readonly_order_flow_progress(application, api)
@@ -1508,6 +1647,7 @@ def verify(dsn):
             "concurrent_dossier_mutation": dossier_concurrency,
             "concurrent_parts_allocation": parts_concurrency,
             "purchase_order_transactions": order_concurrency,
+            "simple_order_setup": simple_order_setup,
             "record_removal_transactions": removal_concurrency,
             "readonly_order_flow_progress": order_flow_progress,
             "concurrent_transfers": transfer_concurrency,

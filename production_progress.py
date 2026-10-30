@@ -17,6 +17,7 @@ from flow import FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER
 from orders import PurchaseOrder, OrderGpn, OrderAssembly, read_snapshot
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
+from order_setup import requirements_by_gpn
 
 
 router = APIRouter(prefix='/api/progress', tags=['P.O. production progress'])
@@ -41,7 +42,7 @@ DEFINITIONS = {
 }
 COUNT_KEYS = ('items', 'parts', 'spools', 'assemblies', 'finished', 'wip', 'on_hold',
               'planning_needed', 'completed_steps', 'total_steps', 'not_recorded_steps',
-              'missing_spools', 'missing_parts', 'undeclared_scope', 'shipped', 'delivered')
+              'missing_assemblies', 'missing_spools', 'missing_parts', 'undeclared_scope', 'shipped', 'delivered')
 
 
 def _group(rows, field):
@@ -87,7 +88,7 @@ def _finish_summary(value):
     result['recorded_percent'] = round(result['completed_steps'] / total * 100, 1) if total else 0
     result['percent'] = result['recorded_percent'] if result['items'] else None
     result['scope_complete'] = bool(result['items'] and not (
-        result['missing_spools'] or result['missing_parts'] or result['undeclared_scope']))
+        result['missing_assemblies'] or result['missing_spools'] or result['missing_parts'] or result['undeclared_scope']))
     result['complete'] = bool(result['scope_complete'] and not result['wip']
                               and total and result['completed_steps'] == total)
     return result
@@ -111,7 +112,8 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
         completed = sum(step['state'] == 'completed' for step in selected)
         current = sum(step['state'] == 'current' for step in selected)
         missing = summary['missing_parts'] if stage['key'] in ('inventory', 'preparation') else (
-            summary['missing_spools'] if stage['key'] in ('fit_up', 'welding') else 0)
+            summary['missing_spools'] if stage['key'] in ('fit_up', 'welding') else (
+                summary['missing_assemblies'] if stage['key'] in ('assembly', 'finish') else 0))
         unrecorded = sum(step['state'] == 'not_recorded' for step in selected)
         unknown = bool((summary['undeclared_scope'] or summary['missing_spools'] or not summary['items'])
                        and stage['steps'][0] <= last_applicable_step)
@@ -138,6 +140,7 @@ def _tree(s, selected_project_id=''):
     groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id.in_(project_ids),
         gpn_not_removed(OrderGpn.id)).order_by(OrderGpn.gpn, OrderGpn.id)).all() if project_ids else []
     group_by_id = {group.id: group for group in groups}
+    quantity_plans = requirements_by_gpn(s, group_by_id)
     mappings = s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id.in_(group_by_id),
         item_not_removed(OrderAssembly.item_id)).order_by(OrderAssembly.item_id)).all() if groups else []
     mapping_by_item = {mapping.item_id: mapping for mapping in mappings}
@@ -303,6 +306,7 @@ def _tree(s, selected_project_id=''):
         project_roots = roots_by_project[order.project_id]
         root_by_id = {node['id']: node for node in project_roots}
         placed, gpns, extra_scope = set(), [], 0
+        planned_gaps = {'missing_assemblies': 0, 'missing_spools': 0}
         warnings = []
         for group in groups_by_project[order.project_id]:
             assemblies, group_warnings = [], []
@@ -313,13 +317,32 @@ def _tree(s, selected_project_id=''):
                 assemblies.append(root_by_id[mapping.item_id])
                 placed.add(mapping.item_id)
             identifiers = {value for node in assemblies for value in node['_ids']}
-            setup_needed = not assemblies
+            quantity_plan = quantity_plans.get(group.id)
+            setup_needed = not assemblies and not quantity_plan
             if setup_needed:
                 group_warnings.append('Finish GPN / Assembly setup and declare its required spools')
             unknown = len(group_warnings)
+            missing_assemblies = max(0, quantity_plan['assembly_quantity'] - len(assemblies)) if quantity_plan else 0
+            unregistered_spools = missing_assemblies * quantity_plan['spools_per_assembly'] if quantity_plan else 0
+            if quantity_plan:
+                if missing_assemblies:
+                    group_warnings.append(f'{missing_assemblies} of {quantity_plan["assembly_quantity"]} planned physical assemblies still to register')
+                if len(assemblies) > quantity_plan['assembly_quantity']:
+                    group_warnings.append('Registered physical assemblies exceed the saved P.O. quantity')
+                    unknown += 1
+                if not quantity_plan['spools']:
+                    group_warnings.append('The saved assembly quantity has no active spool requirements')
+                    unknown += 1
             extra_scope += unknown
             summary = _summary(nodes, identifiers, unknown)
+            summary['missing_assemblies'] += missing_assemblies
+            summary['missing_spools'] += unregistered_spools
+            summary = _finish_summary(summary)
+            planned_gaps['missing_assemblies'] += missing_assemblies
+            planned_gaps['missing_spools'] += unregistered_spools
             gpns.append({'id': group.id, 'gpn': group.gpn, 'setup_needed': setup_needed,
+                'quantity_plan': quantity_plan, 'registered_assemblies': len(assemblies),
+                'registration_needed': bool(missing_assemblies),
                 'summary': summary, 'stages': _stages(nodes, identifiers, summary),
                 'warnings': group_warnings, 'assemblies': assemblies})
         unassigned = [node for node in project_roots if node['id'] not in placed]
@@ -331,6 +354,9 @@ def _tree(s, selected_project_id=''):
             extra_scope += 1
         identifiers = {identifier for identifier, node in nodes.items() if node['project_id'] == order.project_id}
         summary = _summary(nodes, identifiers, extra_scope)
+        for field, count in planned_gaps.items():
+            summary[field] += count
+        summary = _finish_summary(summary)
         results.append({'project_id': order.project_id, 'purchase_order': order.purchase_order,
             'customer': order.customer, 'version': order.version, 'summary': summary,
             'stages': _stages(nodes, identifiers, summary), 'gpns': gpns,

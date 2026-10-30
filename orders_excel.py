@@ -47,6 +47,10 @@ SPOOL_COLUMNS = (
     'Prepared pieces', 'Remaining pieces', 'Process status', 'Current step',
     'Ready for assembly', 'Blockers',
 )
+SETUP_COLUMNS = (
+    'PO number', 'GPN / Assembly number', 'Assembly quantity', 'Spool number',
+    'Quantity per assembly', 'Total quantity', 'Assembly ID', 'Quantity scope',
+)
 
 
 def _join(values):
@@ -165,7 +169,9 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
         if assembly_id is not None or any(row['gpn_id'] == gpn['id'] for row in assemblies):
             continue
         context = _context(order, gpn=gpn['gpn'])
-        status = 'Finish GPN / Assembly setup; no physical assembly or spools registered'
+        status = ('P.O. quantities saved; physical assemblies and spools still to register'
+                  if gpn.get('quantity_plan') else
+                  'Finish GPN / Assembly setup; no physical assembly or spools registered')
         summary.append({**context, 'Planning status': status})
         bom.append({**context, 'Unit': 'piece', 'Planning status': status})
         register.append({**context, 'Planning status': status})
@@ -210,6 +216,28 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
     return summary, bom, register
 
 
+def _setup_rows(detail, gpn_id=None, assembly_id=None):
+    """Business quantities, kept separate from each actual spool's material BOM."""
+    gpns, assemblies = _selection(detail, gpn_id, assembly_id)
+    if assembly_id is not None:
+        gpns = [group for group in gpns if any(a['gpn_id'] == group['id'] for a in assemblies)]
+    rows = []
+    for group in gpns:
+        plan = group.get('quantity_plan')
+        if not plan:
+            continue
+        quantity = 1 if assembly_id is not None else plan['assembly_quantity']
+        for line in plan['spools']:
+            rows.append({'PO number': detail['order']['purchase_order'],
+                'GPN / Assembly number': group['gpn'], 'Assembly quantity': quantity,
+                'Spool number': line['spool_number'],
+                'Quantity per assembly': line['quantity_per_assembly'],
+                'Total quantity': quantity * line['quantity_per_assembly'],
+                'Assembly ID': assembly_id or '',
+                'Quantity scope': 'Selected physical assembly' if assembly_id else 'P.O. setup quantities'})
+    return rows
+
+
 def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None,
                     template=False, created_at=None):
     """Return a rewound temporary XLSX produced from one read-only snapshot."""
@@ -232,6 +260,7 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                                  join_transaction_mode='rollback_only') as session:
                         detail = order_detail(session, project_id)
                         summary, bom, register = _snapshot_rows(session, detail, gpn_id, assembly_id, template=template)
+                        setup = _setup_rows(detail, gpn_id, assembly_id)
                     retained_numbers = any(row.get('Retained assembly part number') for row in summary)
                     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED,
                                          compresslevel=6, allowZip64=True) as archive:
@@ -241,6 +270,8 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                         _write(writer, 'BOM template' if template else 'Bill of materials',
                                _identity_columns(TEMPLATE_COLUMNS if template else BOM_COLUMNS, retained_numbers), bom)
                         _write(writer, 'Spool register', _identity_columns(SPOOL_COLUMNS, retained_numbers), register)
+                        if setup:
+                            _write(writer, 'Setup quantities', SETUP_COLUMNS, setup)
                         info = [
                             ('Document', 'Editable BOM planning template' if template else 'Purchase order bill of materials snapshot'),
                             ('PO number', detail['order']['purchase_order']),
@@ -256,6 +287,7 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                             ('Exported by', exporter.name),
                             ('Quantity unit', 'Whole physical pieces per unique spool. Material quantities are not multiplied by the required spool count.'),
                             ('Assembly counts', 'Required spools are declared scope; linked spools count unique existing identities. Missing spools have no invented material quantities.'),
+                            ('Setup quantities', 'The separate setup sheet lists assembly-type quantities and spool numbers per assembly. Total quantity equals assembly quantity times quantity per assembly. A physical assembly filter uses one assembly. These totals do not multiply the actual component BOM rows.'),
                             ('Number identity', 'GPN / Assembly number is the combined business number. Assembly ID remains the unique physical QR identity.'),
                             ('Progress', 'Received and prepared counts come from current recorded component processes. A BOM quantity or assignment does not prove receipt, preparation or QA release.'),
                             ('Blank quantities', 'A blank quantity means not planned or not known. It does not mean zero required pieces.'),

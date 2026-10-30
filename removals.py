@@ -228,6 +228,8 @@ def _descendants(s, item_ids):
 
 
 def _scope(s, kind, record_id):
+    from order_setup import OrderAssemblyRequirement
+
     _record(s, kind, record_id)
     orders, groups, items = set(), set(), set()
     if kind == 'order':
@@ -244,12 +246,13 @@ def _scope(s, kind, record_id):
     if groups:
         items.update(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id.in_(groups))))
     items = _descendants(s, items)
-    # A top-level assembly's last physical instance takes its grouping row out
-    # of the working register too, instead of making it look like a new draft.
+    # A legacy grouping row follows its last physical instance out of the
+    # working register. An explicit quantity plan remains independently useful:
+    # removing one registered assembly must not erase the remaining PO demand.
     for mapping in s.scalars(select(OrderAssembly).where(OrderAssembly.item_id.in_(items))).all() if items else []:
         siblings = set(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == mapping.gpn_id)))
         active_siblings = {value for value in siblings if not item_is_removed(s, value)}
-        if active_siblings.issubset(items):
+        if active_siblings.issubset(items) and s.get(OrderAssemblyRequirement, mapping.gpn_id) is None:
             groups.add(mapping.gpn_id)
     return sorted([('order', value) for value in orders] + [('gpn', value) for value in groups] + [('item', value) for value in items])
 
@@ -328,6 +331,22 @@ def _blockers(s, kind, record_id, action, state, scope):
                 mapping = s.get(OrderAssembly, item_id)
                 if mapping and ('gpn', mapping.gpn_id) not in scope_set and gpn_is_removed(s, mapping.gpn_id):
                     blockers.append('Restore the parent GPN / Assembly before restoring this item.')
+        # Removing an actual assembly frees active capacity for a replacement.
+        # Restoring the original identity must obey the same explicit quantity
+        # cap, including every item restored together in this removal batch.
+        from order_setup import OrderAssemblyRequirement
+        restored_ids = {record_id for record_kind, record_id in scope if record_kind == 'item'}
+        restored_mappings = s.scalars(select(OrderAssembly).where(
+            OrderAssembly.item_id.in_(restored_ids))).all() if restored_ids else []
+        for gpn_id in sorted({mapping.gpn_id for mapping in restored_mappings}):
+            required = s.get(OrderAssemblyRequirement, gpn_id)
+            if required is None:
+                continue
+            mappings = set(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == gpn_id)))
+            active = set(s.scalars(select(Item.id).where(Item.id.in_(mappings), item_not_removed(Item.id))))
+            if len(active | (restored_ids & mappings)) > required.assembly_quantity:
+                group = s.get(OrderGpn, gpn_id)
+                blockers.append(f'Restoring these records would exceed the {required.assembly_quantity} planned assembly quantity for {group.gpn}. Remove the replacement assembly before restoring its original identity.')
     return list(dict.fromkeys(blockers))
 
 

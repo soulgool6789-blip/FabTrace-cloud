@@ -26,6 +26,7 @@
   }
   function summaryBadges(s){
     let html=`<span>${quantity(s?.spools)} spool${quantity(s?.spools)===1?'':'s'}</span><span>${quantity(s?.parts)} part${quantity(s?.parts)===1?'':'s'}</span>`;
+    if(quantity(s?.missing_assemblies))html+=`<span class="pp-warning">${quantity(s.missing_assemblies)} assembl${s.missing_assemblies===1?'y':'ies'} still to register</span>`;
     if(quantity(s?.missing_spools))html+=`<span class="pp-warning">${quantity(s.missing_spools)} spool${s.missing_spools===1?'':'s'} still to link</span>`;
     if(quantity(s?.missing_parts))html+=`<span class="pp-warning">${quantity(s.missing_parts)} part${s.missing_parts===1?'':'s'} still to assign</span>`;
     if(s?.scope_complete===false)html+='<span class="pp-warning">Scope incomplete</span>';
@@ -56,7 +57,7 @@
   }
   function filteredOrders(){return arr(state.data?.orders).map(o=>{
     const matched=searchMatch([o.project_id,o.purchase_order,o.customer]);
-    const gpns=arr(o.gpns).map(g=>{const groupMatch=matched||searchMatch([g.id,g.gpn]);const assemblies=arr(g.assemblies).map(n=>filterItem(n,groupMatch)).filter(Boolean);const draft=groupMatch&&g.setup_needed&&state.kind==='all'&&['all','wip'].includes(state.status);return assemblies.length||draft?{...g,assemblies,_assembly_count:g.assemblies.length}:null;}).filter(Boolean);
+    const gpns=arr(o.gpns).map(g=>{const groupMatch=matched||searchMatch([g.id,g.gpn]);const assemblies=arr(g.assemblies).map(n=>filterItem(n,groupMatch)).filter(Boolean);const draft=groupMatch&&(g.setup_needed||g.registration_needed||g.quantity_plan&&!arr(g.assemblies).length)&&state.kind==='all'&&['all','wip'].includes(state.status);return assemblies.length||draft?{...g,assemblies,_assembly_count:g.assemblies.length}:null;}).filter(Boolean);
     const unassigned=arr(o.unassigned).map(n=>filterItem(n,matched)).filter(Boolean);
     const empty=matched&&!arr(o.gpns).length&&!arr(o.unassigned).length&&state.kind==='all'&&['all','wip'].includes(state.status);
     return gpns.length||unassigned.length||empty?{...o,gpns,unassigned}:null;
@@ -98,6 +99,7 @@
     let html=`<details class="pp-gpn" data-pp-expand="${esc(k)}" data-pp-gpn="${esc(g.id)}"${expanded}><summary><span class="pp-expander" aria-hidden="true"></span><div class="pp-identity"><span class="pp-eyebrow">GPN / Assembly</span><strong>${esc(g.gpn)}</strong>${single?`<small>Assembly QR: ${esc(single.id)}</small>`:''}${summaryBadges(g.summary)}</div><div class="pp-row-progress">${meter(overallProgress(g.summary),'Registered branch steps',g.summary?.complete,true)}</div>${g.setup_needed?'<span class="pp-status pp-status-wip">Setup needed</span>':''}</summary>`;
     if(!expanded)return html+'</details>';
     html+=`<div class="pp-gpn-body">${notes(g.warnings,g.summary)}${stageStrip(g.stages,'GPN / Assembly flow · registered items')}`;
+    if(g.quantity_plan)html+=`<p class="pp-info"><strong>Saved P.O. quantities:</strong> ${quantity(g.quantity_plan.assembly_quantity)} assemblies · ${quantity(g.quantity_plan.spools_per_assembly)} spools per assembly · ${quantity(g.quantity_plan.total_spools)} total spools. ${quantity(g.registered_assemblies)} physical assemblies registered.</p>${g.registration_needed?`<div class="actions">${button('order','Register physical assemblies',g.id,project)}</div>`:''}`;
     if(g.setup_needed)html+=`<p class="pp-info">Finish the GPN / Assembly setup and declare its required spools to establish this branch's scope.</p><div class="actions">${button('order','Open order setup',g.id,project)}</div>`;
     if(single){
       html+=`<section class="pp-assembly-own"><h3>Assembly's own route</h3>${itemView({...single,children:[]})}</section>`;

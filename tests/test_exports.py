@@ -36,6 +36,8 @@ TABLES = {
     "Purchase orders": ("orders", "PurchaseOrder"),
     "Order GPNs": ("orders", "OrderGpn"),
     "Order assemblies": ("orders", "OrderAssembly"),
+    "Assembly quantity plans": ("order_setup", "OrderAssemblyRequirement"),
+    "Spool quantity plans": ("order_setup", "OrderSpoolRequirement"),
     "Subprojects": ("tracking", "Subproject"),
     "Spool plans": ("tracking", "SpoolPlan"),
     "Weld templates": ("tracking", "RequirementTemplate"),
