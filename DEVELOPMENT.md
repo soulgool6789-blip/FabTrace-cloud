@@ -8,6 +8,7 @@ This guide describes the implemented tracking extension and the constraints that
 | --- | --- |
 | `main.py` | Shared SQLAlchemy models, sessions, authentication, employee/item/QR/custody APIs, legacy inspections and release, middleware, `/healthz`, and tracking-router integration. |
 | `orders.py` | Explicit PO/project enrollment, GPN groups, physical assembly part numbers and spool-count scope, versioned audited changes and existing-plan/traveler guards. |
+| `order_setup.py`, `static/order-setup.js`, `static/order-setup.css` | Simple P.O./assembly/spool quantity planning, atomic three-step setup, shared physical quantity guards, and primary Purchase orders navigation. |
 | `removals.py`, `static/removals.js`, `static/removals.css` | Administrator removal previews, reversible batch state, active-scope guards, affected-record confirmation and restoration. |
 | `orders_excel.py` | Scoped read-only BOM snapshots and editable planning templates using the existing standard-library XLSX writer. |
 | `static/orders.js`, `static/orders.css`, `ORDERS_GUIDE.md` | PO-first navigation, GPN/assembly planning, required/linked/ready counts, existing work shortcuts and Excel downloads. |
@@ -41,7 +42,41 @@ This guide describes the implemented tracking extension and the constraints that
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, order_setup, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
+
+## Simple P.O. quantity setup
+
+Version `2026.10.30-setup.1` makes `FabOrderSetup.open({po})` and `/?order-setup=1&po=PROJECT_ID` the primary Purchase orders experience and the administrator/supervisor landing page. The three steps ask only for P.O. number, repeated Google part number / assembly numbers with assembly quantities, and spool-number quantities **per assembly**. The final save is atomic. `FabOrders.open` and `/?orders=1` remain the secondary **Production records** workspace; existing physical item and process deep links are retained.
+
+### Schema and quantities
+
+`order_assembly_requirements` stores one current `assembly_quantity` for an existing `OrderGpn`. `order_spool_requirements` stores its named spool requirements, each with `quantity_per_assembly`, a normalized number, active state, actor and timestamps. These are requirements for future physical units. They do not create `Item`, `OrderAssembly`, `SpoolPlan`, custody, traveler, work, QA or dossier records. The initializer adds these two absent tables (50 tables in the current application schema), changes no existing columns and performs no quantity backfill. The existing nineteen immutable history/file protections remain; current planning revisions are evidenced by immutable Audit events.
+
+A new setup accepts 1–100 assembly rows. Each row has 1–200 distinct spool-number rows. Both quantity fields are strict integers from 1 to 10,000, and the sum of spool quantities for one assembly must be at most 10,000. P.O. numbers are 2–200 characters; GPN and spool numbers are 1–160 characters. Identifiers remain text, preserving leading zeros. `orders._key` normalizes whitespace and case for duplicate checks. The same spool number may belong to different GPNs; it appears only once per GPN with its quantity.
+
+For one spool line, `total_quantity = assembly_quantity * quantity_per_assembly`; branch `total_spools` is assembly quantity times the sum of its per-assembly spool quantities. `_totals` leaves overall quantities null when scope is undeclared or empty and also returns `known_assembly_quantity`/`known_total_spools` subtotals. Legacy physical counts never substitute for an ordered quantity. `requirements_by_gpn` provides grouped current requirement rows to order detail, progress, Excel and registration guards.
+
+### Endpoints and authority
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /api/order-setup` | Active P.O. register, quantity totals and permissions. |
+| `GET /api/order-setup/{project_id}` | Saved GPN quantities, spool lines, current order version, edit eligibility and legacy/physical-scope status. |
+| `POST /api/order-setup` | `expected_version: 0`, `purchase_order`, and `assemblies: [{gpn, assembly_quantity, spools: [{spool_number, quantity_per_assembly}]}]`; creates the project, P.O., groups and requirements together. |
+| `POST /api/order-setup/{project_id}/assemblies` | Add one assembly-number requirement at the current order version without replacing other branches. |
+| `PATCH /api/order-setup/{project_id}/assemblies/{gpn_id}` | Correct one eligible branch or complete an empty legacy GPN at the current version, with a 4–3,000-character reason. |
+
+All supported active employees can read. Writes require administrator/supervisor authority, refreshed after the topology lock, and the expected order version. Simple P.O. creation rejects any existing matching normalized number, even under a different legacy customer, because this form deliberately asks for no customer. Removed identities remain reserved. Mutations append `ORDER_SETUP_CREATED`, `ORDER_SETUP_ASSEMBLY_ADDED` or `ORDER_SETUP_ASSEMBLY_UPDATED`, including exact before/after requirements, actor and order revision. `_save_requirements` reuses a spool line's identity by normalized number; omitted lines become inactive and may later be reactivated under the same ID. No full-order replacement or implicit deletion of other saved GPNs is provided.
+
+A branch becomes ineligible for initial-setup edits once any physical `OrderAssembly` mapping exists, including retained removed mappings. An editable empty legacy GPN keeps its existing ID when quantities are entered. Removal/restore retains requirement rows and their identifiers; active views omit removed P.O./GPN scope. Both GET endpoints release the authentication connection before using the existing read snapshot (PostgreSQL REPEATABLE READ READ ONLY or an explicit SQLite read transaction). `editable` describes scope eligibility and must be combined with the server's `permissions.can_manage` and current role capabilities in the UI.
+
+`guard_assembly_registration` enforces the saved physical assembly count, exact per-assembly spool count, matching assembly part number and already-linked spool type quantities. `guard_spool_requirement` checks an actual spool's part number against an active planned spool number and its quantity limit for that one physical parent assembly. Existing order, spool-plan, flow linking and explicit part-number correction paths call these guards under their normal locks. Initial setup never rewrites old physical identities or supplies a zero-weld justification or QA release.
+
+### Progress and Excel integration
+
+The active P.O. progress projection exposes `quantity_plan`, `registered_assemblies` and `registration_needed` for a GPN and adds `missing_assemblies` to summaries. Missing unregistered assemblies contribute their expected spool shortfall once; registered assemblies contribute their own existing linked-spool shortfall. Requirements create no placeholder physical nodes or recorded-step denominator. Planned-only P.O.s therefore retain unknown physical progress and explicit registration gaps. Current traveler events, rework resets, holds and quality finish remain authoritative.
+
+The administrator raw backend workbook includes **Assembly quantity plans** and **Spool quantity plans**, including retained inactive lines. The scoped BOM and template add **Setup quantities** when declared requirements exist in the selected scope. Its columns include assembly quantity, spool number, quantity per assembly, total quantity, physical Assembly ID and quantity scope. An unfiltered P.O. or GPN export uses the full saved assembly quantity. Selecting one physical assembly uses a multiplier of **1**, labels that scope explicitly and excludes other branches. The material BOM still counts each actual physical spool's materials once; it is not multiplied by the planned assembly or spool quantity again. No Excel import or automatic synchronization is introduced.
 
 ## Expandable P.O. production progress
 
@@ -67,7 +102,7 @@ A P.O. removal marks its GPNs and canonical project/physical descendant scope in
 
 Operational queries use explicit active predicates. Historical queries, raw exports and `progress.project_rows` preserve the retained scope needed by issued packets. Item/project write paths, including legacy flow, transfer, administration, evidence and scope APIs, validate active scope after topology locking. New packet issue/handover cannot treat removed retained parts as complete. Removed direct views expose removal metadata and disable operational controls. `exports.TABLE_SPECS` includes the new state table; active scoped BOM downloads omit removed branches and removed unassigned items.
 
-Version `2026.10.30-orders.3` uses a single GPN/Assembly number and three UI levels: P.O, GPN / Assembly, Spools. The backing tables and old endpoint contracts remain available, preserving all existing identities and history. New UI creation uses one atomic `POST /api/orders/{project_id}/gpn-assemblies` with `expected_version`, `gpn`, `required_spools`, optional notes, and either `create_item` (actual location/handler, optional custom ID/drawing) or an existing `item_id`. Optional `gpn_id` explicitly completes an existing matching draft. Omitting a new physical ID generates an `ASM-…` ID server-side. Creation sets the new mapping's assembly part number and new physical item's part number to the canonical GPN, supplies a blank description, and creates no weld plan, traveler or approval. An already mapped GPN is rejected by this normal combined setup endpoint, while older multiple-instance groups remain readable through their actual physical IDs.
+The retained physical-registration interface introduced in version `2026.10.30-orders.3` uses a single GPN/Assembly number and three UI levels: P.O, GPN / Assembly, Spools. The backing tables and old endpoint contracts remain available, preserving all existing identities and history. Physical registration uses one atomic `POST /api/orders/{project_id}/gpn-assemblies` with `expected_version`, `gpn`, `required_spools`, optional notes, and either `create_item` (actual location/handler, optional custom ID/drawing) or an existing `item_id`. Optional `gpn_id` explicitly completes an existing matching draft. Omitting a new physical ID generates an `ASM-…` ID server-side. Creation sets the new mapping's assembly part number and new physical item's part number to the canonical GPN, supplies a blank description, and creates no weld plan, traveler or approval. An unplanned already-mapped GPN retains its legacy duplicate guard. A GPN with saved quantity requirements permits further distinct physical instances up to that quantity, subject to `guard_assembly_registration`; older multiple-instance groups remain readable through their actual physical IDs.
 
 `PATCH /api/orders/{project_id}/gpn-assemblies/{item_id}` takes the current version, combined number, required spool count, notes and a correction reason. An eligible number correction updates the GPN and mapping together, and updates a physical part number only if it was blank or matched the previous GPN. Unchanged-number edits preserve differing legacy mapping numbers. Shared GPNs with multiple assemblies cannot be renumbered through a single row; traveler/release/count guards remain authoritative. Responses include `selected_gpn_id` and `selected_assembly_id`; detail adds `number_editable` and `combined_number_matches` hints. The UI must still enforce all server errors and stale request protection.
 
@@ -94,7 +129,7 @@ All writes require administrator/supervisor authority, the current order version
 
 Read endpoints release the authentication connection before opening their separate consistent snapshot. PostgreSQL uses REPEATABLE READ READ ONLY; SQLite uses an explicit read transaction. Ready counts require current ordinary QA readiness and the completed spool route; administrative release does not silently satisfy that measure. PO detail includes missing/planning blockers and a lightweight `order_scope` is exposed in flow detail. Existing issued dossier snapshots are never rewritten by order enrollment or read views.
 
-The two scoped workbooks reuse `exports.WorkbookWriter`, preserving text identifiers and literal formula-like input, numeric quantities and long-text continuation handling. They include assembly summary, material/template, spool register and export information. Quantities are taken once from each actual physical spool's parts plan. Missing spool/BOM scope is explicit; unknown quantities stay blank. Unfiltered exports include unmapped legacy project items with a planning warning. All active supported roles can read these workbooks; the full backend workbook remains administrator-only and now also includes the three new order tables. No runtime dependency, upload endpoint or Excel synchronization is added.
+The two scoped workbooks reuse `exports.WorkbookWriter`, preserving text identifiers and literal formula-like input, numeric quantities and long-text continuation handling. They include assembly summary, material/template, spool register and export information, plus Setup quantities when declared requirements are in scope. Quantities are taken once from each actual physical spool's parts plan. Missing spool/BOM scope is explicit; unknown quantities stay blank. Unfiltered exports include unmapped legacy project items with a planning warning. All active supported roles can read these workbooks; the full backend workbook remains administrator-only and includes the three order hierarchy tables plus both quantity-requirement tables. No runtime dependency, upload endpoint or Excel synchronization is added.
 
 ## Data relationships
 
@@ -383,11 +418,12 @@ node tests/guide_ui_smoke.cjs
 node tests/parts_ui_smoke.cjs
 node tests/handoff_ui_smoke.cjs
 node tests/admin_ui_smoke.cjs
+node tests/order_setup_ui_smoke.cjs
 ```
 
 API fixtures use temporary SQLite databases, override imported database settings, and create synthetic employees and authenticated sessions. They cover legacy behavior, roles, stale decisions, evidence, scope, operations, repairs, holds, hierarchy, and release. SQLite tests do not establish PostgreSQL locking or trigger behavior.
 
-The Node harness runs without a framework or network. It checks route/render contracts, role controls, sequencing, escaped evidence, safe links, versions, and failed-write recovery. It is not a full browser layout/accessibility test.
+The Node harness runs without a framework or network. It checks route/render contracts, role controls, sequencing, escaped evidence, safe links, versions, and failed-write recovery. It is not a full browser layout/accessibility test. `tests/order_setup_browser_smoke.cjs` uses the existing isolated `orders_browser_server.py` fixture to verify the real three-step save, quantity calculations, desktop/mobile layout, stale edits, legacy scope and read-only roles; it rejects remote hosts. See `tests/orders_browser_README.md` for browser environment setup.
 
 For PostgreSQL behavior, provision a separate local test database with a name beginning `fabtrace_test_`, then inspect the guard and options:
 

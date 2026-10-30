@@ -1,24 +1,38 @@
 # FabTrace Cloud
 
+## Simple P.O. setup
+
+Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** Administrators and supervisors land here after signing in. Setup has three short steps:
+
+1. **P.O. number** — enter the purchase-order number.
+2. **Assemblies & quantities** — add each **Google part number / Assembly number** and answer **How many assemblies?** Use **+ Add another assembly number** for additional numbers on the same P.O.
+3. **Spools & quantities** — under each assembly number, enter its spool numbers and **Qty per assembly**. Use **+ Add spool number** as needed, then **Save P.O.**
+
+Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. One final save records the complete setup. Initial setup asks only for these numbers and quantities; physical records and custody are entered later.
+
+The saved P.O. shows **Assembly numbers**, **Assemblies needed** and **Total spools needed**. Use **Add assembly number** for another branch or **Edit quantities** for an eligible correction with a reason. Existing undeclared quantities show **Not entered**. Once a branch has physical assembly history, its initial quantity setup is locked. All supported active employees can view the quantities; administrators retain the existing removal and restoration controls.
+
+Version `2026.10.30-setup.1` adds two quantity-planning tables without changing existing columns or filling in quantities for old records. Saving requirements creates no physical assembly/spool IDs, receipt, production steps or QA approval. The **Production records** links retain the detailed physical workflows at `/?orders=1`.
+
 ## Expandable production progress
 
 Open **Production progress** (`/?production-progress=1`). Use the **P.O.** dropdown to see all active P.O.s or one selected P.O., then expand its GPN / Assembly, spools and component parts. Each physical item has its own recorded-step bar, current process, location and responsible employee. Inventory, Prep, Fit-up, Welding, Assembly and Finish follow the existing numbered traveler; ready-to-ship, shipment and delivery are separate milestones. Search and status filters help locate individual work while preserving the full scope behind the summary bars.
 
-Missing required spools, unassigned components, undeclared scope and earlier unrecorded steps remain visible. Progress comes from recorded current-route events and existing quality state. Component preparation, spool fabrication and final assembly each have their own route; completion of one route does not imply completion of its parent. The new view reads existing records and does not change work, QR transfers, permissions or quality releases. **Project detail** retains the earlier project register and its detailed filters.
+Missing planned assemblies and their required spools, unassigned components, undeclared scope and earlier unrecorded steps remain visible. Planned quantities add scope gaps without creating recorded production steps. Progress comes from recorded current-route events and existing quality state. Component preparation, spool fabrication and final assembly each have their own route; completion of one route does not imply completion of its parent. The new view reads existing records and does not change work, QR transfers, permissions or quality releases. **Project detail** retains the earlier project register and its detailed filters.
 
 FabTrace Cloud is a FastAPI and PostgreSQL application for shared fabrication records, employee badge sign-in, QR labels, custody handoffs, and project-to-weld traceability. The browser interface uses plain HTML, CSS, and JavaScript.
 
-## Start with the purchase order
+## Later: physical production records
 
-Open **Purchase orders** (`/?orders=1`) to organize work through **P.O → GPN / Assembly → Spools**. The GPN is the assembly number. One **Add GPN / Assembly** form takes that number, the required spool count and actual location/custodian; one save registers it and opens its spools. A unique physical QR ID is generated automatically, with custom ID, drawing and existing-assembly choices under More options. Existing GPN-only rows offer **Finish setup**, preserving the original record. Physical tracking IDs remain separate from the business number.
+From a saved P.O., use **Production records** (`/?orders=1`) when actual assemblies and spools are ready to register. A planned GPN / Assembly offers **Register physical assembly**; its required spool count comes from the saved per-assembly quantities. Enter actual location/custodian information at this later stage. Each physical assembly receives its own QR tracking ID, separate from its shared Google part number. Registration is limited to the saved assembly quantity, and linked physical spool part numbers/counts must match the saved spool requirements.
 
-Each combined row shows required, linked, missing and ready spool counts. Existing physical assemblies and older differing part numbers are retained, and multiple older physical instances remain separately traceable. The normal combined creation form prevents accidental duplicate setup. Number/count corrections are versioned and obey the existing production and release locks.
+The retained detailed screen shows required, linked, missing and ready spool counts for each physical assembly. Older physical identities, differing retained part numbers, QR links and history remain available. Legacy registration and correction controls remain subject to their existing production/release locks and the quantity requirements of a planned branch.
 
 Physical item descriptions are removed from current order/item forms, lists and QR labels. New individual and bulk item registration works with identifiers without a description. Older API clients/CSV files can still supply a description, and existing records and issued packet history are retained. Material requirement descriptions, work explanations and quality references remain available in their appropriate records.
 
 Administrators can **Remove** P.O.s, GPN / Assembly entries and physical items. The confirmation shows the affected scope and requires its displayed number plus a reason. Removed records leave the working lists; identities, QR links, requirements, production and quality history remain retained. **Removed records → Restore** returns the original removal group. Previously removed independent entries stay removed. Linked child items must first be unassigned through their existing controlled scope, and open production timers must be closed before removal. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for the steps.
 
-Use the assembly's shortcuts to set its weld plan, register/link actual spools and create each spool's BOM. **Download BOM Excel** exports the selected PO/GPN/assembly with its material quantities and current progress; **Excel BOM template** creates an editable offline planning workbook. Missing spools and missing material plans stay visible, and material quantities are not multiplied twice. Excel edits do not update FabTrace; enter approved requirements in the site. All active supported employees can download these scoped BOMs; the full backend export remains administrator-only.
+Use the physical assembly's shortcuts to set its weld plan, register/link actual spools and create each spool's BOM. **Download BOM Excel** and **Excel BOM template** remain in **Production records**. Where a selected branch has saved setup quantities, a **Setup quantities** sheet lists the assembly quantity, spool number, quantity per assembly and total quantity. A P.O./GPN export uses the full planned assembly quantity; an export for one physical assembly uses a quantity of one. Each actual spool's material BOM is counted once. Excel edits do not update FabTrace; enter approved changes in the appropriate setup or Spool parts screen. The administrator backend export also includes **Assembly quantity plans** and **Spool quantity plans**. All active supported employees can download scoped BOMs; the full backend export remains administrator-only.
 
 Existing projects are not converted automatically. Explicit attachment preserves their IDs, QR links, workflow records and issued packet history. Required spool counts are validated against existing links and the assembly traveler. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for the complete setup and Excel workflow.
 

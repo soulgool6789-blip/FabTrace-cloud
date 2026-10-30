@@ -1,0 +1,359 @@
+"""Simple order quantities, before physical inventory or production is registered.
+
+One GPN identifies an assembly type. Its quantity describes the number to build;
+spool requirements describe quantities per assembly. These additive planning
+records never create physical IDs, custody, travelers, work or QA acceptance.
+"""
+from collections import defaultdict
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import Field, model_validator
+from sqlalchemy import (Boolean, CheckConstraint, Column, DateTime, ForeignKey,
+                        Integer, String, UniqueConstraint, select)
+from sqlalchemy.orm import Session
+
+from main import Base, Employee, Item, auth, db, permit, utcnow
+from tracking import Project, SpoolPlan, new_id
+from flow import lock_topology
+from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _event,
+                    _flush, _gpn, _key, _locked, read_snapshot)
+from permissions import has_capability
+from removals import (gpn_not_removed, item_not_removed, project_is_removed,
+                      project_not_removed)
+
+
+router = APIRouter(prefix='/api/order-setup', tags=['simple purchase order setup'])
+
+
+class OrderAssemblyRequirement(Base):
+    __tablename__ = 'order_assembly_requirements'
+    __table_args__ = (CheckConstraint('assembly_quantity >= 1 AND assembly_quantity <= 10000',
+                                     name='ck_order_assembly_requirement_quantity'),)
+    gpn_id = Column(String(60), ForeignKey('order_gpns.id'), primary_key=True)
+    assembly_quantity = Column(Integer, nullable=False)
+    created_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class OrderSpoolRequirement(Base):
+    __tablename__ = 'order_spool_requirements'
+    __table_args__ = (
+        UniqueConstraint('gpn_id', 'normalized_number', name='uq_order_spool_requirement_number'),
+        CheckConstraint('quantity_per_assembly >= 1 AND quantity_per_assembly <= 10000',
+                        name='ck_order_spool_requirement_quantity'),
+    )
+    id = Column(String(60), primary_key=True)
+    gpn_id = Column(String(60), ForeignKey('order_gpns.id'), nullable=False, index=True)
+    spool_number = Column(String(160), nullable=False)
+    normalized_number = Column(String(480), nullable=False)
+    quantity_per_assembly = Column(Integer, nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SpoolRequirementIn(Input):
+    spool_number: str = Field(min_length=1, max_length=160)
+    quantity_per_assembly: int = Field(ge=1, le=10000, strict=True)
+
+
+class AssemblyRequirementIn(Input):
+    gpn: str = Field(min_length=1, max_length=160)
+    assembly_quantity: int = Field(ge=1, le=10000, strict=True)
+    spools: list[SpoolRequirementIn] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def unique_spool_scope(self):
+        keys = [_key(row.spool_number) for row in self.spools]
+        if len(keys) != len(set(keys)):
+            raise ValueError('Enter each spool number once per assembly and use its quantity')
+        if sum(row.quantity_per_assembly for row in self.spools) > 10000:
+            raise ValueError('One assembly can require at most 10,000 total spools')
+        return self
+
+
+class CreateSetupIn(Input):
+    expected_version: int = Field(default=0, ge=0, le=0, strict=True)
+    purchase_order: str = Field(min_length=2, max_length=200)
+    assemblies: list[AssemblyRequirementIn] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode='after')
+    def unique_assembly_numbers(self):
+        keys = [_key(row.gpn) for row in self.assemblies]
+        if len(keys) != len(set(keys)):
+            raise ValueError('Enter each Google part number / assembly number once and use its quantity')
+        return self
+
+
+class AddAssemblyRequirementIn(AssemblyRequirementIn):
+    expected_version: int = Field(ge=1, strict=True)
+
+
+class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
+    reason: str = Field(min_length=4, max_length=3000)
+
+
+def requirements_by_gpn(s, gpn_ids):
+    """Load declared requirements once; callers select active/historical groups."""
+    ids = set(gpn_ids)
+    if not ids:
+        return {}
+    plans = s.scalars(select(OrderAssemblyRequirement)
+                      .where(OrderAssemblyRequirement.gpn_id.in_(ids))).all()
+    lines = defaultdict(list)
+    for row in s.scalars(select(OrderSpoolRequirement).where(
+            OrderSpoolRequirement.gpn_id.in_(ids), OrderSpoolRequirement.active.is_(True))
+            .order_by(OrderSpoolRequirement.spool_number, OrderSpoolRequirement.id)):
+        lines[row.gpn_id].append(row)
+    result = {}
+    for plan in plans:
+        spools = [{'id': line.id, 'spool_number': line.spool_number,
+                   'quantity_per_assembly': line.quantity_per_assembly,
+                   'total_quantity': line.quantity_per_assembly * plan.assembly_quantity}
+                  for line in lines[plan.gpn_id]]
+        per_assembly = sum(line['quantity_per_assembly'] for line in spools)
+        result[plan.gpn_id] = {'gpn_id': plan.gpn_id,
+            'assembly_quantity': plan.assembly_quantity, 'spools_per_assembly': per_assembly,
+            'total_spools': per_assembly * plan.assembly_quantity, 'spools': spools}
+    return result
+
+
+def _permissions(user):
+    return {'can_manage': has_capability(user, 'manage_production'),
+            'can_remove': getattr(user, 'role', user) == 'admin'}
+
+
+def _totals(rows):
+    unknown = sum(row['assembly_quantity'] is None for row in rows)
+    assembly_quantity = sum(row['assembly_quantity'] or 0 for row in rows)
+    total_spools = sum(row['total_spools'] or 0 for row in rows)
+    return {'assembly_types': len(rows), 'undeclared_groups': unknown,
+            'assembly_quantity': None if unknown or not rows else assembly_quantity,
+            'total_spools': None if unknown or not rows else total_spools,
+            'known_assembly_quantity': assembly_quantity, 'known_total_spools': total_spools}
+
+
+def _groups(s, project_ids):
+    groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id.in_(project_ids),
+        gpn_not_removed(OrderGpn.id)).order_by(OrderGpn.gpn, OrderGpn.id)).all()
+    plans = requirements_by_gpn(s, [row.id for row in groups])
+    mappings = s.scalars(select(OrderAssembly)
+        .where(OrderAssembly.gpn_id.in_([row.id for row in groups]))).all() if groups else []
+    active_ids = set(s.scalars(select(Item.id).where(
+        Item.id.in_([row.item_id for row in mappings]), item_not_removed(Item.id)))) if mappings else set()
+    history, active = defaultdict(int), defaultdict(int)
+    for mapping in mappings:
+        history[mapping.gpn_id] += 1
+        active[mapping.gpn_id] += int(mapping.item_id in active_ids)
+    rows = defaultdict(list)
+    for group in groups:
+        plan = plans.get(group.id)
+        rows[group.project_id].append({'gpn_id': group.id, 'gpn': group.gpn,
+            'planned': plan is not None, 'legacy_scope': plan is None,
+            'assembly_quantity': plan['assembly_quantity'] if plan else None,
+            'spools_per_assembly': plan['spools_per_assembly'] if plan else None,
+            'total_spools': plan['total_spools'] if plan else None,
+            'spools': plan['spools'] if plan else [],
+            'registered_assemblies': active[group.id], 'editable': not history[group.id],
+            'locked_reason': ('Physical assembly records already exist. Their production scope is retained; '
+                              'open Production records to review them.') if history[group.id] else ''})
+    return rows
+
+
+def setup_detail(s, project_id, user):
+    order = s.scalar(select(PurchaseOrder).where(PurchaseOrder.project_id == project_id,
+        project_not_removed(PurchaseOrder.project_id)))
+    if order is None:
+        raise HTTPException(404, 'Active purchase order not found')
+    rows = _groups(s, {project_id})[project_id]
+    return {'order': {'project_id': order.project_id, 'purchase_order': order.purchase_order,
+                     'customer': order.customer, 'version': order.version},
+            'assemblies': rows, 'totals': _totals(rows), 'permissions': _permissions(user)}
+
+
+def _list(s, user):
+    orders = s.scalars(select(PurchaseOrder).where(project_not_removed(PurchaseOrder.project_id))
+        .order_by(PurchaseOrder.purchase_order, PurchaseOrder.project_id)).all()
+    rows = _groups(s, {order.project_id for order in orders}) if orders else {}
+    return {'orders': [{'project_id': order.project_id, 'purchase_order': order.purchase_order,
+                        'customer': order.customer, 'version': order.version,
+                        **_totals(rows[order.project_id])} for order in orders],
+            'permissions': _permissions(user)}
+
+
+def _basis(s, group):
+    plan = requirements_by_gpn(s, {group.id}).get(group.id)
+    return {'gpn_id': group.id, 'gpn': group.gpn, 'requirements': plan}
+
+
+def _save_requirements(s, group, data, user):
+    plan = s.get(OrderAssemblyRequirement, group.id)
+    if plan is None:
+        plan = OrderAssemblyRequirement(gpn_id=group.id,
+            assembly_quantity=data.assembly_quantity, created_by=user.badge)
+        s.add(plan)
+    else:
+        plan.assembly_quantity = data.assembly_quantity
+        plan.updated_at = utcnow()
+    existing = {line.normalized_number: line for line in s.scalars(
+        select(OrderSpoolRequirement).where(OrderSpoolRequirement.gpn_id == group.id))}
+    active = set()
+    for values in data.spools:
+        normalized = _key(values.spool_number)
+        active.add(normalized)
+        line = existing.get(normalized)
+        if line is None:
+            line = OrderSpoolRequirement(id=new_id('OSPOOL'), gpn_id=group.id,
+                spool_number=values.spool_number, normalized_number=normalized,
+                quantity_per_assembly=values.quantity_per_assembly, active=True, created_by=user.badge)
+            s.add(line)
+        else:
+            line.spool_number = values.spool_number
+            line.quantity_per_assembly = values.quantity_per_assembly
+            line.active = True
+            line.updated_at = utcnow()
+    for normalized, line in existing.items():
+        if normalized not in active and line.active:
+            line.active = False
+            line.updated_at = utcnow()
+    _flush(s)
+
+
+def _add_group(s, order, data, user):
+    duplicate = s.scalar(select(OrderGpn).where(OrderGpn.project_id == order.project_id,
+                                               OrderGpn.normalized_gpn == _key(data.gpn)))
+    if duplicate:
+        from removals import gpn_is_removed
+        if gpn_is_removed(s, duplicate.id):
+            raise HTTPException(409, 'That assembly number is in Removed records. Restore its existing entry to use the same number.')
+        raise HTTPException(409, 'That Google part number / assembly number already exists in this P.O. Open its existing setup.')
+    group = OrderGpn(id=new_id('OGPN'), project_id=order.project_id, gpn=data.gpn,
+                     normalized_gpn=_key(data.gpn), description='', created_by=user.badge)
+    s.add(group)
+    _flush(s)
+    _save_requirements(s, group, data, user)
+    return group
+
+
+def guard_assembly_registration(s, group, required_spools, item_id=None):
+    """Physical writers already hold the topology lock and active-scope guards."""
+    plan = requirements_by_gpn(s, {group.id}).get(group.id)
+    if plan is None:
+        return
+    item = s.get(Item, item_id) if item_id is not None else None
+    if item is not None and _key(item.google_part_number or '') != group.normalized_gpn:
+        raise HTTPException(409, 'The physical assembly part number must match its planned Google part number / assembly number.')
+    if not plan['spools_per_assembly'] or required_spools != plan['spools_per_assembly']:
+        raise HTTPException(409, f'This assembly number requires {plan["spools_per_assembly"]} spools per assembly from its saved setup.')
+    query = select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id,
+                                                item_not_removed(OrderAssembly.item_id))
+    if item_id is not None:
+        query = query.where(OrderAssembly.item_id != item_id)
+    count = len(s.scalars(query).all())
+    if count >= plan['assembly_quantity']:
+        raise HTTPException(409, 'The required number of physical assemblies is already registered for this assembly number.')
+    if item_id is not None:
+        limits = {_key(line['spool_number']): line['quantity_per_assembly'] for line in plan['spools']}
+        assigned = defaultdict(int)
+        for child in s.scalars(select(Item).join(SpoolPlan, SpoolPlan.item_id == Item.id)
+                .where(SpoolPlan.assembly_id == item_id, item_not_removed(Item.id))):
+            key = _key(child.google_part_number or '')
+            if key not in limits:
+                raise HTTPException(409, f'Linked spool {child.id} does not match a required spool number in the saved assembly setup.')
+            assigned[key] += 1
+            if assigned[key] > limits[key]:
+                raise HTTPException(409, 'The existing linked spool quantities exceed the saved per-assembly spool requirements.')
+
+
+def guard_spool_requirement(s, item, assembly_id):
+    """Apply declared spool-number quantities to one actual parent assembly."""
+    mapping = s.get(OrderAssembly, assembly_id) if assembly_id else None
+    if mapping is None or s.get(OrderAssemblyRequirement, mapping.gpn_id) is None:
+        return
+    key = _key(item.google_part_number or '')
+    line = s.scalar(select(OrderSpoolRequirement).where(
+        OrderSpoolRequirement.gpn_id == mapping.gpn_id,
+        OrderSpoolRequirement.normalized_number == key,
+        OrderSpoolRequirement.active.is_(True)))
+    if line is None:
+        raise HTTPException(409, 'This spool number is not listed in the assembly setup. The physical spool part number must match one of its required spool numbers.')
+    peers = s.scalars(select(Item).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(
+        SpoolPlan.assembly_id == assembly_id, Item.id != item.id, item_not_removed(Item.id))).all()
+    if sum(_key(peer.google_part_number or '') == key for peer in peers) >= line.quantity_per_assembly:
+        raise HTTPException(409, f'This assembly already has the required {line.quantity_per_assembly} physical spool(s) for spool number {line.spool_number}.')
+
+
+@router.get('')
+def list_setup(user: Employee = Depends(auth), s: Session = Depends(db)):
+    role = user.role
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        return _list(snapshot, role)
+
+
+@router.get('/{project_id}')
+def get_setup(project_id: str, user: Employee = Depends(auth), s: Session = Depends(db)):
+    role = user.role
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        return setup_detail(snapshot, project_id, role)
+
+
+@router.post('', status_code=201)
+def create_setup(data: CreateSetupIn, user: Employee = Depends(auth), s: Session = Depends(db)):
+    lock_topology(s)
+    permit(user, 'admin', 'supervisor')
+    # This form deliberately asks for no customer. An existing same-number P.O.
+    # must be opened explicitly rather than duplicated under a blank customer.
+    duplicates = s.scalars(select(PurchaseOrder).where(
+        PurchaseOrder.normalized_number == _key(data.purchase_order))).all()
+    if duplicates:
+        if all(project_is_removed(s, order.project_id) for order in duplicates):
+            raise HTTPException(409, 'That P.O. is in Removed records. Restore it to use the same number and its retained history.')
+        raise HTTPException(409, 'That P.O. number already exists. Open its existing setup.')
+    project = Project(id=new_id('PO'), name=('PO ' + data.purchase_order)[:200],
+        client='', description='', created_by=user.badge)
+    s.add(project)
+    _flush(s)
+    order = PurchaseOrder(project_id=project.id, purchase_order=data.purchase_order,
+        normalized_number=_key(data.purchase_order), customer='', normalized_customer='',
+        notes='', version=1, created_by=user.badge)
+    s.add(order)
+    _flush(s)
+    groups = [_add_group(s, order, values, user) for values in data.assemblies]
+    _event(s, order, user, 'SETUP_CREATED', first=True, after={
+        'purchase_order': order.purchase_order, 'assemblies': [_basis(s, group) for group in groups]})
+    _commit(s)
+    return setup_detail(s, project.id, user)
+
+
+@router.post('/{project_id}/assemblies', status_code=201)
+def add_assembly_requirement(project_id: str, data: AddAssemblyRequirementIn,
+                             user: Employee = Depends(auth), s: Session = Depends(db)):
+    order = _locked(s, project_id, data.expected_version, user)
+    group = _add_group(s, order, data, user)
+    _event(s, order, user, 'SETUP_ASSEMBLY_ADDED', after=_basis(s, group))
+    _commit(s)
+    return setup_detail(s, project_id, user)
+
+
+@router.patch('/{project_id}/assemblies/{gpn_id}')
+def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRequirementIn,
+                              user: Employee = Depends(auth), s: Session = Depends(db)):
+    order = _locked(s, project_id, data.expected_version, user)
+    group = _gpn(s, project_id, gpn_id)
+    if s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
+        raise HTTPException(409, 'Physical assembly records already exist for this number. Its existing production scope cannot be replaced by initial setup.')
+    duplicate = s.scalar(select(OrderGpn.id).where(OrderGpn.project_id == project_id,
+        OrderGpn.normalized_gpn == _key(data.gpn), OrderGpn.id != group.id).limit(1))
+    if duplicate:
+        raise HTTPException(409, 'That assembly number already exists in this P.O., including retained removed entries.')
+    before = _basis(s, group)
+    group.gpn, group.normalized_gpn, group.updated_at = data.gpn, _key(data.gpn), utcnow()
+    _save_requirements(s, group, data, user)
+    _event(s, order, user, 'SETUP_ASSEMBLY_UPDATED', before=before,
+           after=_basis(s, group), reason=data.reason)
+    _commit(s)
+    return setup_detail(s, project_id, user)

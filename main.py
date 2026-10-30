@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-progress.1'
+APP_VERSION='2026.10.30-setup.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -318,6 +318,15 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
     before=r.google_part_number
     r.google_part_number=data.google_part_number.strip()
     if not r.google_part_number:raise HTTPException(422,'Google part number cannot be blank')
+    from order_setup import guard_spool_requirement, requirements_by_gpn
+    from orders import _key
+    plan=s.get(SpoolPlan,r.id)
+    if plan and plan.assembly_id:guard_spool_requirement(s,r,plan.assembly_id)
+    mapping=s.get(OrderAssembly,r.id)
+    if mapping and mapping.gpn_id in requirements_by_gpn(s,[mapping.gpn_id]):
+        group=s.get(OrderGpn,mapping.gpn_id)
+        if _key(r.google_part_number)!=group.normalized_gpn:
+            raise HTTPException(409,'The physical assembly part number must match its planned Google part number / assembly number')
     audit(s,r.id,u.badge,'GOOGLE_PART_NUMBER_CHANGED',{'previous':before,'new':r.google_part_number})
     s.commit()
     return item_dict(s,r,u)
@@ -555,6 +564,8 @@ def health(s:Session=Depends(db)):
     s.execute(select(OrderGpn.id).limit(1))
     s.execute(select(OrderAssembly.item_id).limit(1))
     s.execute(select(RecordRemoval.record_id).limit(1))
+    s.execute(select(OrderAssemblyRequirement.gpn_id).limit(1))
+    s.execute(select(OrderSpoolRequirement.id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -597,6 +608,9 @@ app.include_router(orders_router)
 
 from removals import router as removals_router, RecordRemoval
 app.include_router(removals_router)
+
+from order_setup import router as order_setup_router, OrderAssemblyRequirement, OrderSpoolRequirement
+app.include_router(order_setup_router)
 
 from production_progress import router as production_progress_router
 app.include_router(production_progress_router)

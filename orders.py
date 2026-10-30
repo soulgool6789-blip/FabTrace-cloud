@@ -321,6 +321,8 @@ def guard_plan_scope(s, item, oldplan, values):
         other = len([child for child, _ in _linked(s, parent_id) if child.id != item.id])
         if other >= parent.required_spools:
             raise HTTPException(409, f'This assembly already has its {parent.required_spools} required spools')
+        from order_setup import guard_spool_requirement
+        guard_spool_requirement(s, item, parent_id)
 
 
 def guard_dossier_purchase_order(s, project_id, purchase_order):
@@ -419,6 +421,7 @@ def order_detail(s, project_id, user=None):
     """Read-only detail also used by the Excel snapshot; no enrollment on read."""
     from progress import project_rows
     from removals import gpn_not_removed, item_not_removed, removal_summary
+    from order_setup import requirements_by_gpn
     order = _order(s, project_id)
     removal = removal_summary(s, 'order', project_id)
     removed = bool(removal and removal['removed'])
@@ -427,6 +430,7 @@ def order_detail(s, project_id, user=None):
     if not removed:
         group_query = group_query.where(gpn_not_removed(OrderGpn.id))
     groups = s.scalars(group_query.order_by(OrderGpn.gpn)).all()
+    quantity_plans = requirements_by_gpn(s, [group.id for group in groups])
     progress_rows = {row['id']: row for row in project_rows(s, project_id)}
     gpns, assemblies = [], []
     for group in groups:
@@ -439,10 +443,11 @@ def order_detail(s, project_id, user=None):
         # offer a shared-number correction that would rewrite its history.
         physical_count = len(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id)).all())
         for child in children:
-            child['count_editable'] = child['count_editable'] and not removed
+            child['count_editable'] = child['count_editable'] and not removed and group.id not in quantity_plans
             child['number_editable'] = child['count_editable'] and physical_count == 1
             child['combined_number_matches'] = _key(child['assembly_part_number']) == group.normalized_gpn
         gpns.append({**_row(group, GPN_FIELDS), 'assemblies': children, 'assembly_count': len(children),
+                     'quantity_plan': quantity_plans.get(group.id),
                      'removal': removal_summary(s, 'gpn', group.id),
                      **{key: sum(child[key] for child in children) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools')}})
         assemblies.extend(children)
@@ -568,6 +573,9 @@ def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Dep
     row = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
     if data.gpn != group.gpn:
+        from order_setup import OrderAssemblyRequirement
+        if s.get(OrderAssemblyRequirement, group.id):
+            raise HTTPException(409, 'Correct this Google part number / assembly number from P.O. setup before registering its physical assemblies')
         for mapping in s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id == group.id)):
             item = lock_item(s, mapping.item_id)
             if item.released or s.get(FlowPlan, item.id):
@@ -583,8 +591,12 @@ def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Dep
 @router.post('/{project_id}/assemblies', status_code=201)
 def create_assembly(project_id: str, data: CreateAssemblyIn, user: Employee = Depends(auth), s: Session = Depends(db)):
     from administration import employee_is_removed
+    from order_setup import guard_assembly_registration, OrderAssemblyRequirement
     row = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, data.gpn_id)
+    guard_assembly_registration(s, group, data.required_spools, item_id=data.item_id)
+    if s.get(OrderAssemblyRequirement, group.id) and _key(data.assembly_part_number) != group.normalized_gpn:
+        raise HTTPException(409, 'The assembly part number must match the planned Google part number / assembly number')
     if s.get(OrderAssembly, data.item_id):
         raise HTTPException(409, 'This physical assembly already belongs to an order GPN')
     if data.create_item:
@@ -602,6 +614,8 @@ def create_assembly(project_id: str, data: CreateAssemblyIn, user: Employee = De
         audit(s, item.id, user.badge, 'ITEM_CREATED', {**values, 'kind': 'Assembly', 'project': project_id, 'source': 'purchase_order'})
     else:
         item = lock_item(s, data.item_id)
+    if s.get(OrderAssemblyRequirement, group.id) and _key(item.google_part_number) != group.normalized_gpn:
+        raise HTTPException(409, 'The physical assembly Google part number must match the planned assembly number')
     _validate_assembly_scope(s, row, item, data.required_spools)
     mapping = OrderAssembly(item_id=item.id, gpn_id=group.id, assembly_part_number=data.assembly_part_number,
                             required_spools=data.required_spools, notes=data.notes, created_by=user.badge)
@@ -614,8 +628,13 @@ def create_assembly(project_id: str, data: CreateAssemblyIn, user: Employee = De
 
 @router.patch('/{project_id}/assemblies/{item_id}')
 def edit_assembly(project_id: str, item_id: str, data: EditAssemblyIn, user: Employee = Depends(auth), s: Session = Depends(db)):
+    from order_setup import guard_assembly_registration, OrderAssemblyRequirement
     row = _locked(s, project_id, data.expected_version, user)
     mapping = _assembly(s, project_id, item_id)
+    group = _gpn(s, project_id, mapping.gpn_id)
+    guard_assembly_registration(s, group, data.required_spools, item_id=item_id)
+    if s.get(OrderAssemblyRequirement, group.id) and _key(data.assembly_part_number) != group.normalized_gpn:
+        raise HTTPException(409, 'The assembly part number must match the planned Google part number / assembly number')
     item = lock_item(s, item_id)
     if data.required_spools != mapping.required_spools or data.assembly_part_number != mapping.assembly_part_number:
         if item.released or s.get(FlowPlan, item.id):
@@ -639,6 +658,7 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
                              user: Employee = Depends(auth), s: Session = Depends(db)):
     """Create the GPN and its physical assembly as one versioned transaction."""
     from administration import employee_is_removed
+    from order_setup import guard_assembly_registration, OrderAssemblyRequirement
     from removals import require_active_gpn
     order = _locked(s, project_id, data.expected_version, user)
     if data.gpn_id:
@@ -651,7 +671,7 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
         if group:
             require_active_gpn(s, group.id)
     previous_group = _row(group, GPN_FIELDS) if group else None
-    if group and s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
+    if group and not s.get(OrderAssemblyRequirement, group.id) and s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
         raise HTTPException(409, 'That GPN / assembly already exists in this P.O. Open its existing spool list instead of creating a duplicate.')
     if group is None:
         group = OrderGpn(id=new_id('OGPN'), project_id=project_id, gpn=data.gpn,
@@ -678,6 +698,9 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
         item = lock_item(s, data.item_id)
     if s.get(OrderAssembly, item.id):
         raise HTTPException(409, 'This physical assembly already belongs to a GPN / assembly entry')
+    if s.get(OrderAssemblyRequirement, group.id) and _key(item.google_part_number) != group.normalized_gpn:
+        raise HTTPException(409, 'The physical assembly Google part number must match the planned assembly number')
+    guard_assembly_registration(s, group, data.required_spools, item_id=item.id)
     _validate_assembly_scope(s, order, item, data.required_spools)
     mapping = OrderAssembly(item_id=item.id, gpn_id=group.id, assembly_part_number=group.gpn,
                             required_spools=data.required_spools, notes=data.notes, created_by=user.badge)
@@ -695,11 +718,15 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
 def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAssemblyIn,
                            user: Employee = Depends(auth), s: Session = Depends(db)):
     """Correct one combined number without rewriting unrelated legacy identities."""
+    from order_setup import guard_assembly_registration, OrderAssemblyRequirement
     order = _locked(s, project_id, data.expected_version, user)
     mapping = _assembly(s, project_id, item_id)
     group = _gpn(s, project_id, mapping.gpn_id)
     item = lock_item(s, item_id)
     number_changed = data.gpn != group.gpn
+    guard_assembly_registration(s, group, data.required_spools, item_id=item_id)
+    if number_changed and s.get(OrderAssemblyRequirement, group.id):
+        raise HTTPException(409, 'This planned assembly number is locked by registered physical records; its P.O. setup and identities are preserved')
     if number_changed or data.required_spools != mapping.required_spools:
         if item.released or s.get(FlowPlan, item.id):
             raise HTTPException(409, 'Correct the GPN / assembly number and required spool count before starting its traveler or releasing the assembly')

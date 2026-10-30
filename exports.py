@@ -40,6 +40,7 @@ from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_sna
 from transfers import ItemTransferState, TransferLocation
 from administration import EmployeeAccessState, EmployeeRemovalState
 from orders import PurchaseOrder, OrderGpn, OrderAssembly
+from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
 from removals import RecordRemoval
 
 
@@ -92,6 +93,8 @@ TABLE_SPECS = (
     _spec(PurchaseOrder, 'Purchase orders', 'project_id purchase_order normalized_number customer normalized_customer notes version created_by created_at updated_at', 'project_id'),
     _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn description created_by created_at updated_at'),
     _spec(OrderAssembly, 'Order assemblies', 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at', 'item_id'),
+    _spec(OrderAssemblyRequirement, 'Assembly quantity plans', 'gpn_id assembly_quantity created_by created_at updated_at', 'gpn_id'),
+    _spec(OrderSpoolRequirement, 'Spool quantity plans', 'id gpn_id spool_number normalized_number quantity_per_assembly active created_by created_at updated_at'),
     _spec(Subproject, 'Subprojects', 'id project_id name description created_by created_at'),
     _spec(SpoolPlan, 'Spool plans', 'item_id project_id subproject_id assembly_id planned_welds drawing_revision due_date notes zero_weld_reason version created_by created_at updated_at', 'item_id'),
     _spec(RequirementTemplate, 'Weld templates', 'id code name revision source requirements required_operations created_by created_at'),
