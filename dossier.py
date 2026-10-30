@@ -698,6 +698,8 @@ def get_project(project_id:str,user:Employee=Depends(auth),s:Session=Depends(db)
 def configure_project(project_id:str,data:ConfigIn,user:Employee=Depends(auth),s:Session=Depends(db)):
     require_capability(user,'dossier_manage')
     cfg=_locked(s,project_id,data.expected_version)
+    from orders import guard_dossier_purchase_order
+    guard_dossier_purchase_order(s,project_id,data.purchase_order)
     _lock_items(s,project_id)
     if cfg and (cfg.shipping_gate!=data.shipping_gate or cfg.customer_approval_required!=data.customer_approval_required):
         require_capability(user,'dossier_review')

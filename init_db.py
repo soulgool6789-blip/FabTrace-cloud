@@ -62,6 +62,6 @@ def initialize():
                 print('Created bootstrap administrator')
             else:
                 print('Employee accounts already exist; bootstrap skipped')
-    print('Schema ready: legacy records preserved; administration, weld, timing, process flow, transfers, audit readiness and Job Packet tables available')
+    print('Schema ready: legacy records preserved; purchase orders, administration, weld, timing, process flow, transfers, audit readiness and Job Packet tables available')
 if __name__=='__main__':initialize()
 

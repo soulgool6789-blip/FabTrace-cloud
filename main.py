@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.29-employees.1'
+APP_VERSION='2026.10.30-orders.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -537,6 +537,9 @@ def health(s:Session=Depends(db)):
     s.execute(select(TransferLocation.id).limit(1))
     s.execute(select(EmployeeAccessState.badge).limit(1))
     s.execute(select(EmployeeRemovalState.badge).limit(1))
+    s.execute(select(PurchaseOrder.project_id).limit(1))
+    s.execute(select(OrderGpn.id).limit(1))
+    s.execute(select(OrderAssembly.item_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -574,6 +577,12 @@ app.include_router(transfers_router)
 from administration import router as administration_router, EmployeeAccessState, EmployeeRemovalState
 app.include_router(administration_router)
 
+from orders import router as orders_router, PurchaseOrder, OrderGpn, OrderAssembly
+app.include_router(orders_router)
+
 from exports import router as exports_router
 app.include_router(exports_router)
+
+from orders_excel import router as orders_excel_router
+app.include_router(orders_excel_router)
 

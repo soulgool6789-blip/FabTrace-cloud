@@ -220,7 +220,7 @@
     if(state.view==='weld' && state.weld) html=renderWeld();
     else if(state.view==='spool' && state.spool) html=renderSpool();
     else {
-      const actions=manage()?btn('new-project','New project')+btn('new-subproject','New subproject')+btn('plan-spool','Add / assign spool','','primary'):'';
+      const actions=manage()?(window.FabOrders?btn('purchase-orders','Start purchase order','','primary'):'')+btn('new-project','New project')+btn('new-subproject','New subproject')+btn('plan-spool','Add / assign spool','','primary'):'';
       html=pageHeading('Projects & welds','Track each work package, spool, and individual joint through production, evidence review, and final release.',actions)+toolbar()+tabs();
       if(state.view==='overview') html+=renderOverview();
       if(state.view==='spools') html+=renderSpoolRegister();
@@ -462,14 +462,14 @@
     if(!arr(state.overview?.projects).length)return newProject();
     dialog('Create subproject / work package',grid(field('project_id','Project',state.project,{required:true,options:arr(state.overview.projects).map(p=>[p.id,`${p.id} · ${p.name}`])})+field('id','Subproject ID','',{required:true,maxlength:80})+field('name','Subproject name','',{required:true,maxlength:200})+field('description','Scope / description','',{type:'textarea',full:true})),data=>request('/subprojects','POST',data));
   }
-  function planSpool() {
+  function planSpool(prefill={}) {
     if(!arr(state.overview?.projects).length)return newProject();
     const existing=state.spool?.plan, item=state.spool?.item;
-    const project=existing?.project_id||state.project||arr(state.overview.projects)[0]?.id||'';
+    const project=existing?.project_id||prefill.project||state.project||arr(state.overview.projects)[0]?.id||'';
     const suboptions = projectId => [['','No subproject'],...arr(state.overview.subprojects).filter(s=>s.project_id===projectId).map(s=>[s.id,`${s.id} · ${s.name}`])];
     let html='<p class="ft-required-note">Assign an existing item to a project and define its weld plan. Create a new item from the Items screen first if it is not registered.</p>';
     if(item?.welds_done&&!existing)html+='<div class="notice">This item has aggregate weld history. Defining individual joints does not certify those historical welds; record and review each joint before individual QA acceptance.</div>';
-    html+=grid(field('item_id','Existing item / spool ID',item?.id||'',{required:true,disabled:Boolean(item),maxlength:60})+field('project_id','Project',project,{required:true,options:arr(state.overview.projects).map(p=>[p.id,`${p.id} · ${p.name}`])})+field('subproject_id','Subproject / work package',existing?.subproject_id||state.subproject,{options:suboptions(project)})+field('assembly_id','Existing assembly ID (optional)',existing?.assembly_id||'',{maxlength:60,help:'Must identify an existing item whose type is Assembly.'})+field('planned_welds','Planned individual welds',existing?.planned_welds??item?.welds_required??0,{required:true,type:'number',min:0,max:10000,step:1})+field('drawing_revision','Drawing / revision',existing?.drawing_revision||item?.drawing||'',{maxlength:80})+field('due_date','Target completion date',existing?.due_date||'',{type:'date'})+field('zero_weld_reason','Reason if planned welds is zero',existing?.zero_weld_reason||'',{maxlength:1000})+field('notes','Planning notes',existing?.notes||'',{type:'textarea',full:true}));
+    html+=grid(field('item_id','Existing item / spool ID',item?.id||'',{required:true,disabled:Boolean(item),maxlength:60})+field('project_id','Project',project,{required:true,options:arr(state.overview.projects).map(p=>[p.id,`${p.id} · ${p.name}`])})+field('subproject_id','Subproject / work package',existing?.subproject_id||state.subproject,{options:suboptions(project)})+field('assembly_id','Existing assembly ID (optional)',prefill.assembly_id??existing?.assembly_id??'',{maxlength:60,help:'Must identify an existing item whose type is Assembly.'})+field('planned_welds','Planned individual welds',existing?.planned_welds??item?.welds_required??0,{required:true,type:'number',min:0,max:10000,step:1})+field('drawing_revision','Drawing / revision',existing?.drawing_revision||item?.drawing||'',{maxlength:80})+field('due_date','Target completion date',existing?.due_date||'',{type:'date'})+field('zero_weld_reason','Reason if planned welds is zero',existing?.zero_weld_reason||'',{maxlength:1000})+field('notes','Planning notes',existing?.notes||'',{type:'textarea',full:true}));
     dialog(existing?'Edit spool plan':'Set up spool tracking',html,async data=>{
       const itemId=item?.id||data.item_id.trim();
       const planned=Number(data.planned_welds);
@@ -595,6 +595,7 @@
     if(action==='open-weld')return open({weld:id,spool:state.spool?.item?.id});
     if(action==='back-spool')return open({spool:state.spool.item.id});
     if(action==='item-record')return openItem(id);
+    if(action==='purchase-orders'&&manage()&&window.FabOrders)return window.FabOrders.open({create:true});
     if(action==='new-project')return newProject();
     if(action==='new-subproject')return newSubproject();
     if(action==='plan-spool'){state.spool=null;state.weld=null;return planSpool()}
@@ -642,5 +643,15 @@
   node('trackingDialogCancel').onclick=()=>node('trackingDialog').close();
   node('navTracking').onclick=()=>open({view:'overview'});
   node('itemTrackingBtn').onclick=()=>{if(current)open({spool:current.id})};
-  window.FabTracking={open,refresh,cancelPending(){state.sequence++;stopProcessClock()}};
+  async function openPlan(options={}){
+    if(!manage())throw Error('Production planning permission is required.');
+    state.overview=null;await open({project:options.project||'',subproject:'',spool:options.item_id||'',view:'spools',resetFilters:true});
+    if(!state.overview)return;
+    if(options.item_id&&state.spool?.item?.id!==options.item_id)return;
+    if(state.spool?.item?.released)throw Error('Released items must be returned to work through the existing controlled process before editing their plan.');
+    if(options.assembly_id&&state.spool?.item?.kind!=='Spool')throw Error('Select a physical Spool record to link to the assembly.');
+    if(options.project&&state.spool?.plan?.project_id&&state.spool.plan.project_id!==options.project)throw Error('This spool belongs to a different project.');
+    return planSpool({project:options.project,assembly_id:options.assembly_id});
+  }
+  window.FabTracking={open,openPlan,refresh,cancelPending(){state.sequence++;stopProcessClock()}};
 })();

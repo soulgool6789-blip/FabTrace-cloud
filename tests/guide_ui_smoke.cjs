@@ -129,7 +129,7 @@ async function check(name,fn){await fn();checks.push(name);}
   await check('roles explain ownership without granting mutations',async()=>{
     setProjects(complete());
     const roles={handler:/Material coordination/,welder:/root and fill/,fitup_welder:/Fit-up and tack/,process_welder:/PWHT/,painter:/Sandblast and paint/,finisher:/Component preparation/,misc:/General support/,supervisor:/specialized work and QA acceptance/,inspector:/QA\/QC inspections/,admin:/Full site administration/};
-    const allowed=new Set(['topic','refresh','project','tracking','progress','dossier','item','flow-item','packet','print','clear','items','flow','quality','parts','admin']);
+    const allowed=new Set(['topic','refresh','project','tracking','progress','dossier','item','flow-item','packet','print','clear','items','flow','quality','parts','admin','orders']);
     for(const [role,expectation] of Object.entries(roles)){context.me.role=role;await context.FabGuide.open({project:'P1'});const note=html().match(/<p class="fg-role">([\s\S]*?)<\/p>/)[1];assert.match(note,expectation);assert.match(note,/only reads existing records/);for(const m of html().matchAll(/data-guide-action="([^"]+)"/g))assert.ok(allowed.has(m[1]),'guide must navigate to the permission-enforcing screen: '+m[1]);}
     assert.equal(calls.filter(c=>c.method&&c.method!=='GET').length,0);
   });

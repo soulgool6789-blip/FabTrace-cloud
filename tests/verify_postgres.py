@@ -711,6 +711,109 @@ def verify_concurrent_parts_allocation(application, api):
             "readonly_views_and_export": 5, "write_locks_on_reads": 0, "mutations_on_reads": 0}
 
 
+def verify_purchase_order_transactions(application, api):
+    """A PO revision and assembly capacity remain consistent under real locks."""
+    from orders import PurchaseOrder, OrderGpn, OrderAssembly
+    from test_progress import database_state
+
+    def race(calls):
+        gate, seen = Barrier(2), set()
+
+        def synchronize(connection, cursor, statement, parameters, context, many):
+            if "pg_advisory_xact_lock" in statement and id(connection) not in seen:
+                seen.add(id(connection))
+                gate.wait(timeout=15)
+
+        def submit(call):
+            worker = TestAPI(application, application.SessionLocal)
+            try:
+                method, path, body = call
+                response = worker.request(method, path, json=body)
+                return {"status": response.status_code, "body": response.json()}
+            finally:
+                worker.client.close()
+
+        event.listen(application.engine, "before_cursor_execute", synchronize)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = [f.result(timeout=30) for f in [pool.submit(submit, call) for call in calls]]
+        finally:
+            event.remove(application.engine, "before_cursor_execute", synchronize)
+        assert sum(r['status'] in (200, 201) for r in results) == 1, results
+        assert sum(r['status'] == 409 for r in results) == 1, results
+        return sorted(r['status'] for r in results)
+
+    with application.SessionLocal() as session:
+        projects_before = session.query(application.Base.metadata.tables['tracking_projects']).count()
+    duplicate_codes = race([('POST', '/api/orders', {
+        'purchase_order': 'PG-PO-001', 'customer': 'Synthetic PO customer', 'expected_version': 0,
+        'notes': 'Disposable PostgreSQL race test',
+    }) for _ in range(2)])
+    with application.SessionLocal() as session:
+        order = session.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order == 'PG-PO-001'))
+        project_id = order.project_id
+        assert session.query(application.Base.metadata.tables['tracking_projects']).count() == projects_before + 1
+    root = '/api/orders/' + project_id
+    gpn_codes = race([('POST', root + '/gpns', {'expected_version': 1, 'gpn': gpn})
+                      for gpn in ['PG-GPN-A', 'PG-GPN-B']])
+    detail = ok(api.get(root))
+    assert detail['order']['version'] == 2 and len(detail['gpns']) == 1
+    gpn_id = detail['gpns'][0]['id']
+    assembly = 'PG-ORDER-ASSEMBLY'
+    detail = ok(api.post(root + '/assemblies', {
+        'expected_version': 2, 'gpn_id': gpn_id, 'item_id': assembly,
+        'assembly_part_number': '00042', 'required_spools': 1,
+        'create_item': {'id': assembly, 'description': 'Synthetic assembly for PO concurrency',
+            'location': 'Test rack', 'handler': BADGES['handler'], 'drawing': 'PG-DWG Rev TEST'},
+    }), 201)
+    ok(api.post('/api/tracking/spools/' + assembly + '/plan', {
+        'project_id': project_id, 'planned_welds': 0,
+        'zero_weld_reason': 'Synthetic assembly has no added joining welds', 'drawing_revision': 'TEST',
+    }))
+    spools = ['PG-ORDER-SPOOL-A', 'PG-ORDER-SPOOL-B']
+    for spool in spools:
+        ok(api.post('/api/items', {'id': spool, 'description': 'Synthetic physical spool', 'kind': 'Spool',
+            'project': project_id, 'location': 'Test rack', 'handler': BADGES['handler'], 'welds_required': 1}), 201)
+    capacity_codes = race([('POST', '/api/tracking/spools/' + spool + '/plan', {
+        'project_id': project_id, 'planned_welds': 1, 'assembly_id': assembly, 'drawing_revision': 'TEST',
+    }) for spool in spools])
+    detail = ok(api.get(root))
+    assert detail['assemblies'][0]['linked_spools'] == 1
+    assert detail['assemblies'][0]['ready_spools'] == 0
+    scope_codes = race([
+        ('POST', '/api/flow/items/' + assembly + '/start', {'route': 'assembly', 'expected_children': 1}),
+        ('PATCH', root + '/assemblies/' + assembly, {
+            'expected_version': detail['order']['version'], 'assembly_part_number': '00042',
+            'required_spools': 2, 'reason': 'Synthetic simultaneous scope correction',
+        }),
+    ])
+    with application.SessionLocal() as session:
+        from flow import FlowPlan
+        scope = session.get(OrderAssembly, assembly)
+        traveler = session.get(FlowPlan, assembly)
+        assert (traveler and traveler.expected_children == scope.required_spools == 1) or (not traveler and scope.required_spools == 2)
+        assert session.query(OrderGpn).filter_by(project_id=project_id).count() == 1
+
+    before, unsafe = database_state(api), []
+
+    def observe(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if sql.startswith(('INSERT', 'UPDATE', 'DELETE')) or 'FOR UPDATE' in sql or 'PG_ADVISORY_XACT_LOCK' in sql:
+            unsafe.append(statement)
+
+    event.listen(application.engine, 'before_cursor_execute', observe)
+    try:
+        for path in ['/api/orders', root, root + '/bom.xlsx', root + '/bom-template.xlsx']:
+            response = api.get(path, role='handler')
+            assert response.status_code == 200, response.text[:500]
+    finally:
+        event.remove(application.engine, 'before_cursor_execute', observe)
+    assert not unsafe and database_state(api) == before
+    return {'duplicate_po': duplicate_codes, 'stale_gpn_revision': gpn_codes,
+        'assembly_capacity': capacity_codes, 'traveler_vs_order_scope': scope_codes,
+        'orphan_projects': 0, 'invented_ready_spools': 0, 'readonly_views_and_workbooks': 4}
+
+
 def verify_concurrent_transfers(application, api):
     """Exercise actual PostgreSQL serialization across ordinary and flow moves."""
     from test_flow import action_body, create_item, detail, enroll
@@ -1182,6 +1285,7 @@ def verify(dsn):
         parts = importlib.import_module("parts")
         transfers = importlib.import_module("transfers")
         administration = importlib.import_module("administration")
+        orders = importlib.import_module("orders")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -1215,6 +1319,8 @@ def verify(dsn):
                 assert session.query(model).count() == 0, "Migration invented transfer status or custom shop locations"
             assert session.query(administration.EmployeeAccessState).count() == 0, "Migration changed existing employee access or sessions"
             assert session.query(administration.EmployeeRemovalState).count() == 0, "Migration removed an existing employee"
+            for model in (orders.PurchaseOrder, orders.OrderGpn, orders.OrderAssembly):
+                assert session.query(model).count() == 0, "Migration invented purchase-order scope"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -1237,6 +1343,7 @@ def verify(dsn):
         dossier_concurrency = verify_concurrent_dossier_mutation(application, dossier, api)
         dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
         parts_concurrency = verify_concurrent_parts_allocation(application, api)
+        order_concurrency = verify_purchase_order_transactions(application, api)
         transfer_concurrency = verify_concurrent_transfers(application, api)
         admin_dispositions = verify_admin_dispositions(application, api)
         queued_permissions = verify_queued_permission_revocation(application, api)
@@ -1262,6 +1369,7 @@ def verify(dsn):
             "concurrent_quality_evidence": quality_concurrency,
             "concurrent_dossier_mutation": dossier_concurrency,
             "concurrent_parts_allocation": parts_concurrency,
+            "purchase_order_transactions": order_concurrency,
             "concurrent_transfers": transfer_concurrency,
             "administrative_dispositions": admin_dispositions,
             "queued_permission_revocation": queued_permissions,

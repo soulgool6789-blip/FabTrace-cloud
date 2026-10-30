@@ -7,6 +7,9 @@ This guide describes the implemented tracking extension and the constraints that
 | File | Responsibility |
 | --- | --- |
 | `main.py` | Shared SQLAlchemy models, sessions, authentication, employee/item/QR/custody APIs, legacy inspections and release, middleware, `/healthz`, and tracking-router integration. |
+| `orders.py` | Explicit PO/project enrollment, GPN groups, physical assembly part numbers and spool-count scope, versioned audited changes and existing-plan/traveler guards. |
+| `orders_excel.py` | Scoped read-only BOM snapshots and editable planning templates using the existing standard-library XLSX writer. |
+| `static/orders.js`, `static/orders.css`, `ORDERS_GUIDE.md` | PO-first navigation, GPN/assembly planning, required/linked/ready counts, existing work shortcuts and Excel downloads. |
 | `tracking.py` | Tracking tables, validated request models, project/spool/weld APIs, authoritative work and acceptance checks, versions, holds, repairs, and rollups. |
 | `production.py` | Immutable spool process events, transition validation, visit/time projections, and automatic timer closure at final release. |
 | `flow.py` | CLM 24-step catalog, component/spool/assembly travelers, hierarchy gates, checklists, custody, exception loops, and shipment/delivery records. |
@@ -36,7 +39,30 @@ This guide describes the implemented tracking extension and the constraints that
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration and export routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata`.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
+
+## Purchase-order hierarchy and API
+
+`purchase_orders.project_id` references the unchanged structured Project. Creating a PO atomically creates that project or explicitly attaches an existing one with a reason. `order_gpns` groups assemblies within the PO. `order_assemblies.item_id` references the existing physical Assembly Item and stores its distinct assembly part number and required spool count. Spools retain their existing `SpoolPlan.project_id` and `assembly_id`; component BOMs retain the existing parts-plan/line/allocation tables. No existing data is automatically enrolled or renamed.
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /api/orders` | Order register, counts, unassigned structured projects and management permissions. |
+| `POST /api/orders` | Create PO/project together or explicitly attach an existing project. Initial expected version is zero. |
+| `GET /api/orders/{project_id}` | PO/GPN/assembly detail, current spool readiness, eligible assembly links and change history. |
+| `PATCH /api/orders/{project_id}` | Correct PO details using expected version and reason; an existing Job Packet PO must agree. |
+| `POST /api/orders/{project_id}/gpns` | Add a GPN group at the current order version. |
+| `PATCH /api/orders/{project_id}/gpns/{gpn_id}` | Correct group metadata with a reason; controlled production prevents GPN renumbering. |
+| `POST /api/orders/{project_id}/assemblies` | Attach an eligible physical Assembly or atomically create it, with its part number and required spool count. |
+| `PATCH /api/orders/{project_id}/assemblies/{item_id}` | Versioned assembly metadata/count correction; active traveler or release locks count and part number. |
+| `GET /api/orders/{project_id}/bom.xlsx` | Read-only material/progress workbook; optional validated `gpn_id` and `assembly_id` filters. |
+| `GET /api/orders/{project_id}/bom-template.xlsx` | Editable offline planning template for the same validated scope. No import/write occurs. |
+
+All writes require administrator/supervisor authority, the current order version and the existing topology lock. Changes append immutable `ORDER_*` Audit events with before/after scope. Duplicate normalized customer/PO and per-order GPN identities are constrained in the database. Failed duplicate creation rolls back its new project. Required spool counts are strict integers from 1 to 10,000; matching guards in legacy planning, spool linking and traveler setup prevent alternate endpoints from overfilling or moving enrolled assemblies across scope. Assembly registration does not manufacture a zero-weld plan, a traveler or QA acceptance.
+
+Read endpoints release the authentication connection before opening their separate consistent snapshot. PostgreSQL uses REPEATABLE READ READ ONLY; SQLite uses an explicit read transaction. Ready counts require current ordinary QA readiness and the completed spool route; administrative release does not silently satisfy that measure. PO detail includes missing/planning blockers and a lightweight `order_scope` is exposed in flow detail. Existing issued dossier snapshots are never rewritten by order enrollment or read views.
+
+The two scoped workbooks reuse `exports.WorkbookWriter`, preserving text identifiers and literal formula-like input, numeric quantities and long-text continuation handling. They include assembly summary, material/template, spool register and export information. Quantities are taken once from each actual physical spool's parts plan. Missing spool/BOM scope is explicit; unknown quantities stay blank. Unfiltered exports include unmapped legacy project items with a planning warning. All active supported roles can read these workbooks; the full backend workbook remains administrator-only and now also includes the three new order tables. No runtime dependency, upload endpoint or Excel synchronization is added.
 
 ## Data relationships
 
