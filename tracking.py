@@ -790,8 +790,10 @@ def tracking_summary(s, item):
 def requirement_dict(s, req, user=None):
     out = asdict(req, REQUIREMENT_KEYS)
     if user is not None:
-        out['permissions'] = {'can_submit_evidence': can_submit_requirement_evidence(user, req),
-                              'can_review': has_capability(user, 'quality_review')}
+        from removals import item_is_removed
+        active = not item_is_removed(s, req.item_id)
+        out['permissions'] = {'can_submit_evidence': active and can_submit_requirement_evidence(user, req),
+                              'can_review': active and has_capability(user, 'quality_review'), 'can_mutate': active}
     out['check'] = req.check_kind
     out['satisfied'] = _requirement_satisfied(s, req)
     out['check_errors'] = _check_errors(s, req)
@@ -807,7 +809,11 @@ def requirement_dict(s, req, user=None):
 def weld_dict(s, weld, user=None):
     out = asdict(weld, WELD_KEYS)
     if user is not None:
-        out['allowed_operations'] = list(WELD_OPERATIONS.get(user.role, ()))
+        from removals import item_is_removed, removal_summary
+        active = not item_is_removed(s, weld.item_id)
+        out['allowed_operations'] = list(WELD_OPERATIONS.get(user.role, ())) if active else []
+        out['removal'] = removal_summary(s, 'item', weld.item_id)
+        out['can_mutate'] = active
     out['production_complete'] = _production_complete(s, weld)
     out['qa_accepted'] = _qa_accepted(s, weld)
     out['blockers'] = _weld_blockers(s, weld)
@@ -831,8 +837,10 @@ def spool_dict(s, item, user=None):
     from parts import parts_summary
     from administration import release_summary
     from production import with_process_permissions
+    from removals import item_is_removed, removal_summary
     parts = parts_summary(s, item.id)
     return {
+        **({'removal': removal_summary(s, 'item', item.id), 'can_mutate': not item_is_removed(s, item.id)} if user is not None else {}),
         **({'parts': parts} if parts else {}),
         'item': {**asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
                  'release_control': release_summary(s, item)},
@@ -878,8 +886,9 @@ def _default_definitions(template=None):
 
 @router.get('/projects')
 def get_projects(u: Employee = Depends(auth), s: Session = Depends(db)):
+    from removals import project_not_removed
     return [asdict(row, 'id name client description created_by created_at'.split())
-            for row in s.scalars(select(Project).order_by(Project.name)).all()]
+            for row in s.scalars(select(Project).where(project_not_removed(Project.id)).order_by(Project.name)).all()]
 
 
 @router.post('/projects', status_code=201)
@@ -898,7 +907,8 @@ def create_project(data: ProjectIn, u: Employee = Depends(auth), s: Session = De
 
 @router.get('/subprojects')
 def get_subprojects(project_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
-    q = select(Subproject)
+    from removals import project_not_removed
+    q = select(Subproject).where(project_not_removed(Subproject.project_id))
     if project_id:
         q = q.where(Subproject.project_id == project_id)
     return [asdict(row, 'id project_id name description created_by created_at'.split())
@@ -908,10 +918,12 @@ def get_subprojects(project_id: str = '', u: Employee = Depends(auth), s: Sessio
 @router.post('/subprojects', status_code=201)
 def create_subproject(data: SubprojectIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import lock_topology
+    from removals import require_active_project
     lock_topology(s)
     permit(u, 'supervisor', 'admin')
     if not s.get(Project, data.project_id):
         raise HTTPException(422, 'Project not found')
+    require_active_project(s, data.project_id)
     if s.get(Subproject, data.id):
         raise HTTPException(409, 'Subproject ID already exists')
     row = Subproject(**data.model_dump(), created_by=u.badge)
@@ -957,6 +969,7 @@ def get_spool(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db
 @router.post('/spools/{item_id}/plan')
 def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import lock_topology
+    from removals import require_active_item, require_active_project
     lock_topology(s)
     permit(u, 'supervisor', 'admin')
     # Serialize topology before Item locks. The same boundary revalidates
@@ -965,6 +978,9 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     require_unreleased(item)
     if not s.get(Project, data.project_id):
         raise HTTPException(422, 'Project not found')
+    require_active_project(s, data.project_id)
+    if data.assembly_id:
+        require_active_item(s, data.assembly_id)
     if data.subproject_id:
         sub = s.get(Subproject, data.subproject_id)
         if not sub or sub.project_id != data.project_id:
@@ -1331,7 +1347,9 @@ def close_hold(hold_id: int, data: CloseHoldIn, u: Employee = Depends(auth), s: 
 
 
 def _filtered_items(s, project_id='', subproject_id=''):
-    q = select(Item).join(SpoolPlan, SpoolPlan.item_id == Item.id)
+    from removals import item_not_removed, project_not_removed
+    q = select(Item).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(
+        item_not_removed(), project_not_removed(SpoolPlan.project_id))
     if project_id:
         q = q.where(SpoolPlan.project_id == project_id)
     if subproject_id:

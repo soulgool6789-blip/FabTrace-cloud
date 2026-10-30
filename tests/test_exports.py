@@ -25,6 +25,7 @@ TABLES = {
     "Employees": ("main", "Employee"),
     "Employee access states": ("administration", "EmployeeAccessState"),
     "Employee removal states": ("administration", "EmployeeRemovalState"),
+    "Removed record states": ("removals", "RecordRemoval"),
     "Items": ("main", "Item"),
     "Inspections": ("main", "Inspection"),
     "Reworks": ("main", "Rework"),

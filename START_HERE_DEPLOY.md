@@ -1,5 +1,9 @@
 # Deploy or update FabTrace Cloud on Render
 
+### Record removal release: `2026.10.30-removal.1`
+
+Include `removals.py`, `static/removals.js`, `static/removals.css`, the synchronized HTML shells and the reviewed active-scope integration changes. The existing `python init_db.py` pre-deploy step adds one absent table, `record_removals`; no existing rows are removed or enrolled. Health checks now verify that table too. Keep the existing service/database and all nineteen immutable history protections. The release adds administrator-only removal previews and restoration, with explicit scope confirmation and reasons. Do not test by removing real customer work: validate release health/assets and read-only retained-record counts after deployment, then let an administrator choose the actual entries to remove.
+
 ## Update the existing FabTrace service first
 
 **Use the existing web service and its existing PostgreSQL database.** Adding project, spool, and individual-weld tracking does not require creating a second service, a second database, or a new Blueprint.

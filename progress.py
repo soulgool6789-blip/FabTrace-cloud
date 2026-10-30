@@ -263,8 +263,10 @@ def _configured(s):
 
 @router.get('/projects')
 def projects(user: Employee = Depends(auth), s: Session = Depends(db)):
-    projects = s.scalars(select(Project).order_by(Project.id)).all()
-    rows = project_rows(s)
+    from removals import item_not_removed, project_not_removed
+    projects = s.scalars(select(Project).where(project_not_removed(Project.id)).order_by(Project.id)).all()
+    active_ids = set(s.scalars(select(Item.id).where(item_not_removed())))
+    rows = [row for row in project_rows(s) if row['id'] in active_ids]
     configured = _configured(s)
     return {'as_of': _stamp(utcnow()), 'definitions': DEFINITIONS,
             'projects': [summarize(p, [r for r in rows if r['project_id'] == p.id], p.id in configured) for p in projects]}
@@ -279,7 +281,12 @@ def project_progress(project_id: str,
     project = s.get(Project, project_id)
     if not project:
         raise HTTPException(404, 'Project not found')
+    from removals import item_not_removed, project_is_removed, removal_summary
+    removed = project_is_removed(s, project_id)
     rows = project_rows(s, project_id)
+    if not removed:
+        active_ids = set(s.scalars(select(Item.id).where(item_not_removed())))
+        rows = [row for row in rows if row['id'] in active_ids]
     counts = summarize(project, rows, project_id in _configured(s))
     matches = []
     needle = search.strip().casefold()
@@ -301,6 +308,7 @@ def project_progress(project_id: str,
         (lambda r: r['id']) if sort == 'id' else (lambda r: (order[r['status']], r['id']))))
     matches.sort(key=key)
     return {'project': {'id': project.id, 'name': project.name, 'client': project.client},
+        'removal': removal_summary(s, 'order', project_id), 'can_mutate': not removed,
         'as_of': _stamp(utcnow()), 'definitions': DEFINITIONS, 'counts': counts,
         'subprojects': [{'id': p.id, 'name': p.name} for p in s.scalars(select(Subproject).where(Subproject.project_id == project_id).order_by(Subproject.id))],
         'items': matches, 'total': len(matches)}

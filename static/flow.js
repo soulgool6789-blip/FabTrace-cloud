@@ -20,7 +20,8 @@
   const clocks=new WeakMap();
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
-  const can=action=>arr(state.detail?.allowed_actions).includes(action);
+  const removed=()=>state.detail?.removal?.removed===true||state.detail?.item?.removal?.removed===true;
+  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action);
   const action=(name,label,id='',className='')=>`<button type="button" class="${esc(className)}" data-flow-action="${esc(name)}"${id?` data-flow-id="${esc(id)}"`:''}>${esc(label)}</button>`;
   const option=(value,label,selected='')=>`<option value="${esc(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
   const secondary=text=>`<span class="ff-secondary">${esc(text)}</span>`;
@@ -250,10 +251,11 @@
   function renderDetail(){
     const detail=state.detail,item=detail.item,flow=detail.flow;
     let controls=action('board','Process board')+action('item-record','Item & QR record',item.id);
-    if(me?.role==='admin')controls+=action('admin-controls','Admin controls',item.id);
+    if(me?.role==='admin'&&!removed())controls+=action('admin-controls','Admin controls',item.id);
     if(['spool','assembly'].includes(flow?.route||detail.suggested_route)||['Spool','Assembly'].includes(item.kind))controls+=action('weld-record','Individual welds',item.id);
     if((flow?.route||detail.suggested_route)==='spool'||item.kind==='Spool')controls+=action('spool-parts','Spool parts',item.id);
     let html=heading(item.id,item.kind||'Fabrication item',controls)+lookup();
+    if(removed())html+='<div class="fr-removed-notice"><strong>Removed record · History only</strong><p>Its process route, checks and timing are retained. Open Item &amp; QR record to review or restore its removed group.</p></div>';
     if(state.notice)html+=`<div class="ff-error" role="alert">${esc(state.notice)}</div>`;
     if(!flow){
       html+=`<section class="card"><h2>Start a numbered process route</h2>${metadata([['Item type',item.kind],['Project',item.project],['Location',item.location],['Current handler',item.handler]])}<p>Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Begin at the first step, or record a documented starting point for existing work.</p>${can('start')?action('start','Set up process route','','primary'):'<p class="muted">A supervisor or administrator can start this item’s route.</p>'}</section>`;

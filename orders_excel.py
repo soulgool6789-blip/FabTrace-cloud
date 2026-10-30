@@ -98,7 +98,9 @@ def _write(writer, name, headers, rows, *, json_columns=()):
 
 
 def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=False):
+    from removals import item_not_removed
     order = detail['order']
+    removed_order = bool(order.get('removal') and order['removal']['removed'])
     gpns, assemblies = _selection(detail, gpn_id, assembly_id)
     summary, bom, register = [], [], []
     seen_spools = set()
@@ -112,6 +114,8 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
         snapshot = parts_snapshot(session, spool_id)
         has_lines = bool(snapshot and snapshot['lines'])
         status = 'Planned' if has_lines else 'BOM not planned'
+        if removed_order:
+            status = 'Removed P.O — historical records; ' + status.lower()
         if unmapped:
             status = 'Not assigned to a PO assembly; ' + status.lower()
         totals = snapshot['totals'] if snapshot else {}
@@ -171,9 +175,11 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
     # Filters must never leak an unassigned or different-GPN material list.
     if gpn_id is None and assembly_id is None:
         unassigned_parent_ids = set()
-        for plan, item in session.execute(select(SpoolPlan, Item).join(Item, Item.id == SpoolPlan.item_id)
-                .where(SpoolPlan.project_id == order['project_id'], Item.kind != 'Assembly')
-                .order_by(SpoolPlan.item_id)):
+        unassigned_query = select(SpoolPlan, Item).join(Item, Item.id == SpoolPlan.item_id).where(
+            SpoolPlan.project_id == order['project_id'], Item.kind != 'Assembly')
+        if not removed_order:
+            unassigned_query = unassigned_query.where(item_not_removed(Item.id))
+        for plan, item in session.execute(unassigned_query.order_by(SpoolPlan.item_id)):
             if item.id in seen_spools:
                 continue
             flow = session.get(FlowPlan, item.id)
@@ -242,6 +248,8 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                             ('Project ID', project_id),
                             ('Project name', detail['order']['project_name']),
                             ('Order revision', detail['order']['version']),
+                            ('Record status', 'Removed P.O — retained history; restore before any new work' if detail['order'].get('removal', {}) and detail['order']['removal']['removed'] else 'Active P.O'),
+                            ('Removed records', 'Active P.O downloads exclude removed GPN/Assembly branches and removed unassigned items. Removed identities and their history remain in the administrator backend Excel export.'),
                             ('GPN / Assembly filter', gpn_id or 'All GPN / Assemblies'),
                             ('Physical assembly filter', assembly_id or 'All physical assemblies'),
                             ('Exported at', _utc(created_at)),

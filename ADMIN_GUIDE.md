@@ -1,5 +1,11 @@
 # FabTrace administrator controls
 
+## Removing P.O.s and physical items
+
+Use **Remove** in **Purchase orders**, the GPN / Assembly register, the inventory list or an item's detail screen. Review the affected scope, enter the displayed record number exactly and record a reason before confirming. A P.O. includes its project scope; a GPN / Assembly includes its physical descendants. Open timers and independently linked child items display the action needed before removal. Ordinary work and quality controls continue to apply.
+
+Removal hides the selected group from working lists and blocks new work on it while preserving its permanent identities, quantities, links, QR history and evidence. **Removed records → Restore** reverses the chosen removal batch with a reason; prior independent removals stay removed. Removed records are retained in the full backend Excel export under their original sheets and **Removed record states**. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for step-by-step instructions.
+
 Sign in with an active **administrator** account and open **Admin controls**. The workspace provides item release decisions, custody corrections, employee access management and shortcuts to the existing project, quality, location, activity-log and Excel screens. Other employee roles do not have access to these management actions.
 
 ## Release an item by administrator decision

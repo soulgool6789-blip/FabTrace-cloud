@@ -1,5 +1,28 @@
 # Purchase orders, assembly spool counts and Excel BOMs
 
+## Remove a P.O., GPN / Assembly or part
+
+Sign in as an **administrator**. Other positions can continue their permitted work but cannot remove or restore records.
+
+1. For a P.O., choose **Remove** beside the order or **Remove P.O** inside it. For a GPN / Assembly, use its row's **Remove** control. For a spool or other physical part, open **Item & QR** or find it in the inventory register and select **Remove**.
+2. Review the confirmation. It identifies the entry and shows the P.O.s, GPN / Assembly records and physical items included. Removing a P.O. includes its project scope. Removing an assembly includes its linked descendants; required quantities and links are retained.
+3. Enter the displayed record number exactly, add the reason, and confirm **Remove**. If the preview says a record changed, refresh the preview and review the current scope before confirming again.
+4. The removed group disappears from normal working lists. Its QR and historical records remain readable with a **Removed** warning; production, transfers, scope edits, approvals and release are blocked while it is removed.
+
+To undo a removal, open **Removed records**, locate the original removal group, choose **Restore**, review its affected entries, enter the displayed number and a reason, then confirm. Restore returns the same identities and links; it does not create duplicates or approve any work. Entries removed separately before a parent P.O. was removed stay removed until their own group is restored. Restore the parent first if a child group's preview requests it.
+
+### When removal is blocked
+
+- **Linked component or spool:** unassign it through **Spool parts**, or correct its parent link in the weld plan while that scope is still editable. You can remove the containing assembly or P.O. as a whole instead. Existing production locks still apply.
+- **Open process timer:** finish a standalone timer first. A timer owned by the numbered process route must close through the route's normal transitions. Removing a record does not finish fabrication or bypass QA/QC.
+- **Retained identity:** removed P.O. numbers and physical QR IDs remain reserved. Restore the existing record instead of creating another item with the same identity.
+
+Removing a required material line from a spool's BOM is a separate operation: edit the parts list and save the revised scope with its reference and reason. Unassign any allocated physical components first; existing scope locks remain enforced.
+
+The administrator's full backend Excel export includes **Removed record states** and the retained original records. Normal active P.O. BOM exports omit removed branches. A download opened from a removed P.O. is marked as retained historical data in **Export info**.
+
+## Normal order setup
+
 Start in **Purchase orders** (`/?orders=1`). New work follows:
 
 **P.O → GPN / Assembly → Spools.**

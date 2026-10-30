@@ -253,6 +253,8 @@ def _config(s, project_id):
 def _locked(s, project_id, expected):
     lock_topology(s)
     _project(s, project_id)
+    from removals import require_active_project
+    require_active_project(s, project_id)
     cfg = s.scalar(select(DossierProject).where(DossierProject.project_id == project_id).with_for_update().execution_options(populate_existing=True))
     version = cfg.version if cfg else 0
     if version != expected:
@@ -589,6 +591,12 @@ def _packet(s,item,user,_seen=None,_cache=None):
 
 def item_detail(s,item,user):
     packet=_packet(s,item,user)
+    from removals import item_is_removed, removal_summary
+    active=not item_is_removed(s,item.id)
+    packet['removal']=removal_summary(s,'item',item.id)
+    packet['can_mutate']=active
+    if not active:
+        packet['permissions']={key:[] if isinstance(value,list) else False for key,value in packet['permissions'].items()}
     rows=list(s.scalars(select(DossierIssue).where(DossierIssue.item_id==item.id).order_by(DossierIssue.revision.desc())))
     packet['issues']=[{**row_dict(r,('snapshot',)),'current':r.fingerprint==packet['fingerprint'] and not packet['blockers']} for r in rows]
     packet['latest_issue']=packet['issues'][0] if packet['issues'] else None
@@ -636,6 +644,8 @@ def _project_state(s,project_id,user):
 
 def project_detail(s,project_id,user):
     project=_project(s,project_id)
+    from removals import item_is_removed, project_is_removed, removal_summary
+    active=not project_is_removed(s,project_id)
     cfg=s.get(DossierProject,project_id)
     if cfg:
         items,scope,blockers,fingerprint,_=_project_state(s,project_id,user)
@@ -661,13 +671,31 @@ def project_detail(s,project_id,user):
         receipt=next((h for h in handovers if latest_dispatch and h['dispatch_id']==latest_dispatch['id']),None)
         transfer_status[channel]={'status':'received' if receipt else 'dispatched' if latest_dispatch else 'not_dispatched',
             'dispatch':latest_dispatch,'receipt':receipt}
+    permissions=_permissions(user)
+    # Removal is an operational restriction, not a change to retained work or
+    # the signed evidence basis. Add display blockers only after calculating
+    # the original fingerprint and immutable issue's currentness above.
+    completion_blockers=list(blockers)
+    if not active:
+        completion_blockers.append('This P.O. is removed. Restore it before issuing or handing over its Job Packet.')
+    else:
+        scope_ids={row['id'] for row in scope} | {row['item_id'] for row in items}
+        removed_ids=sorted(item_id for item_id in scope_ids if item_is_removed(s,item_id))
+        if removed_ids:
+            completion_blockers.append('Removed records remain in the declared Job Packet scope: '
+                + ', '.join(removed_ids) + '. Restore them before issuing or handing over this project packet.')
+    if not active:
+        permissions={key:[] if isinstance(value,list) else False for key,value in permissions.items()}
+    for item in items:
+        item['removal']=removal_summary(s,'item',item['item_id'])
     return {'project':row_dict(project),'configured':bool(cfg),'config':row_dict(cfg) if cfg else None,
+        'removal':removal_summary(s,'order',project_id),'can_mutate':active,
         'version':cfg.version if cfg else 0,'documents':documents,'items':items,'scope':scope,
         'issues':issues,'latest_project_issue':latest,'latest_issue':latest,
         'handovers':handovers,'transfer_status':transfer_status,
         'events':[row_dict(r) for r in s.scalars(select(DossierEvent).where(DossierEvent.project_id==project_id).order_by(DossierEvent.sequence.desc()))],
-        'permissions':_permissions(user),'source_status':source['status'],'source_review':source['review'],
-        'completion_blockers':blockers,'fingerprint':fingerprint,
+        'permissions':permissions,'source_status':source['status'],'source_review':source['review'],
+        'completion_blockers':completion_blockers,'fingerprint':fingerprint,
         'summary':{'items':len(items),'approved_packets':sum(bool(p['latest_issue'] and p['latest_issue']['current']) for p in items),
             'stale_packets':sum(bool(p['latest_issue'] and not p['latest_issue']['current']) for p in items),
             'checklist_percent':round(sum(p['percent'] for p in items)/len(items),1) if items else 0}}
@@ -682,8 +710,9 @@ def catalog(user:Employee=Depends(auth)):
 
 @router.get('/projects')
 def projects(user:Employee=Depends(auth),s:Session=Depends(db)):
+    from removals import project_not_removed
     result=[]
-    for p in s.scalars(select(Project).order_by(Project.name,Project.id)):
+    for p in s.scalars(select(Project).where(project_not_removed(Project.id)).order_by(Project.name,Project.id)):
         detail=project_detail(s,p.id,user)
         result.append({**row_dict(p),**{k:detail[k] for k in ('configured','config','summary','latest_project_issue','transfer_status')}})
     return {'projects':result}
@@ -741,6 +770,8 @@ def get_item(item_id:str,user:Employee=Depends(auth),s:Session=Depends(db)):
 def _editable_item(s,item_id,expected):
     lock_topology(s)
     item,plan=_item(s,item_id)
+    from removals import require_active_item
+    require_active_item(s,item_id)
     cfg=_locked(s,plan.project_id,expected) or _config(s,plan.project_id)
     _lock_items(s,plan.project_id)
     return item,plan,cfg
@@ -854,6 +885,8 @@ def upload_document(project_id:str,expected_version:str=Form(...,min_length=1,ma
     if item_id:
         item,plan=_item(s,item_id)
         if plan.project_id!=project_id:_error('The document item must belong to this project',422)
+        from removals import require_active_item
+        require_active_item(s,item_id)
     prior_sections=set(s.scalars(select(DossierDocument.section).where(
         DossierDocument.project_id==project_id,DossierDocument.scope_key==item_id,
         DossierDocument.code==code)))
@@ -960,6 +993,9 @@ def issue_project(project_id:str,data:SignedIn,user:Employee=Depends(auth),s:Ses
     cfg=_locked(s,project_id,data.expected_version) or _config(s,project_id)
     _lock_items(s,project_id)
     packets,scope,blockers,fingerprint,basis=_project_state(s,project_id,user)
+    from removals import require_active_item
+    for row in scope:
+        require_active_item(s,row['id'])
     if blockers:_error({'message':'Every declared project part and packet must be complete and current','blockers':blockers})
     latest=_latest_issue(s,project_id,None)
     if latest and latest.fingerprint==fingerprint:_error('This exact current project package has already been issued')
@@ -1007,7 +1043,10 @@ def record_handover(project_id:str,data:HandoverIn,user:Employee=Depends(auth),s
     _lock_items(s,project_id)
     issue=_get_issue(s,data.issue_id)
     if issue.project_id!=project_id or issue.kind!='project':_error('Select a project package issued for this project',422)
-    _,_,blockers,fingerprint,_=_project_state(s,project_id,user)
+    _,scope,blockers,fingerprint,_=_project_state(s,project_id,user)
+    from removals import require_active_item
+    for row in scope:
+        require_active_item(s,row['id'])
     if blockers or issue.fingerprint!=fingerprint:_error('Only a current complete issued project package can be dispatched')
     _date(data.occurred_on,dt.datetime.fromisoformat(_fmt(issue.at)).date())
     row=DossierHandover(project_id=project_id,event='dispatch',actor=user.badge,
