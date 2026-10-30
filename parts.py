@@ -314,6 +314,8 @@ def parts_basis(s, spool_id):
 
 
 def _detail(s, item, spool_plan, user):
+    from removals import item_is_removed, item_not_removed, removal_summary
+    active = not item_is_removed(s, item.id)
     cfg = s.get(SpoolPartsPlan, item.id)
     project = s.get(Project, spool_plan.project_id)
     reason = _edit_reason(s, item, spool_plan)
@@ -322,7 +324,7 @@ def _detail(s, item, spool_plan, user):
             for link in s.scalars(select(ComponentLink).where(ComponentLink.spool_id == item.id).order_by(ComponentLink.component_id))],
         'blockers': [], 'editable': not reason, 'locked_reason': reason}
     candidates = []
-    for child in s.scalars(select(Item).where(Item.kind == 'Part', Item.project.in_(('', spool_plan.project_id))).order_by(Item.id)):
+    for child in s.scalars(select(Item).where(Item.kind == 'Part', Item.project.in_(('', spool_plan.project_id)), item_not_removed()).order_by(Item.id)) if active else ():
         if child.id == item.id or child.released or s.get(SpoolPlan, child.id):
             continue
         link = s.get(ComponentLink, child.id)
@@ -331,9 +333,17 @@ def _detail(s, item, spool_plan, user):
         flow = s.get(FlowPlan, child.id)
         if link or _component_open(flow):
             candidates.append(component_state(s, child, spool_plan, editable=not reason))
-    return {'item': {'id': item.id, 'description': item.description, 'google_part_number': item.google_part_number,
+    if not active:
+        snapshot['editable'] = False
+        snapshot['locked_reason'] = 'This record was removed. An administrator must restore it before changes.'
+        for line in snapshot.get('lines', []):
+            for component in line.get('components', []):
+                component['can_remove'] = False
+    return {'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
+        'item': {'id': item.id, 'description': item.description, 'google_part_number': item.google_part_number,
                     'project_id': spool_plan.project_id, 'project_name': project.name if project else '', 'subproject_id': spool_plan.subproject_id},
-        **snapshot, 'permissions': {'can_manage': has_capability(user, 'manage_production'), 'can_allocate': has_capability(user, 'allocate_parts')},
+        **snapshot, 'permissions': {'can_manage': active and has_capability(user, 'manage_production'),
+                                  'can_allocate': active and has_capability(user, 'allocate_parts'), 'can_mutate': active},
         'candidates': candidates, 'definitions': DEFINITIONS,
         'events': [_row(event) for event in s.scalars(select(PartEvent).where(PartEvent.spool_id == item.id).order_by(PartEvent.sequence.desc()).limit(100))] if cfg else []}
 
@@ -384,7 +394,9 @@ def _commit(s):
 
 @router.get('/spools')
 def list_spools(project_id: str = Query('', max_length=80), user: Employee = Depends(auth), s: Session = Depends(db)):
-    query = select(Item, SpoolPlan).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(Item.kind != 'Assembly')
+    from removals import item_not_removed, project_not_removed
+    query = select(Item, SpoolPlan).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(
+        Item.kind != 'Assembly', item_not_removed(), project_not_removed(SpoolPlan.project_id))
     if project_id:
         query = query.where(SpoolPlan.project_id == project_id)
     items = []

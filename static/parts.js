@@ -32,6 +32,7 @@
   function detail(){
     const d=state.detail,item=d.item,t=d.totals||{};
     let html=header(item.id,item.google_part_number?'Part number: '+item.google_part_number:'Spool parts',button('home','All spools')+button('tracking-item','Spool & welds',item.id)+button('flow','Process flow',item.id)+button('item','Item & QR',item.id));
+    if(d.removal?.removed===true||item.removal?.removed===true)html+='<div class="fr-removed-notice"><strong>Removed record · History only</strong><p>The required quantities and physical part links are retained. Open Item &amp; QR to review or restore its removed group.</p></div>';
     html+=`<section class="fb-card"><div class="fb-section-head"><div><h2>Required parts and preparation</h2><p class="fb-note">${esc(item.project_name||item.project_id)}${item.subproject_id?' · '+esc(item.subproject_id):''}${d.configured?' · List revision '+display(d.version):''}</p></div>${canManage()?button('edit',d.configured?'Edit parts list':'Create parts list','','primary',state.saving):''}</div>`;
     if(!d.configured)html+='<p class="fb-notice">No required parts list has been entered. Existing linked pieces are not treated as the complete BOM.</p>';
     else html+=stats(t)+`<div class="fb-bars">${meter(t.assigned_qty,t.required_qty,'Assigned to this spool')}${meter(t.received_qty,t.required_qty,'Receipt recorded')}${meter(t.prepared_qty,t.required_qty,'Prepared for fit-up')}</div><p class="fb-note">BOM / drawing reference: ${esc(d.reference||'Not entered')}</p>`;

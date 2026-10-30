@@ -145,17 +145,20 @@ def location_dict(row):
 
 
 def transfer_snapshot(s, item, user=None):
+    from removals import item_is_removed, removal_summary
     state = s.get(ItemTransferState, item.id)
     employee = s.get(Employee, item.handler)
     status = state.operational_status if state else None
+    active = not item_is_removed(s, item.id)
     return {'item_id': item.id, 'version': state.version if state else 0,
+        'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'handler': item.handler, 'handler_name': employee.name if employee else item.handler,
         'handler_active': bool(employee and employee.active), 'location': item.location,
         'location_id': state.location_id if state and state.location_id else KEEP_CURRENT,
         'operational_status': status, 'status_label': STATUS_BY_ID[status]['label'] if status in STATUS_BY_ID else 'Not recorded',
         'updated_at': _stamp(state.updated_at) if state else None,
         'updated_by': state.updated_by if state else None, 'released': item.released,
-        'can_transfer': bool(user and user.role in TRANSFER_ROLES and not item.released)}
+        'can_transfer': bool(active and user and user.role in TRANSFER_ROLES and not item.released)}
 
 
 def _locked_state(s, item, expected_version):
@@ -197,6 +200,8 @@ class CheckedTransfer(CheckedLocation):
 
 
 def validate_location(s, item, *, expected_transfer_version, location_id):
+    from removals import require_active_item
+    require_active_item(s, item.id)
     state = _locked_state(s, item, expected_transfer_version)
     destination_id, label = _destination(s, item, state, location_id)
     return CheckedLocation(state, destination_id, label)
@@ -308,11 +313,13 @@ def get_transfer(item_id: str, u: Employee = Depends(auth), s: Session = Depends
 @router.post('/api/items/{item_id}/transfer')
 def transfer(item_id: str, data: TransferIn, u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import FlowPlan, _event, lock_topology
+    from removals import require_active_item
     lock_topology(s)
     permit(u, *TRANSFER_ROLES)
     item = s.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
     if not item:
         raise HTTPException(404, 'Item not found')
+    require_active_item(s, item_id)
     require_unreleased(item)
     if data.expected_handler is not None and data.expected_handler != item.handler:
         raise HTTPException(409, 'Item custodian changed since scanning; refresh and scan both badges again')

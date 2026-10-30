@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-orders.3'
+APP_VERSION='2026.10.30-removal.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -142,6 +142,8 @@ def permit(user,*roles):
 def lock_item(s,item_id):
     obj=s.scalar(select(Item).where(Item.id==item_id).with_for_update())
     if not obj: raise HTTPException(404,'Item not found')
+    from removals import require_active_item
+    require_active_item(s,item_id)
     return obj
 
 def require_unreleased(r):
@@ -153,7 +155,11 @@ def asdict(row,keys):
 ITEM_KEYS='id description kind project google_part_number drawing location handler welds_required welds_done dimensional weld dimension_at weld_at last_work_at reinspection_due on_hold released released_at released_by created_at updated_at'.split()
 
 def item_dict(s,r,user=None):
+    from removals import item_is_removed, removal_summary
+    active=not item_is_removed(s,r.id)
     d=asdict(r,ITEM_KEYS)
+    d['removal']=removal_summary(s,'item',r.id)
+    d['can_mutate']=active
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
     d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
     d['qr_url']=phone_link('item',r.id) if phone_qr_ready() else None
@@ -175,6 +181,9 @@ def item_dict(s,r,user=None):
             'can_reopen':has_capability(user,'admin') and bool(r.released)}
         for row in d['reworks']:
             row['can_close']=has_capability(user,'close_rework') and not r.released and row['closed_at'] is None
+            if not active:row['can_close']=False
+        d['permissions']={key:bool(value and active) for key,value in d['permissions'].items()}
+        d['permissions']['can_mutate']=active
     return d
 
 @app.middleware('http')
@@ -263,8 +272,9 @@ def employee_create(data:EmployeeIn,u:Employee=Depends(auth),s:Session=Depends(d
     return {'badge':data.badge,'name':data.name,'role':data.role}
 @app.get('/api/items')
 def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Session=Depends(db)):
+    from removals import item_not_removed
     limit=min(max(limit,1),500);offset=max(offset,0)
-    q=select(Item)
+    q=select(Item).where(item_not_removed())
     if search:
         q=q.where((Item.id.ilike('%'+search[:100]+'%'))|(Item.description.ilike('%'+search[:100]+'%'))|(Item.project.ilike('%'+search[:100]+'%'))|(Item.google_part_number.ilike('%'+search[:100]+'%')))
     count=s.scalar(select(func.count()).select_from(q.subquery()))
@@ -286,8 +296,10 @@ class ItemIn(BaseModel):
 @app.post('/api/items',status_code=201)
 def create_item(data:ItemIn,u:Employee=Depends(auth),s:Session=Depends(db)):
     from administration import employee_is_removed
+    from removals import require_active_project
     lock_flow_topology(s)
     permit(u,'admin','supervisor')
+    require_active_project(s,data.project)
     if s.get(Item,data.id):raise HTTPException(409,'Item ID already exists')
     employee=s.get(Employee,data.handler)
     if not employee or not employee.active or employee_is_removed(s,data.handler):raise HTTPException(422,'Choose an active employee handler badge')
@@ -329,6 +341,7 @@ class BulkImport(BaseModel):
 def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends(db)):
     """Atomic import: each quantity makes a separately traceable physical item."""
     from administration import employee_is_removed
+    from removals import require_active_project
     lock_flow_topology(s)
     permit(u,'admin','supervisor')
     if sum(row.quantity for row in data.rows)>500:
@@ -339,6 +352,7 @@ def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends
     if missing:raise HTTPException(422,{'inactive_or_unknown_handler_badges':sorted(missing)})
     new_items=[]
     for index,row in enumerate(data.rows,start=1):
+        require_active_project(s,row.project)
         base=row.id.strip()
         if base and (not base.replace('_','').replace('-','').isalnum() or len(base)<3):
             raise HTTPException(422,f'Row {index}: item ID may contain letters, digits, hyphens and underscores')
@@ -540,6 +554,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(PurchaseOrder.project_id).limit(1))
     s.execute(select(OrderGpn.id).limit(1))
     s.execute(select(OrderAssembly.item_id).limit(1))
+    s.execute(select(RecordRemoval.record_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -579,6 +594,9 @@ app.include_router(administration_router)
 
 from orders import router as orders_router, PurchaseOrder, OrderGpn, OrderAssembly
 app.include_router(orders_router)
+
+from removals import router as removals_router, RecordRemoval
+app.include_router(removals_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)

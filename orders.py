@@ -201,8 +201,10 @@ def read_snapshot(s):
 
 
 def _locked(s, project_id, expected_version, user):
+    from removals import require_active_project
     lock_topology(s)
     permit(user, 'admin', 'supervisor')
+    require_active_project(s, project_id)
     row = s.scalar(select(PurchaseOrder).where(PurchaseOrder.project_id == project_id)
                    .with_for_update().execution_options(populate_existing=True))
     if row is None:
@@ -213,9 +215,11 @@ def _locked(s, project_id, expected_version, user):
 
 
 def _gpn(s, project_id, gpn_id):
+    from removals import require_active_gpn
     group = s.get(OrderGpn, gpn_id)
     if group is None or group.project_id != project_id:
         raise HTTPException(422, 'Choose a GPN belonging to this purchase order')
+    require_active_gpn(s, gpn_id)
     return group
 
 
@@ -268,9 +272,11 @@ def order_scope(s, item_id):
         return None
     group = s.get(OrderGpn, mapping.gpn_id)
     order = s.get(PurchaseOrder, group.project_id)
+    from removals import removal_summary
     return {'project_id': order.project_id, 'purchase_order': order.purchase_order,
             'gpn_id': group.id, 'gpn': group.gpn, 'assembly_id': mapping.item_id,
-            'assembly_part_number': mapping.assembly_part_number, 'required_spools': mapping.required_spools}
+            'assembly_part_number': mapping.assembly_part_number, 'required_spools': mapping.required_spools,
+            'removal': removal_summary(s, 'order', order.project_id)}
 
 
 def guard_flow_scope(s, item_id, expected_children):
@@ -281,6 +287,9 @@ def guard_flow_scope(s, item_id, expected_children):
 
 def guard_plan_scope(s, item, oldplan, values):
     """Apply order boundaries to the existing planner, including old UI clients."""
+    from removals import require_active_item, require_active_project, require_active_gpn
+    require_active_item(s, item.id)
+    require_active_project(s, values['project_id'])
     old_parent_id = oldplan.assembly_id if oldplan else None
     new_parent_id = values.get('assembly_id')
     scope_keys = ('project_id', 'subproject_id', 'assembly_id', 'planned_welds', 'drawing_revision', 'zero_weld_reason')
@@ -293,6 +302,7 @@ def guard_plan_scope(s, item, oldplan, values):
     managed = s.get(OrderAssembly, item.id)
     if managed:
         group = s.get(OrderGpn, managed.gpn_id)
+        require_active_gpn(s, group.id)
         if values['project_id'] != group.project_id or values.get('assembly_id'):
             raise HTTPException(409, 'This assembly belongs to its purchase order and cannot be moved to another project or nested assembly')
     if oldplan and oldplan.assembly_id:
@@ -303,6 +313,7 @@ def guard_plan_scope(s, item, oldplan, values):
     parent = s.get(OrderAssembly, parent_id) if parent_id else None
     if parent:
         group = s.get(OrderGpn, parent.gpn_id)
+        require_active_gpn(s, group.id)
         if item.kind != 'Spool':
             raise HTTPException(422, 'Purchase-order assembly children must be registered as Spool items, not individual Parts or Assemblies')
         if values['project_id'] != group.project_id:
@@ -313,6 +324,8 @@ def guard_plan_scope(s, item, oldplan, values):
 
 
 def guard_dossier_purchase_order(s, project_id, purchase_order):
+    from removals import require_active_project
+    require_active_project(s, project_id)
     order = s.get(PurchaseOrder, project_id)
     if order and _key(purchase_order) != order.normalized_number:
         raise HTTPException(409, 'The Job Packet purchase-order number must match the purchase order assigned to this project')
@@ -345,6 +358,7 @@ def _validate_assembly_scope(s, order, item, required_spools):
 
 
 def _assembly_detail(s, mapping, group, progress_rows):
+    from removals import removal_summary
     item = s.get(Item, mapping.item_id)
     plan = s.get(SpoolPlan, item.id)
     flow = s.get(FlowPlan, item.id)
@@ -359,6 +373,7 @@ def _assembly_detail(s, mapping, group, progress_rows):
         ready = bool(child.kind == 'Spool' and child_flow and child_flow.route == 'spool'
                      and child_flow.status == 'completed' and row.get('fabrication_finished') and not errors)
         spools.append({'item_id': child.id, 'description': child.description, 'google_part_number': child.google_part_number,
+                       'removal': removal_summary(s, 'item', child.id),
                        'project_id': child_plan.project_id, 'subproject_id': child_plan.subproject_id,
                        'flow_status': child_flow.status if child_flow else 'not_started',
                        'current_step': child_flow.current_step if child_flow else None,
@@ -376,6 +391,7 @@ def _assembly_detail(s, mapping, group, progress_rows):
     if flow and flow.expected_children != mapping.required_spools:
         blockers.append('Traveler count does not match the purchase-order requirement')
     return {**_row(mapping, ASSEMBLY_FIELDS), 'gpn': group.gpn,
+            'removal': removal_summary(s, 'item', item.id),
             'description': item.description, 'google_part_number': item.google_part_number, 'drawing': item.drawing,
             'linked_spools': linked, 'missing_spools': max(0, mapping.required_spools - linked),
             'ready_spools': ready, 'not_ready_spools': linked - ready, 'planning_needed': plan is None,
@@ -384,14 +400,16 @@ def _assembly_detail(s, mapping, group, progress_rows):
 
 
 def order_summary(s, order):
+    from removals import gpn_not_removed, item_not_removed, removal_summary
     project = s.get(Project, order.project_id)
-    groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id == order.project_id)).all()
+    groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id == order.project_id, gpn_not_removed(OrderGpn.id))).all()
     ids = [group.id for group in groups]
-    mappings = s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id.in_(ids))).all() if ids else []
+    mappings = s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id.in_(ids), item_not_removed(OrderAssembly.item_id))).all() if ids else []
     linked = sum(len(_linked(s, row.item_id)) for row in mappings)
     required = sum(row.required_spools for row in mappings)
     setup_needed = len(groups) - len({row.gpn_id for row in mappings})
     return {**_row(order, ORDER_FIELDS), 'project_name': project.name,
+            'removal': removal_summary(s, 'order', order.project_id),
             'gpn_count': len(groups), 'assembly_count': len(mappings),
             'combined_count': len(mappings) + setup_needed, 'setup_needed_count': setup_needed, 'required_spools': required,
             'linked_spools': linked, 'missing_spools': sum(max(0, row.required_spools - len(_linked(s, row.item_id))) for row in mappings)}
@@ -400,23 +418,37 @@ def order_summary(s, order):
 def order_detail(s, project_id, user=None):
     """Read-only detail also used by the Excel snapshot; no enrollment on read."""
     from progress import project_rows
+    from removals import gpn_not_removed, item_not_removed, removal_summary
     order = _order(s, project_id)
+    removal = removal_summary(s, 'order', project_id)
+    removed = bool(removal and removal['removed'])
     project = s.get(Project, project_id)
-    groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id == project_id).order_by(OrderGpn.gpn)).all()
+    group_query = select(OrderGpn).where(OrderGpn.project_id == project_id)
+    if not removed:
+        group_query = group_query.where(gpn_not_removed(OrderGpn.id))
+    groups = s.scalars(group_query.order_by(OrderGpn.gpn)).all()
     progress_rows = {row['id']: row for row in project_rows(s, project_id)}
     gpns, assemblies = [], []
     for group in groups:
-        mappings = s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id == group.id).order_by(OrderAssembly.item_id)).all()
+        mapping_query = select(OrderAssembly).where(OrderAssembly.gpn_id == group.id)
+        if not removed:
+            mapping_query = mapping_query.where(item_not_removed(OrderAssembly.item_id))
+        mappings = s.scalars(mapping_query.order_by(OrderAssembly.item_id)).all()
         children = [_assembly_detail(s, mapping, group, progress_rows) for mapping in mappings]
+        # A removed physical instance still owns its retained identity. Do not
+        # offer a shared-number correction that would rewrite its history.
+        physical_count = len(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id)).all())
         for child in children:
-            child['number_editable'] = child['count_editable'] and len(mappings) == 1
+            child['count_editable'] = child['count_editable'] and not removed
+            child['number_editable'] = child['count_editable'] and physical_count == 1
             child['combined_number_matches'] = _key(child['assembly_part_number']) == group.normalized_gpn
         gpns.append({**_row(group, GPN_FIELDS), 'assemblies': children, 'assembly_count': len(children),
+                     'removal': removal_summary(s, 'gpn', group.id),
                      **{key: sum(child[key] for child in children) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools')}})
         assemblies.extend(children)
     assigned_ids = set(s.scalars(select(OrderAssembly.item_id)).all())
     available = []
-    for item in s.scalars(select(Item).where(Item.kind == 'Assembly').order_by(Item.id)):
+    for item in s.scalars(select(Item).where(Item.kind == 'Assembly', item_not_removed(Item.id)).order_by(Item.id)):
         if item.id in assigned_ids:
             continue
         plan = s.get(SpoolPlan, item.id)
@@ -427,12 +459,14 @@ def order_detail(s, project_id, user=None):
                           'planning_needed': plan is None})
     events = s.scalars(select(Audit).where(Audit.event.like('ORDER_%'), Audit.details['project_id'].as_string() == project_id)
                        .order_by(Audit.id.desc()).limit(100)).all()
-    return {'order': {**_row(order, ORDER_FIELDS), 'project_name': project.name}, 'gpns': gpns, 'assemblies': assemblies,
+    return {'order': {**_row(order, ORDER_FIELDS), 'project_name': project.name, 'removal': removal}, 'gpns': gpns, 'assemblies': assemblies,
             'totals': {'gpn_count': len(gpns), 'assembly_count': len(assemblies),
                        'combined_count': len(assemblies) + sum(not g['assemblies'] for g in gpns),
                        'setup_needed_count': sum(not g['assemblies'] for g in gpns),
                        **{key: sum(row[key] for row in assemblies) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools', 'not_ready_spools')}},
-            'available_assemblies': available, 'permissions': {'can_manage': bool(user and has_capability(user, 'manage_production'))},
+            'available_assemblies': [] if removed else available,
+            'permissions': {'can_manage': bool(not removed and user and has_capability(user, 'manage_production')),
+                            'can_remove': getattr(user, 'role', user) == 'admin' and not removed},
             'events': [_row(event, ('id', 'event', 'actor', 'at', 'details')) for event in events]}
 
 
@@ -449,18 +483,24 @@ def list_orders(user: Employee = Depends(auth), s: Session = Depends(db)):
 
 
 def _list_orders(s, user):
-    orders = s.scalars(select(PurchaseOrder).order_by(PurchaseOrder.purchase_order, PurchaseOrder.project_id)).all()
-    assigned = {row.project_id for row in orders}
+    from removals import project_not_removed
+    orders = s.scalars(select(PurchaseOrder).where(project_not_removed(PurchaseOrder.project_id))
+                       .order_by(PurchaseOrder.purchase_order, PurchaseOrder.project_id)).all()
+    assigned = set(s.scalars(select(PurchaseOrder.project_id)))
     return {'orders': [order_summary(s, row) for row in orders],
-            'unassigned_projects': [_row(row, ('id', 'name', 'client')) for row in s.scalars(select(Project).order_by(Project.name)) if row.id not in assigned],
-            'permissions': {'can_manage': has_capability(user, 'manage_production')}}
+            'unassigned_projects': [_row(row, ('id', 'name', 'client')) for row in s.scalars(select(Project)
+                .where(project_not_removed(Project.id)).order_by(Project.name)) if row.id not in assigned],
+            'permissions': {'can_manage': has_capability(user, 'manage_production'),
+                            'can_remove': getattr(user, 'role', user) == 'admin'}}
 
 
 @router.post('', status_code=201)
 def create_order(data: CreateOrderIn, user: Employee = Depends(auth), s: Session = Depends(db)):
+    from removals import require_active_project, project_is_removed
     lock_topology(s)
     permit(user, 'admin', 'supervisor')
     if data.existing_project_id:
+        require_active_project(s, data.existing_project_id)
         project = s.get(Project, data.existing_project_id)
         if not project:
             raise HTTPException(422, 'Existing project not found')
@@ -480,6 +520,8 @@ def create_order(data: CreateOrderIn, user: Employee = Depends(auth), s: Session
     _check_dossier(s, project.id, data.purchase_order)
     duplicate = s.scalar(select(PurchaseOrder).where(PurchaseOrder.normalized_number == _key(data.purchase_order), PurchaseOrder.normalized_customer == _key(customer)))
     if duplicate:
+        if project_is_removed(s, duplicate.project_id):
+            raise HTTPException(409, 'That PO is in Removed records. Restore it to use the same PO number; its history and identity are retained.')
         raise HTTPException(409, 'That PO number already exists for this customer')
     row = PurchaseOrder(project_id=project.id, purchase_order=data.purchase_order, normalized_number=_key(data.purchase_order),
                         customer=customer, normalized_customer=_key(customer), notes=data.notes, version=1, created_by=user.badge)
@@ -597,6 +639,7 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
                              user: Employee = Depends(auth), s: Session = Depends(db)):
     """Create the GPN and its physical assembly as one versioned transaction."""
     from administration import employee_is_removed
+    from removals import require_active_gpn
     order = _locked(s, project_id, data.expected_version, user)
     if data.gpn_id:
         group = _gpn(s, project_id, data.gpn_id)
@@ -605,6 +648,8 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
     else:
         group = s.scalar(select(OrderGpn).where(OrderGpn.project_id == project_id,
                                                OrderGpn.normalized_gpn == _key(data.gpn)))
+        if group:
+            require_active_gpn(s, group.id)
     previous_group = _row(group, GPN_FIELDS) if group else None
     if group and s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
         raise HTTPException(409, 'That GPN / assembly already exists in this P.O. Open its existing spool list instead of creating a duplicate.')

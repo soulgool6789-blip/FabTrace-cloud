@@ -246,6 +246,10 @@ def with_process_permissions(s, item_id, snapshot, user):
     """Decorate a response without mutating the shared pure timing projection."""
     if user is None:
         return snapshot
+    from removals import item_is_removed, removal_summary
+    if item_is_removed(s, item_id):
+        return {**snapshot, 'removal': removal_summary(s, 'item', item_id), 'can_mutate': False,
+                'permissions': {'allowed_actions': [], 'allowed_processes': []}}
     from flow import FlowPlan
     item = s.get(Item, item_id)
     flow = s.get(FlowPlan, item_id)

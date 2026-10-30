@@ -239,6 +239,8 @@ def _locked_item(s, item_id, user):
         .execution_options(populate_existing=True))
     if not item:
         raise HTTPException(404, 'Item not found')
+    from removals import require_active_item
+    require_active_item(s, item_id)
     return item, current
 
 
@@ -278,6 +280,7 @@ def _check_version(s, item, expected):
 
 
 def admin_detail(s, item, user):
+    from removals import item_is_removed, removal_summary
     version, blockers, plan, _ = decision_basis(s, item)
     release = release_summary(s, item)
     actions = ['custody_correction']
@@ -285,18 +288,23 @@ def admin_detail(s, item, user):
         actions.append('release_override')
     elif not plan or plan.status not in ('shipped', 'delivered'):
         actions.append('return_to_work')
+    active = not item_is_removed(s, item.id)
+    if not active:
+        actions = []
     history = s.scalars(select(Audit).where(Audit.item_id == item.id,
         Audit.event.in_(ADMIN_EVENTS)).order_by(Audit.id.desc()).limit(100)).all()
     return {'item': item_dict(s, item, user), 'version': version, 'release': release,
+            'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
             'blockers': blockers, 'allowed_actions': actions,
             'history': [_dict(row, ('id', 'item_id', 'actor', 'event', 'details', 'at')) for row in history]}
 
 
 @router.get('/overview')
 def overview(u: Employee = Depends(auth), s: Session = Depends(db)):
+    from removals import item_not_removed
     permit(u, 'admin')
     employees = s.scalars(select(Employee).where(employee_not_removed())).all()
-    items = s.scalars(select(Item)).all()
+    items = s.scalars(select(Item).where(item_not_removed())).all()
     return {'version': APP_VERSION, 'counts': {'items': len(items),
         'released': sum(bool(row.released) for row in items),
         'admin_released': sum(bool(active_override(s, row)) for row in items),
@@ -312,9 +320,10 @@ def overview(u: Employee = Depends(auth), s: Session = Depends(db)):
 def items(search: str = '', limit: int = 100, offset: int = 0,
           u: Employee = Depends(auth), s: Session = Depends(db)):
     from flow import FlowPlan
+    from removals import item_not_removed
     permit(u, 'admin')
     limit, offset = min(max(limit, 1), 200), max(offset, 0)
-    query = select(Item)
+    query = select(Item).where(item_not_removed())
     if search:
         value = '%' + search[:100] + '%'
         query = query.where(Item.id.ilike(value) | Item.description.ilike(value) | Item.project.ilike(value))

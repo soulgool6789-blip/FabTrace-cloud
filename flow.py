@@ -236,6 +236,8 @@ def _locked(s, item_id):
     item = s.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
     if item is None:
         raise HTTPException(404, 'Item not found')
+    from removals import require_active_item
+    require_active_item(s, item_id)
     plan = s.scalar(select(FlowPlan).where(FlowPlan.item_id == item_id).execution_options(populate_existing=True))
     return item, plan
 
@@ -576,7 +578,12 @@ def detail(s, item, user):
         actions.extend(action for action in process['permissions']['allowed_actions'] if action in ('pause', 'resume'))
     if plan and plan.status == 'shipped' and user.role in HANDOFF:
         actions.append('deliver')
+    from removals import item_is_removed, removal_summary
+    active = not item_is_removed(s, item.id)
+    if not active:
+        actions = []
     return {
+        'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         **({'parts': parts} if parts else {}),
         'order_scope': order_scope(s, item.id),
         'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
@@ -605,8 +612,9 @@ def catalog(u: Employee = Depends(auth)):
 
 @router.get('/items')
 def items(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
+    from removals import item_not_removed
     result = []
-    for item, plan in s.execute(select(Item, FlowPlan).join(FlowPlan, FlowPlan.item_id == Item.id).order_by(Item.id)):
+    for item, plan in s.execute(select(Item, FlowPlan).join(FlowPlan, FlowPlan.item_id == Item.id).where(item_not_removed()).order_by(Item.id)):
         project, subproject = _project(s, item)
         if project_id and project != project_id or subproject_id and subproject != subproject_id:
             continue

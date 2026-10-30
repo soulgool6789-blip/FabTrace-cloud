@@ -329,6 +329,9 @@ def _workspace(s, workspace_id, expected=None):
     workspace = s.scalar(query)
     if not workspace:
         _error('Audit workspace not found', 404)
+    if expected is not None and workspace.project_id:
+        from removals import require_active_project
+        require_active_project(s, workspace.project_id)
     if expected is not None and workspace.version != expected:
         _error('This audit workspace changed. Refresh before saving your changes.')
     return workspace
@@ -348,6 +351,9 @@ def _event(s, workspace, actor, event, target_type, target_id, details, *, initi
 
 
 def _check_scope(s, values):
+    from removals import require_active_project
+    if values.get('project_id'):
+        require_active_project(s, values['project_id'])
     if values.get('project_id') and not s.get(Project, values['project_id']):
         _error('Tracking project not found', 422)
     _badge(s, values.get('owner_badge'))
@@ -635,6 +641,8 @@ def _requirement_view(ctx, requirement):
 
 
 def workspace_detail(s, workspace, user, as_of=None):
+    from removals import project_is_removed, removal_summary
+    active = not (workspace.project_id and project_is_removed(s, workspace.project_id))
     ctx = _context(s, workspace, as_of=as_of)
     requirements = [_requirement_view(ctx, row) for row in ctx['requirements']]
     actions = [_action_view(ctx, row) for row in ctx['actions']]
@@ -646,11 +654,13 @@ def workspace_detail(s, workspace, user, as_of=None):
                'open_actions': sum(r['status'] != 'closed' or r['closure_stale'] for r in actions),
                'overdue_actions': sum(r['overdue'] for r in actions)}
     return {'workspace': row_dict(workspace), 'requirements': requirements,
+            'removal': removal_summary(s, 'order', workspace.project_id) if workspace.project_id else None,
+            'can_mutate': active,
             'documents': [_document_view(ctx, row) for row in ctx['documents']],
             'evidence': [_evidence_view(ctx, row) for row in ctx['evidence']], 'actions': actions,
             'reviews': [row_dict(row) for row in ctx['reviews']], 'events': [row_dict(row) for row in ctx['events']],
-            'metrics': metrics, 'permissions': {'manage': has_capability(user, 'manage_production'),
-                    'write': has_capability(user, 'quality_write'), 'review': has_capability(user, 'quality_review')}}
+            'metrics': metrics, 'permissions': {'manage': active and has_capability(user, 'manage_production'),
+                    'write': active and has_capability(user, 'quality_write'), 'review': active and has_capability(user, 'quality_review')}}
 
 
 def _finish(s, workspace, user):
@@ -666,8 +676,9 @@ def catalog(user: Employee = Depends(auth)):
 
 @router.get('/workspaces')
 def list_workspaces(user: Employee = Depends(auth), s: Session = Depends(db)):
+    from removals import project_not_removed
     result = []
-    for workspace in s.scalars(select(QualityWorkspace).order_by(QualityWorkspace.id.desc())):
+    for workspace in s.scalars(select(QualityWorkspace).where(project_not_removed(QualityWorkspace.project_id)).order_by(QualityWorkspace.id.desc())):
         detail = workspace_detail(s, workspace, user)
         result.append({**detail['workspace'], 'metrics': detail['metrics']})
     return {'workspaces': result}
@@ -877,6 +888,8 @@ def create_evidence(workspace_id: int, data: EvidenceIn, user: Employee = Depend
         item = s.scalar(select(Item).where(Item.id == values['item_id']).with_for_update().execution_options(populate_existing=True))
         if not item:
             _error('Physical item not found', 422)
+        from removals import require_active_item
+        require_active_item(s, item.id)
     values['production_snapshot'] = _physical(s, values['item_id'], data.weld_id)
     # A component inherits project scope only through its authoritative physical
     # spool assignment. Free-text Item.project never grants project membership.
@@ -979,6 +992,9 @@ def _review_basis(s, workspace, data, user):
         return row_dict(document)
     if data.target_type == 'evidence':
         evidence = _one(s, QualityEvidence, data.target_id, workspace.id)
+        if evidence.item_id:
+            from removals import require_active_item
+            require_active_item(s, evidence.item_id)
         basis = _evidence_basis(ctx, evidence)
         if data.decision == 'accepted':
             if evidence.production_snapshot != basis['current_production']:

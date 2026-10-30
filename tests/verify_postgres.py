@@ -1350,6 +1350,7 @@ def verify(dsn):
         transfers = importlib.import_module("transfers")
         administration = importlib.import_module("administration")
         orders = importlib.import_module("orders")
+        removals = importlib.import_module("removals")
         initializer = importlib.import_module("init_db")
         with application.engine.connect() as connection:
             assert connection.scalar(text("SELECT current_schema()")) == schema
@@ -1385,6 +1386,7 @@ def verify(dsn):
             assert session.query(administration.EmployeeRemovalState).count() == 0, "Migration removed an existing employee"
             for model in (orders.PurchaseOrder, orders.OrderGpn, orders.OrderAssembly):
                 assert session.query(model).count() == 0, "Migration invented purchase-order scope"
+            assert session.query(removals.RecordRemoval).count() == 0, "Migration removed an existing record"
 
         api = TestAPI(application, application.SessionLocal)
         health = ok(api.get("/healthz", role=None))
@@ -1408,6 +1410,8 @@ def verify(dsn):
         dossier_read_views = verify_readonly_dossier_progress_and_immutable_downloads(application, api)
         parts_concurrency = verify_concurrent_parts_allocation(application, api)
         order_concurrency = verify_purchase_order_transactions(application, api)
+        from removal_postgres import verify_record_removals
+        removal_concurrency = verify_record_removals(application, api)
         transfer_concurrency = verify_concurrent_transfers(application, api)
         admin_dispositions = verify_admin_dispositions(application, api)
         queued_permissions = verify_queued_permission_revocation(application, api)
@@ -1434,6 +1438,7 @@ def verify(dsn):
             "concurrent_dossier_mutation": dossier_concurrency,
             "concurrent_parts_allocation": parts_concurrency,
             "purchase_order_transactions": order_concurrency,
+            "record_removal_transactions": removal_concurrency,
             "concurrent_transfers": transfer_concurrency,
             "administrative_dispositions": admin_dispositions,
             "queued_permission_revocation": queued_permissions,
