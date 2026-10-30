@@ -24,7 +24,7 @@ from exports import (ExporterIdentity, TEMP_MEMORY_BYTES, WorkbookWriter,
 
 router = APIRouter(prefix='/api/orders', tags=['purchase order bills of materials'])
 SUMMARY_COLUMNS = (
-    'PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Assembly description',
+    'PO number', 'GPN', 'Assembly ID', 'Assembly part number',
     'Required spools', 'Linked spools', 'Missing spools', 'Ready spools',
     'Linked spools not ready', 'Planning status', 'Notes', 'Blockers',
 )
@@ -42,7 +42,7 @@ TEMPLATE_COLUMNS = (
 )
 SPOOL_COLUMNS = (
     'PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Spool ID',
-    'Spool part number', 'Spool description', 'Planning status', 'BOM reference',
+    'Spool part number', 'Planning status', 'BOM reference',
     'BOM version', 'Required pieces', 'Assigned pieces', 'Received pieces',
     'Prepared pieces', 'Remaining pieces', 'Process status', 'Current step',
     'Ready for assembly', 'Blockers',
@@ -111,7 +111,7 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
             blockers += snapshot['blockers']
         else:
             blockers.append('Create the required parts list for this spool')
-        register.append({**context, 'Spool description': spool.get('description', ''),
+        register.append({**context,
             'Planning status': status, 'BOM reference': snapshot['reference'] if snapshot else '',
             'BOM version': snapshot['version'] if snapshot else None,
             'Required pieces': totals.get('required_qty'), 'Assigned pieces': totals.get('assigned_qty'),
@@ -135,7 +135,7 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
 
     for assembly in assemblies:
         context = _context(order, assembly)
-        summary.append({**context, 'Assembly description': assembly['description'],
+        summary.append({**context,
             'Required spools': assembly['required_spools'], 'Linked spools': assembly['linked_spools'],
             'Missing spools': assembly['missing_spools'], 'Ready spools': assembly['ready_spools'],
             'Linked spools not ready': assembly['not_ready_spools'],
@@ -173,14 +173,13 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
                 unassigned_parent_ids.add(parent.id)
             context_assembly = {'item_id': parent.id, 'gpn': '', 'assembly_part_number': ''} if parent else None
             spool_rows({'item_id': item.id, 'google_part_number': item.google_part_number,
-                'description': item.description, 'flow_status': flow.status if flow else 'not_started',
+                'flow_status': flow.status if flow else 'not_started',
                 'current_step': flow.current_step if flow else None,
                 'blockers': ['Assign this spool to a mapped PO/GPN assembly']}, context_assembly, unmapped=True)
         for assembly in detail.get('available_assemblies', []):
             context = _context(order, {'item_id': assembly['item_id']})
             status = 'Assembly not assigned to a PO/GPN; required spool count not declared'
             summary.append({**context,
-                'Assembly description': assembly['description'],
                 'Planning status': status,
                 'Blockers': 'Assign the assembly to a GPN and declare its required spool count'})
             if assembly['item_id'] not in unassigned_parent_ids:

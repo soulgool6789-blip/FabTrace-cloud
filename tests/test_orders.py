@@ -95,6 +95,22 @@ def test_po_first_creation_builds_hierarchy_without_inventing_physical_progress(
     assert {event['event'] for event in detail['events']} == {'ORDER_CREATED', 'ORDER_GPN_CREATED', 'ORDER_ASSEMBLY_CREATED'}
 
 
+def test_po_assembly_registration_requires_identity_but_no_description(api):
+    project_id = new_order(api)['order']['project_id']
+    gpn_id = group(api, project_id)
+    body = assembly_body(api, project_id, gpn_id)
+    del body['create_item']['description']
+    detail = ok(api.post(f'{ROOT}/{project_id}/assemblies', body), 201)
+    assembly = detail['assemblies'][0]
+    assert assembly['item_id'] == 'ORDER-ASM-01'
+    assert assembly['assembly_part_number'] == 'ASM-DESIGN-01'
+    assert assembly['gpn_id'] == gpn_id and assembly['required_spools'] == 2
+    assert assembly['description'] == '' and assembly['planning_needed']
+    item = ok(api.get('/api/items/ORDER-ASM-01'))
+    assert item['description'] == '' and not item['released']
+    assert flow_detail(api, item['id'])['flow'] is None
+
+
 def test_managed_assembly_cannot_use_legacy_release_before_its_traveler(api):
     project_id, _, _ = setup(api)
     for kind in ('Dimensional', 'Weld'):

@@ -103,7 +103,7 @@ class EditGpnIn(CreateGpnIn):
 
 class AssemblyItemIn(Input):
     id: str = Field(min_length=3, max_length=60, pattern=r'^[A-Za-z0-9_-]+$')
-    description: str = Field(min_length=2, max_length=300)
+    description: str = Field(default='', max_length=300)
     google_part_number: str = Field(default='', max_length=160)
     drawing: str = Field(default='', max_length=160)
     location: str = Field(min_length=1, max_length=160)

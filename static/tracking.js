@@ -209,7 +209,7 @@
   }
   function matchingSpools() {
     const q=state.query.toLowerCase().trim();
-    return arr(state.overview?.spools).filter(s=>(state.view!=='spools'||!state.processFilter||processKey(s.production_process)===state.processFilter)&&(!q||[s.item_id,s.description,s.assembly_id,s.project_name,s.subproject_name,s.drawing_revision,s.drawing,s.production_process?.current?.process_name].some(x=>String(x||'').toLowerCase().includes(q))));
+    return arr(state.overview?.spools).filter(s=>(state.view!=='spools'||!state.processFilter||processKey(s.production_process)===state.processFilter)&&(!q||[s.item_id,s.assembly_id,s.project_name,s.subproject_name,s.drawing_revision,s.drawing,s.production_process?.current?.process_name].some(x=>String(x||'').toLowerCase().includes(q))));
   }
   function summaryFrom(spools) {
     return spools.reduce((m,s)=>{m.spools++;m.welds_planned+=number(s.planned_welds);m.production_complete+=number(s.production_complete);m.qa_accepted+=number(s.qa_accepted);m.ready_to_release+=s.ready_to_release&&!s.released?1:0;m.released+=s.released?1:0;return m;},{spools:0,welds_planned:0,production_complete:0,qa_accepted:0,ready_to_release:0,released:0});
@@ -261,7 +261,7 @@
   }
   function spoolTable(spools) {
     if(!spools.length) return '<p class="muted">No spools with outstanding blockers in this view.</p>';
-    return wrap(`<table class="ft-table"><thead><tr><th>Spool / item</th><th>Work package</th><th>Current process / elapsed</th><th>Production</th><th>Weld QA</th><th>Next blocker</th><th>Release / target</th></tr></thead><tbody>${spools.map(s=>`<tr><td>${btn('open-spool',s.item_id,s.item_id,'ft-link ft-spool-id')}${small(s.description||'')}${s.assembly_id?small('Assembly: '+s.assembly_id):''}</td><td>${esc(s.project_name||s.project_id||'Unassigned')}${small(s.subproject_name||s.subproject_id||'No subproject')}</td><td>${renderProcessCell(s.production_process)}</td><td class="ft-num">${number(s.production_complete)} / ${number(s.planned_welds)}${small(`${number(s.welds_defined)} weld records`)}</td><td class="ft-num">${number(s.qa_accepted)} / ${number(s.planned_welds)}</td><td>${arr(s.blockers).length?esc(s.blockers[0])+' '+(s.blockers.length>1?small(`+ ${s.blockers.length-1} more checks`):''):'<span class="muted">No blocking checks</span>'}</td><td>${s.release_control?.mode==='admin_override'?'<span class="fa-release-tag">Administrative release</span>':s.released?badge('accepted'):s.ready_to_release?'<span class="ft-tag good">Ready for release</span>':'<span class="ft-tag pending">Open</span>'}${small(s.due_date||'No target date')}</td></tr>`).join('')}</tbody></table>`);
+    return wrap(`<table class="ft-table"><thead><tr><th>Spool / item</th><th>Work package</th><th>Current process / elapsed</th><th>Production</th><th>Weld QA</th><th>Next blocker</th><th>Release / target</th></tr></thead><tbody>${spools.map(s=>`<tr><td>${btn('open-spool',s.item_id,s.item_id,'ft-link ft-spool-id')}${s.assembly_id?small('Assembly: '+s.assembly_id):''}</td><td>${esc(s.project_name||s.project_id||'Unassigned')}${small(s.subproject_name||s.subproject_id||'No subproject')}</td><td>${renderProcessCell(s.production_process)}</td><td class="ft-num">${number(s.production_complete)} / ${number(s.planned_welds)}${small(`${number(s.welds_defined)} weld records`)}</td><td class="ft-num">${number(s.qa_accepted)} / ${number(s.planned_welds)}</td><td>${arr(s.blockers).length?esc(s.blockers[0])+' '+(s.blockers.length>1?small(`+ ${s.blockers.length-1} more checks`):''):'<span class="muted">No blocking checks</span>'}</td><td>${s.release_control?.mode==='admin_override'?'<span class="fa-release-tag">Administrative release</span>':s.released?badge('accepted'):s.ready_to_release?'<span class="ft-tag good">Ready for release</span>':'<span class="ft-tag pending">Open</span>'}${small(s.due_date||'No target date')}</td></tr>`).join('')}</tbody></table>`);
   }
   function renderSpoolRegister() {
     const spools=matchingSpools();
@@ -286,7 +286,7 @@
     actions+=btn('process-flow','Process flow',item.id);if(capability('admin'))actions+=btn('admin-controls','Admin controls',item.id);
     if(item.kind!=='Assembly')actions+=btn('spool-parts','Spool parts',item.id);
     if(manage()&&!item.released) actions+=btn('edit-plan',plan?'Edit spool plan':'Set up spool','','primary');
-    let html=crumbs()+pageHeading(item.id,item.description||'Spool / item',actions);
+    let html=crumbs()+pageHeading(item.id,'Individual weld tracking',actions);
     if(!plan) return html+empty('This item has no individual weld plan','Set its project, subproject, and planned weld count. Existing custody, QR, and inspection records stay linked to this item.',manage()?btn('edit-plan','Set up individual weld tracking','','primary'):'A supervisor or administrator can set up the spool plan.');
     const summary=s.summary||{};
     html+=metrics({...summary,spools:1,welds_planned:plan.planned_welds,ready_to_release:summary.ready_to_release&&!item.released?1:0,released:item.released?1:0});

@@ -43,6 +43,8 @@ This guide describes the implemented tracking extension and the constraints that
 
 ## Purchase-order hierarchy and API
 
+Version `2026.10.30-orders.2` presents four explicit UI levels: P.O, G.P.N, Assembly and Spools. Parent navigation and selected-scope Excel filters use the same permanent PO/GPN/item keys. Physical item descriptions are omitted from current forms, labels and lists, and assembly/spool description columns are omitted from scoped Excel workbooks. `ItemIn`, `BulkItemRow` and `AssemblyItemIn` accept omitted/blank descriptions with an empty-string default while retaining the maximum length and compatibility with old supplied values. The existing database column, raw history/export fields and issued snapshots remain; no schema migration or data rewrite occurs. Material requirement descriptions and technical work/QA explanations are separate fields and remain intact.
+
 `purchase_orders.project_id` references the unchanged structured Project. Creating a PO atomically creates that project or explicitly attaches an existing one with a reason. `order_gpns` groups assemblies within the PO. `order_assemblies.item_id` references the existing physical Assembly Item and stores its distinct assembly part number and required spool count. Spools retain their existing `SpoolPlan.project_id` and `assembly_id`; component BOMs retain the existing parts-plan/line/allocation tables. No existing data is automatically enrolled or renamed.
 
 | Endpoint | Behavior |
