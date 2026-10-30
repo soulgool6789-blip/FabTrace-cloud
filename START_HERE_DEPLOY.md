@@ -1,5 +1,9 @@
 # Deploy or update FabTrace Cloud on Render
 
+### Expandable production progress: `2026.10.30-progress.1`
+
+Include `production_progress.py`, `static/production-progress.js`, `static/production-progress.css` and the synchronized shells. The new read-only endpoint displays active P.O. scope and recorded traveler events. No schema change or automatic production record creation is required. Keep the existing initialization, health check, service and database settings. Verify the deployed version and static assets, then compare retained record counts through read-only checks.
+
 ### Record removal release: `2026.10.30-removal.1`
 
 Include `removals.py`, `static/removals.js`, `static/removals.css`, the synchronized HTML shells and the reviewed active-scope integration changes. The existing `python init_db.py` pre-deploy step adds one absent table, `record_removals`; no existing rows are removed or enrolled. Health checks now verify that table too. Keep the existing service/database and all nineteen immutable history protections. The release adds administrator-only removal previews and restoration, with explicit scope confirmation and reasons. Do not test by removing real customer work: validate release health/assets and read-only retained-record counts after deployment, then let an administrator choose the actual entries to remove.
@@ -14,7 +18,7 @@ Include `removals.py`, `static/removals.js`, `static/removals.css`, the synchron
 4. Run initialization before the new version accepts requests. Use the configured pre-deploy command, or a controlled manual step running the new `init_db.py` with the existing database settings. Keep the previous application serving until initialization succeeds, or use the service's maintenance procedure. Do not start the new app against an uninitialized schema.
 5. Deploy with the existing start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
 6. Check `/healthz`. It must return `status: "ok"`, the current application version, and the deployment commit when Render supplies it. Health checks confirm the weld tracking plan, production process event, numbered flow plan, quality workspace, dossier project/issue, spool parts, transfer-state/location and purchase-order/GPN/assembly tables are available as well as the database connection.
-7. Sign in with an existing employee account. Confirm existing item, QR, custody, and inspection records are still available. The navigation should include **Projects & welds**, **Process flow**, **Audit readiness**, **Project progress** and **Job Packets**.
+7. Sign in with an existing employee account. Confirm existing item, QR, custody, and inspection records are still available. The navigation should include **Projects & welds**, **Process flow**, **Audit readiness**, **Production progress** and **Job Packets**. Production progress includes a **Project detail / All project records** shortcut to the earlier project register.
 8. Follow [ORDERS_GUIDE.md](ORDERS_GUIDE.md) to create a PO or explicitly connect an existing project, add GPNs and assemblies, and plan the intended spools. New orders, projects and accepted welds are not seeded by deployment.
 
 ### What initialization changes

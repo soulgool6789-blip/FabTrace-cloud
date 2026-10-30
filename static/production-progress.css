@@ -1,0 +1,126 @@
+#productionProgressPage{--pp-ink:#203651;--pp-muted:#62738a;--pp-line:#dce5ef;--pp-blue:#126b9c;--pp-surface:#f4f8fc;color:var(--pp-ink)}
+#productionProgressPage *{box-sizing:border-box}
+#productionProgressPage .pp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:12px 0 20px}
+#productionProgressPage h1{font-size:30px;line-height:1.2;margin:5px 0 8px}
+#productionProgressPage h3{font-size:16px;margin:0 0 12px}
+#productionProgressPage p{line-height:1.55;margin:8px 0}
+#productionProgressPage .pp-eyebrow{font-size:11px;line-height:1.4;letter-spacing:.09em;text-transform:uppercase;font-weight:750;color:#477086}
+#productionProgressPage .pp-head p{color:var(--pp-muted);max-width:690px}
+#productionProgressPage .pp-controls{display:grid;grid-template-columns:minmax(260px,1.5fr) minmax(140px,1fr) minmax(190px,1fr);gap:14px;padding:18px;background:white;border:1px solid var(--pp-line);border-radius:14px;margin-bottom:16px}
+#productionProgressPage .pp-controls .field{margin:0;min-width:0}
+#productionProgressPage .pp-controls label{font-size:12px;font-weight:750;color:#4c6277;display:block;margin-bottom:7px}
+#productionProgressPage .pp-controls input,#productionProgressPage .pp-controls select{width:100%;min-height:43px;border:1px solid #bccedf;border-radius:8px;padding:10px 12px;background:white;color:var(--pp-ink);font-size:14px}
+#productionProgressPage .pp-search{grid-column:1/-1}
+#productionProgressPage .pp-controls input:focus,#productionProgressPage .pp-controls select:focus{outline:3px solid #c5e7fa;border-color:var(--pp-blue)}
+#productionProgressPage .pp-overview{display:grid;grid-template-columns:1.15fr 1fr;gap:24px;padding:22px;border:1px solid #cbddeb;border-radius:14px;background:#edf5fb;margin-bottom:16px}
+#productionProgressPage .pp-totals{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;align-content:start}
+#productionProgressPage .pp-totals>div{background:white;border:1px solid #d7e4ef;border-radius:10px;padding:12px 10px;display:flex;flex-direction:column;gap:8px}
+#productionProgressPage .pp-totals span{font-size:12px;color:var(--pp-muted);line-height:1.4}
+#productionProgressPage .pp-totals strong{font-size:27px;line-height:1}
+#productionProgressPage .pp-meter{min-width:0}
+#productionProgressPage .pp-meter-heading{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:7px}
+#productionProgressPage .pp-meter-heading span{font-size:12px;color:#516b83;font-weight:700}
+#productionProgressPage .pp-meter-heading strong{font-size:21px;white-space:nowrap}
+#productionProgressPage progress{width:100%;height:10px;appearance:none;border:none;border-radius:9px;overflow:hidden;display:block;background:#dfe9f2}
+#productionProgressPage progress::-webkit-progress-bar{background:#dfe9f2;border-radius:9px}
+#productionProgressPage progress::-webkit-progress-value{background:#2582b4;border-radius:9px}
+#productionProgressPage progress::-moz-progress-bar{background:#2582b4;border-radius:9px}
+#productionProgressPage .pp-meter-complete progress::-webkit-progress-value{background:#218564}
+#productionProgressPage .pp-meter-complete progress::-moz-progress-bar{background:#218564}
+#productionProgressPage .pp-empty-meter{height:10px;border-radius:9px;background:repeating-linear-gradient(135deg,#dfe9f2,#dfe9f2 7px,#eef3f7 7px,#eef3f7 14px)}
+#productionProgressPage .pp-meter>small{display:block;color:var(--pp-muted);font-size:11px;line-height:1.45;margin-top:7px}
+#productionProgressPage .pp-meter-small .pp-meter-heading strong{font-size:17px}
+#productionProgressPage .pp-progress-note,#productionProgressPage .pp-filter-note,#productionProgressPage .pp-footnote{font-size:12px;color:#5a6e82;line-height:1.55}
+#productionProgressPage .pp-warning{color:#8b5700;background:#fff2cf}
+#productionProgressPage .pp-scope-inline{font-size:12px;padding:8px 10px;border-radius:7px}
+#productionProgressPage .pp-list-tools{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:16px 0;font-size:12px;color:var(--pp-muted)}
+#productionProgressPage .pp-order,#productionProgressPage .pp-gpn,#productionProgressPage .pp-item{border:1px solid var(--pp-line);border-radius:12px;background:white;margin:12px 0;overflow:hidden}
+#productionProgressPage .pp-order{border-color:#bfd2e3;box-shadow:0 2px 3px #163a5905}
+#productionProgressPage .pp-order>summary,#productionProgressPage .pp-gpn>summary,#productionProgressPage .pp-item>summary{display:grid;grid-template-columns:20px minmax(180px,1fr) minmax(200px,.7fr) auto;align-items:center;gap:14px;padding:17px;cursor:pointer;list-style:none}
+#productionProgressPage summary::-webkit-details-marker{display:none}
+#productionProgressPage .pp-order>summary:hover,#productionProgressPage .pp-gpn>summary:hover,#productionProgressPage .pp-item>summary:hover{background:#f7fafc}
+#productionProgressPage .pp-order>summary:focus-visible,#productionProgressPage .pp-gpn>summary:focus-visible,#productionProgressPage .pp-item>summary:focus-visible{outline:3px solid #9dd6f3;outline-offset:-3px}
+#productionProgressPage .pp-order>summary{background:#f8fbfd}
+#productionProgressPage .pp-expander{width:8px;height:8px;border-right:2px solid #49728d;border-bottom:2px solid #49728d;transform:rotate(-45deg);margin-left:2px}
+#productionProgressPage details[open]>summary>.pp-expander{transform:rotate(45deg)}
+#productionProgressPage .pp-identity{min-width:0}
+#productionProgressPage .pp-identity>strong{display:block;font-size:18px;overflow-wrap:anywhere;line-height:1.4;margin:3px 0}
+#productionProgressPage .pp-item .pp-identity>strong{font-size:15px}
+#productionProgressPage .pp-identity>small{display:block;color:var(--pp-muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+#productionProgressPage .pp-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+#productionProgressPage .pp-badges>span{display:inline-block;padding:3px 7px;border-radius:5px;font-size:11px;background:#eaf1f7;color:#506c80;line-height:1.4}
+#productionProgressPage .pp-badges>.pp-warning{background:#fff0c7;color:#8b5700}
+#productionProgressPage .pp-badges>.pp-hold{background:#fde8e8;color:#a22d37}
+#productionProgressPage .pp-status{font-size:11px;line-height:1.4;padding:5px 8px;border-radius:6px;font-weight:750;text-align:center;max-width:120px}
+#productionProgressPage .pp-status-wip{background:#edf2f7;color:#536b81}
+#productionProgressPage .pp-status-finished{background:#e3f4ec;color:#23734f}
+#productionProgressPage .pp-status-hold{background:#fde8e8;color:#a22d37}
+#productionProgressPage .pp-order-body,#productionProgressPage .pp-gpn-body,#productionProgressPage .pp-item-body{padding:17px;border-top:1px solid var(--pp-line)}
+#productionProgressPage .pp-gpn-body{background:#f9fbfd}
+#productionProgressPage .pp-context>summary{background:#f7f9fb}
+#productionProgressPage .pp-context>summary .pp-eyebrow{color:#76849a}
+#productionProgressPage .pp-stage-section{margin:18px 0}
+#productionProgressPage .pp-stage-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0;padding:0;list-style:none}
+#productionProgressPage .pp-stage{border:1px solid #dbe5ef;border-radius:9px;background:white;padding:11px;min-width:0}
+#productionProgressPage .pp-stage>div:first-child{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:10px}
+#productionProgressPage .pp-stage>div:first-child>strong{font-size:12px}
+#productionProgressPage .pp-stage>div:first-child>span{font-size:10px;color:var(--pp-muted);text-align:right}
+#productionProgressPage .pp-stage .pp-meter-heading>span{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}
+#productionProgressPage .pp-stage .pp-meter-heading strong{font-size:14px}
+#productionProgressPage .pp-stage .pp-meter-heading{margin-bottom:5px}
+#productionProgressPage .pp-stage .pp-meter>small{font-size:10px}
+#productionProgressPage .pp-stage-current{border-color:#6bb6dd;background:#f0f8fe}
+#productionProgressPage .pp-stage-completed{border-color:#c0dfd4;background:#f6fbf8}
+#productionProgressPage .pp-stage-not_applicable{background:#f1f4f7;border-style:dashed;color:#8392a1;display:flex;flex-direction:column;justify-content:space-between}
+#productionProgressPage .pp-stage-not_applicable small{font-size:10px}
+#productionProgressPage .pp-stage-not_recorded{border-color:#e8cc8c}
+#productionProgressPage .pp-stage-scope_unknown{border-style:dashed;background:#fffaf0}
+#productionProgressPage .pp-stage-missing{display:block;color:#8b5700;font-size:10px;line-height:1.4;margin-top:7px}
+#productionProgressPage .pp-shipping{display:flex;align-items:center;flex-wrap:wrap;gap:8px 15px;border:1px dashed #c7d5e1;border-radius:8px;background:#f7f9fc;padding:10px 12px;margin-top:10px;font-size:12px;color:#64788d}
+#productionProgressPage .pp-shipping small{flex-basis:100%;font-size:11px}
+#productionProgressPage .pp-item-facts{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px;margin:0 0 15px}
+#productionProgressPage .pp-item-facts>div{min-width:0}
+#productionProgressPage .pp-item-facts span{display:block;color:#738296;font-size:11px;margin-bottom:5px}
+#productionProgressPage .pp-item-facts strong{font-size:12px;line-height:1.5;overflow-wrap:anywhere;display:block}
+#productionProgressPage .pp-item-facts strong small{display:block;color:#738296;font-size:10px;font-weight:500}
+#productionProgressPage .pp-info{font-size:12px;color:#62768a;line-height:1.55}
+#productionProgressPage .pp-parts-counts{display:flex;flex-wrap:wrap;gap:8px 14px;background:#eef5fa;border:1px solid #d5e3ee;border-radius:8px;padding:11px;font-size:12px;margin:12px 0}
+#productionProgressPage .pp-parts-counts>strong{flex-basis:100%}
+#productionProgressPage .pp-parts-counts>.pp-warning{padding:2px 5px;border-radius:3px}
+#productionProgressPage .pp-own-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+#productionProgressPage .pp-own-heading h3{margin:0}
+#productionProgressPage .pp-own-heading small{display:block;margin-top:6px;color:var(--pp-muted);font-size:11px;font-weight:500;overflow-wrap:anywhere}
+#productionProgressPage .pp-assembly-own{padding:16px;border:1px solid #dbe4ed;border-radius:10px;background:white;margin-bottom:20px}
+#productionProgressPage .pp-assembly-own>.pp-meter{margin-bottom:18px}
+#productionProgressPage .pp-children>h3 span{font-size:12px;background:#e5edf4;color:#58728a;padding:2px 7px;border-radius:10px;margin-left:5px}
+#productionProgressPage .pp-scope-note,#productionProgressPage .pp-hold-note{font-size:12px;line-height:1.55;border-radius:8px;padding:12px;margin:0 0 15px}
+#productionProgressPage .pp-scope-note{background:#fff7e4;border:1px solid #eed9a5;color:#81591e}
+#productionProgressPage .pp-hold-note{background:#fff1f1;border:1px solid #eab9bf;color:#982f3a}
+#productionProgressPage .pp-scope-note ul,#productionProgressPage .pp-hold-note ul,#productionProgressPage .pp-readiness ul{padding-left:20px;margin:7px 0 0}
+#productionProgressPage .pp-step-details,#productionProgressPage .pp-readiness{border:1px solid #dbe4ed;border-radius:8px;margin:12px 0;padding:12px;font-size:12px;background:white}
+#productionProgressPage .pp-step-details>summary,#productionProgressPage .pp-readiness>summary{font-weight:700;color:#46667f;cursor:pointer}
+#productionProgressPage .pp-step-details>summary::before,#productionProgressPage .pp-readiness>summary::before{content:'▸';margin-right:7px}
+#productionProgressPage .pp-step-details[open]>summary::before,#productionProgressPage .pp-readiness[open]>summary::before{content:'▾'}
+#productionProgressPage .pp-numbered-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;list-style:none;padding:0;margin:15px 0 0}
+#productionProgressPage .pp-numbered-steps li{display:flex;gap:10px;min-width:0;border:1px solid #e1e8ef;border-radius:7px;padding:10px;background:#f9fbfd}
+#productionProgressPage .pp-step-number{flex:0 0 27px;height:27px;line-height:27px;text-align:center;border-radius:50%;background:#e6edf4;color:#62788c;font-size:12px;font-weight:700}
+#productionProgressPage .pp-numbered-steps strong{font-size:12px;line-height:1.4;display:block}
+#productionProgressPage .pp-numbered-steps small{display:block;font-size:10px;color:var(--pp-muted);margin-top:5px}
+#productionProgressPage .pp-step-completed .pp-step-number{background:#dbf0e4;color:#207049}
+#productionProgressPage .pp-step-current{border-color:#80bada!important;background:#eff8fe!important}
+#productionProgressPage .pp-step-current .pp-step-number{background:#1676a8;color:white}
+#productionProgressPage .pp-step-not_recorded .pp-step-number{background:#fff0cb;color:#916722}
+#productionProgressPage .pp-qa{font-size:9px;font-weight:600;color:#7b608a;border:1px solid #ddd1e7;border-radius:3px;padding:1px 4px;margin-left:6px;white-space:nowrap}
+#productionProgressPage .pp-readiness p{font-size:11px;color:var(--pp-muted)}
+#productionProgressPage .pp-record-actions{margin-top:15px}
+#productionProgressPage .pp-order-actions{margin:15px 0}
+#productionProgressPage .pp-unassigned{border-top:1px dashed #c7d4e0;padding-top:20px;margin-top:20px}
+#productionProgressPage .pp-unassigned>p{font-size:12px;color:var(--pp-muted)}
+#productionProgressPage .pp-empty,#productionProgressPage .pp-state{padding:25px;border:1px dashed #bdcddd;border-radius:12px;background:white;margin:15px 0;color:#60748a}
+#productionProgressPage .pp-empty>strong,#productionProgressPage .pp-state>strong{display:block;color:#29435c}
+#productionProgressPage .pp-empty p,#productionProgressPage .pp-state p{font-size:13px;margin-bottom:15px}
+#productionProgressPage .pp-error{background:#fff4f4;border-color:#e4b4bc;color:#8e3340}
+#productionProgressPage .pp-footnote{padding:15px 3px;margin-top:10px}
+@media(min-width:1100px){#productionProgressPage .pp-controls{grid-template-columns:minmax(250px,1.3fr) minmax(135px,.7fr) minmax(180px,1fr) minmax(210px,1.1fr)}#productionProgressPage .pp-search{grid-column:auto}}
+@media(max-width:850px){#productionProgressPage .pp-overview{grid-template-columns:1fr}#productionProgressPage .pp-controls{grid-template-columns:1fr 1fr}#productionProgressPage .pp-po-select,#productionProgressPage .pp-search{grid-column:1/-1}#productionProgressPage .pp-order>summary,#productionProgressPage .pp-gpn>summary,#productionProgressPage .pp-item>summary{grid-template-columns:16px minmax(100px,1fr) auto;gap:10px}#productionProgressPage .pp-row-progress{grid-column:2/-1;grid-row:2}#productionProgressPage .pp-stage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:540px){#productionProgressPage .pp-head{display:block}#productionProgressPage .pp-head>.actions{margin-top:15px}#productionProgressPage h1{font-size:26px}#productionProgressPage .pp-controls{padding:13px;gap:12px}#productionProgressPage .pp-controls select{font-size:12px;padding:10px 7px}#productionProgressPage .pp-overview{padding:15px;gap:16px}#productionProgressPage .pp-totals{grid-template-columns:repeat(2,minmax(0,1fr))}#productionProgressPage .pp-totals>div{padding:11px 12px}#productionProgressPage .pp-totals strong{font-size:24px}#productionProgressPage .pp-list-tools{align-items:flex-start;flex-direction:column}#productionProgressPage .pp-order>summary,#productionProgressPage .pp-gpn>summary,#productionProgressPage .pp-item>summary{padding:12px;gap:8px}#productionProgressPage .pp-identity>strong{font-size:17px}#productionProgressPage .pp-order-body,#productionProgressPage .pp-gpn-body,#productionProgressPage .pp-item-body{padding:11px}#productionProgressPage .pp-gpn .pp-gpn-body{padding:9px}#productionProgressPage .pp-status{font-size:10px;max-width:83px;padding:4px 6px}#productionProgressPage .pp-stage-grid{gap:6px}#productionProgressPage .pp-stage{padding:9px 8px}#productionProgressPage .pp-stage>div:first-child{display:block;margin-bottom:7px}#productionProgressPage .pp-stage>div:first-child>strong{font-size:11px;display:block}#productionProgressPage .pp-stage>div:first-child>span{display:block;text-align:left;font-size:9px;margin-top:5px}#productionProgressPage .pp-item-facts{grid-template-columns:1fr 1fr}#productionProgressPage .pp-item-facts>div:first-child{grid-column:1/-1}#productionProgressPage .pp-assembly-own{padding:11px}#productionProgressPage .pp-numbered-steps{grid-template-columns:1fr}#productionProgressPage .pp-record-actions>button{flex:1 1 110px;font-size:12px}#productionProgressPage .pp-parts-counts{font-size:11px}#productionProgressPage .pp-badges{gap:4px}#productionProgressPage .pp-badges>span{font-size:10px}#productionProgressPage .pp-meter-heading span{font-size:11px}#productionProgressPage .pp-meter-small .pp-meter-heading strong{font-size:16px}}

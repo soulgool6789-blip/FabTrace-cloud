@@ -47,7 +47,7 @@ const context={document:{getElementById:id=>elements.get(id)||null,body:elements
     if(hold)await hold;if(failure)throw failure;return response;
   }
 };
-for(const name of ['Tracking','Progress','Dossier','Flow','Quality','Parts','Admin'])context['Fab'+name]={open:options=>routes.push({module:name.toLowerCase(),...options})};
+for(const name of ['Tracking','Progress','ProductionProgress','Dossier','Flow','Quality','Parts','Admin'])context['Fab'+name]={open:options=>routes.push({module:name.toLowerCase(),...options})};
 context.window=context;vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/guide.js'),'utf8'),context);
 const html=()=>elements.get('guideContent').innerHTML;
 const click=(action,id='',tab='')=>elements.get('guideContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{guideAction:action,guideId:id,guideTab:tab}})}});
@@ -129,7 +129,7 @@ async function check(name,fn){await fn();checks.push(name);}
   await check('roles explain ownership without granting mutations',async()=>{
     setProjects(complete());
     const roles={handler:/Material coordination/,welder:/root and fill/,fitup_welder:/Fit-up and tack/,process_welder:/PWHT/,painter:/Sandblast and paint/,finisher:/Component preparation/,misc:/General support/,supervisor:/specialized work and QA acceptance/,inspector:/QA\/QC inspections/,admin:/Full site administration/};
-    const allowed=new Set(['topic','refresh','project','tracking','progress','dossier','item','flow-item','packet','print','clear','items','flow','quality','parts','admin','orders']);
+    const allowed=new Set(['topic','refresh','project','tracking','progress','dossier','item','flow-item','packet','print','clear','items','flow','quality','parts','admin','orders','production-progress']);
     for(const [role,expectation] of Object.entries(roles)){context.me.role=role;await context.FabGuide.open({project:'P1'});const note=html().match(/<p class="fg-role">([\s\S]*?)<\/p>/)[1];assert.match(note,expectation);assert.match(note,/only reads existing records/);for(const m of html().matchAll(/data-guide-action="([^"]+)"/g))assert.ok(allowed.has(m[1]),'guide must navigate to the permission-enforcing screen: '+m[1]);}
     assert.equal(calls.filter(c=>c.method&&c.method!=='GET').length,0);
   });
@@ -155,6 +155,7 @@ async function check(name,fn){await fn();checks.push(name);}
   });
   await check('project shortcuts clear tracking filters and reach exact records',async()=>{
     await click('tracking');assert.deepEqual(routes.at(-1),{module:'tracking',project:'P1',subproject:'',view:'spools',resetFilters:true});
+    await click('production-progress');assert.deepEqual(routes.at(-1),{module:'productionprogress'});
     await click('progress');assert.deepEqual(routes.at(-1),{module:'progress',project:'P1'});await click('parts');assert.deepEqual(routes.at(-1),{module:'parts',project:'P1'});
     for(const tab of ['items','documents','issues','handovers']){await click('dossier','P1',tab);assert.deepEqual(routes.at(-1),{module:'dossier',project:'P1',tab});}
     await click('packet','S1');assert.deepEqual(routes.at(-1),{module:'dossier',project:'P1',item:'S1'});
