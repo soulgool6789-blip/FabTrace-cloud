@@ -24,11 +24,12 @@ def add_gpn(api, detail, gpn):
     return detail, next(row['id'] for row in detail['gpns'] if row['gpn'] == gpn)
 
 
-def add_assembly(api, detail, gpn_id, item_id, required=2):
+def add_assembly(api, detail, gpn_id, item_id, required=2, part_number=None):
     project_id = detail['order']['project_id']
     response = api.post(f'/api/orders/{project_id}/assemblies', {
         'expected_version': detail['order']['version'], 'gpn_id': gpn_id, 'item_id': item_id,
-        'assembly_part_number': '000099-' + item_id, 'required_spools': required,
+        'assembly_part_number': part_number if part_number is not None else '000099-' + item_id,
+        'required_spools': required,
         'notes': 'Synthetic controlled assembly scope',
         'create_item': {'id': item_id, 'description': 'Test assembly ' + item_id,
             'google_part_number': 'PHYSICAL-' + item_id, 'drawing': 'TEST-DWG Rev A',
@@ -99,8 +100,9 @@ def test_bom_scope_quantities_gaps_and_literal_identifiers(api, order_scope):
     assert list(book.sheets) == ['Assembly summary', 'Bill of materials', 'Spool register', 'Export info']
     summary = values(book, 'Assembly summary')
     first = next(row for row in summary if row['Assembly ID'] == 'ASM-A')
-    assert first['PO number'] == '000012345' and first['GPN'] == '000007'
-    assert first['Assembly part number'] == '000099-ASM-A'
+    assert first['PO number'] == '000012345' and first['GPN / Assembly number'] == '000007'
+    assert first['Retained assembly part number'] == '000099-ASM-A'
+    assert 'GPN' not in first and 'Assembly part number' not in first
     assert 'Assembly description' not in first
     assert all('Spool description' not in row for row in values(book, 'Spool register'))
     assert (first['Required spools'], first['Linked spools'], first['Missing spools']) == (2, 1, 1)
@@ -117,6 +119,68 @@ def test_bom_scope_quantities_gaps_and_literal_identifiers(api, order_scope):
     unplanned = next(row for row in bom if row['Spool ID'] == 'SP-B')
     assert unplanned['Required quantity'] is None and unplanned['Planning status'] == 'BOM not planned'
     assert not book.formulas
+    assert snapshot(api) == before
+
+
+@pytest.mark.parametrize('suffix', ('bom.xlsx', 'bom-template.xlsx'))
+def test_combined_number_is_one_column_with_drafts_and_leading_zeros(api, suffix):
+    detail = make_order(api)
+    detail, gpn_id = add_gpn(api, detail, '000007')
+    detail = add_assembly(api, detail, gpn_id, 'COMBINED-ASM', required=3, part_number='000007')
+    detail, draft_id = add_gpn(api, detail, '000008')
+    project = detail['order']['project_id']
+    plan_existing_assembly(api, project, 'COMBINED-ASM')
+    plan(api, project, 'COMBINED-SP', 'COMBINED-ASM')
+    part_lines(api, 'COMBINED-SP')
+    before = snapshot(api)
+    book = download(api, project, suffix=suffix)
+    material_sheet = 'BOM template' if suffix == 'bom-template.xlsx' else 'Bill of materials'
+    for sheet in ('Assembly summary', material_sheet, 'Spool register'):
+        headers = book.headers(sheet)
+        assert headers[:3] == ['PO number', 'GPN / Assembly number', 'Assembly ID']
+        assert all(name not in headers for name in ('GPN', 'Assembly part number', 'Retained assembly part number'))
+        rows = book.records(sheet)
+        identity = next(row for row in rows if row['Assembly ID'].value == 'COMBINED-ASM')
+        assert identity['GPN / Assembly number'].value == '000007'
+        assert identity['GPN / Assembly number'].kind == 'inlineStr'
+        draft = next(row for row in rows if row['GPN / Assembly number'].value == '000008')
+        assert draft['Assembly ID'].value == ''
+    summary = values(book, 'Assembly summary')
+    planned = next(row for row in summary if row['Assembly ID'] == 'COMBINED-ASM')
+    assert (planned['Required spools'], planned['Linked spools'], planned['Missing spools']) == (3, 1, 2)
+    draft = next(row for row in summary if row['GPN / Assembly number'] == '000008')
+    assert draft['Required spools'] is None and 'Finish GPN / Assembly setup' in draft['Planning status']
+    rows = [row for row in values(book, material_sheet) if row['Spool ID'] == 'COMBINED-SP']
+    if suffix == 'bom.xlsx':
+        assert [row['Required quantity'] for row in rows] == [2, 1]  # Never multiply by three required spools.
+    else:
+        assert len(rows) == 1 and rows[0]['Required quantity'] is None
+    scoped_draft = download(api, project, suffix=suffix, gpn_id=draft_id)
+    assert all(row['GPN / Assembly number'] == '000008' for row in values(scoped_draft, material_sheet))
+    assert snapshot(api) == before
+
+
+@pytest.mark.parametrize('suffix', ('bom.xlsx', 'bom-template.xlsx'))
+def test_legacy_number_column_is_conditional_on_selected_scope(api, order_scope, suffix):
+    project = order_scope['project']
+    detail = api.get(f'/api/orders/{project}').json()
+    detail, combined_id = add_gpn(api, detail, '000900')
+    detail = add_assembly(api, detail, combined_id, 'COMBINED-C', required=1, part_number='000900')
+    before = snapshot(api)
+    material_sheet = 'BOM template' if suffix == 'bom-template.xlsx' else 'Bill of materials'
+    book = download(api, project, suffix=suffix)
+    for sheet in ('Assembly summary', material_sheet, 'Spool register'):
+        assert 'Retained assembly part number' in book.headers(sheet)
+        rows = values(book, sheet)
+        assert all(row['Retained assembly part number'] == '000099-ASM-A'
+                   for row in rows if row['Assembly ID'] == 'ASM-A')
+        assert all(row['Retained assembly part number'] == ''
+                   for row in rows if row['Assembly ID'] == 'COMBINED-C')
+    for params in ({'gpn_id': combined_id}, {'assembly_id': 'COMBINED-C'}):
+        scoped = download(api, project, suffix=suffix, **params)
+        for sheet in ('Assembly summary', material_sheet, 'Spool register'):
+            assert 'Retained assembly part number' not in scoped.headers(sheet)
+            assert {row['Assembly ID'] for row in values(scoped, sheet)} == {'COMBINED-C'}
     assert snapshot(api) == before
 
 
@@ -178,8 +242,8 @@ def test_new_empty_order_and_unplanned_gpn_have_usable_blank_template(api):
     detail, gpn_id = add_gpn(api, detail, 'FUTURE-GPN')
     book = download(api, project, gpn_id=gpn_id)
     row = values(book, 'Bill of materials')[0]
-    assert row['GPN'] == 'FUTURE-GPN' and row['Required quantity'] is None
-    assert 'No assemblies' in row['Planning status']
+    assert row['GPN / Assembly number'] == 'FUTURE-GPN' and row['Required quantity'] is None
+    assert 'Finish GPN / Assembly setup' in row['Planning status']
 
 
 def test_legacy_unmapped_spools_and_assemblies_are_visible_unfiltered(api, order_scope):

@@ -24,24 +24,24 @@ from exports import (ExporterIdentity, TEMP_MEMORY_BYTES, WorkbookWriter,
 
 router = APIRouter(prefix='/api/orders', tags=['purchase order bills of materials'])
 SUMMARY_COLUMNS = (
-    'PO number', 'GPN', 'Assembly ID', 'Assembly part number',
+    'PO number', 'GPN / Assembly number', 'Assembly ID',
     'Required spools', 'Linked spools', 'Missing spools', 'Ready spools',
     'Linked spools not ready', 'Planning status', 'Notes', 'Blockers',
 )
 BOM_COLUMNS = (
-    'PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Spool ID',
+    'PO number', 'GPN / Assembly number', 'Assembly ID', 'Spool ID',
     'Spool part number', 'Material part number', 'Material description',
     'Required quantity', 'Assigned quantity', 'Received quantity', 'Prepared quantity',
     'Remaining quantity', 'Unit', 'BOM reference', 'Assigned component IDs',
     'Line notes', 'Planning status',
 )
 TEMPLATE_COLUMNS = (
-    'PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Spool ID',
+    'PO number', 'GPN / Assembly number', 'Assembly ID', 'Spool ID',
     'Spool part number', 'Material part number', 'Material description',
     'Required quantity', 'Unit', 'BOM reference', 'Line notes',
 )
 SPOOL_COLUMNS = (
-    'PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Spool ID',
+    'PO number', 'GPN / Assembly number', 'Assembly ID', 'Spool ID',
     'Spool part number', 'Planning status', 'BOM reference',
     'BOM version', 'Required pieces', 'Assigned pieces', 'Received pieces',
     'Prepared pieces', 'Remaining pieces', 'Process status', 'Current step',
@@ -71,14 +71,23 @@ def _selection(detail, gpn_id, assembly_id):
 
 def _context(order, assembly=None, spool=None, gpn=None):
     assembly, spool = assembly or {}, spool or {}
+    number = assembly.get('gpn', gpn or '')
+    retained = assembly.get('assembly_part_number', '')
     return {
         'PO number': order['purchase_order'],
-        'GPN': assembly.get('gpn', gpn or ''),
+        'GPN / Assembly number': number,
         'Assembly ID': assembly.get('item_id', ''),
-        'Assembly part number': assembly.get('assembly_part_number', ''),
+        'Retained assembly part number': retained if retained and retained != number else '',
         'Spool ID': spool.get('item_id', ''),
         'Spool part number': spool.get('google_part_number') or '',
     }
+
+
+def _identity_columns(headers, include_retained):
+    """Keep new combined numbers simple while retaining distinct old metadata."""
+    if include_retained:
+        return headers[:3] + ('Retained assembly part number',) + headers[3:]
+    return headers
 
 
 def _write(writer, name, headers, rows, *, json_columns=()):
@@ -152,7 +161,7 @@ def _snapshot_rows(session, detail, gpn_id=None, assembly_id=None, *, template=F
         if assembly_id is not None or any(row['gpn_id'] == gpn['id'] for row in assemblies):
             continue
         context = _context(order, gpn=gpn['gpn'])
-        status = 'No assemblies or physical spools planned for this GPN'
+        status = 'Finish GPN / Assembly setup; no physical assembly or spools registered'
         summary.append({**context, 'Planning status': status})
         bom.append({**context, 'Unit': 'piece', 'Planning status': status})
         register.append({**context, 'Planning status': status})
@@ -217,14 +226,15 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                                  join_transaction_mode='rollback_only') as session:
                         detail = order_detail(session, project_id)
                         summary, bom, register = _snapshot_rows(session, detail, gpn_id, assembly_id, template=template)
+                    retained_numbers = any(row.get('Retained assembly part number') for row in summary)
                     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED,
                                          compresslevel=6, allowZip64=True) as archive:
                         writer = WorkbookWriter(archive, overflow)
                         writer.next_sheet_id = 1
-                        _write(writer, 'Assembly summary', SUMMARY_COLUMNS, summary)
+                        _write(writer, 'Assembly summary', _identity_columns(SUMMARY_COLUMNS, retained_numbers), summary)
                         _write(writer, 'BOM template' if template else 'Bill of materials',
-                               TEMPLATE_COLUMNS if template else BOM_COLUMNS, bom)
-                        _write(writer, 'Spool register', SPOOL_COLUMNS, register)
+                               _identity_columns(TEMPLATE_COLUMNS if template else BOM_COLUMNS, retained_numbers), bom)
+                        _write(writer, 'Spool register', _identity_columns(SPOOL_COLUMNS, retained_numbers), register)
                         info = [
                             ('Document', 'Editable BOM planning template' if template else 'Purchase order bill of materials snapshot'),
                             ('PO number', detail['order']['purchase_order']),
@@ -232,18 +242,21 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                             ('Project ID', project_id),
                             ('Project name', detail['order']['project_name']),
                             ('Order revision', detail['order']['version']),
-                            ('GPN filter', gpn_id or 'All GPNs'),
-                            ('Assembly filter', assembly_id or 'All assemblies'),
+                            ('GPN / Assembly filter', gpn_id or 'All GPN / Assemblies'),
+                            ('Physical assembly filter', assembly_id or 'All physical assemblies'),
                             ('Exported at', _utc(created_at)),
                             ('Exported by', exporter.name),
                             ('Quantity unit', 'Whole physical pieces per unique spool. Material quantities are not multiplied by the required spool count.'),
                             ('Assembly counts', 'Required spools are declared scope; linked spools count unique existing identities. Missing spools have no invented material quantities.'),
+                            ('Number identity', 'GPN / Assembly number is the combined business number. Assembly ID remains the unique physical QR identity.'),
                             ('Progress', 'Received and prepared counts come from current recorded component processes. A BOM quantity or assignment does not prove receipt, preparation or QA release.'),
                             ('Blank quantities', 'A blank quantity means not planned or not known. It does not mean zero required pieces.'),
                             ('Excel editing', 'This workbook is editable offline. Editing or saving it does not change FabTrace; enter approved quantities using Spool parts. Excel import is not provided by this download.'),
                             ('Template use', 'Add one line per material requirement and unique physical spool. Copy context cells when adding rows; enter material part number, description, whole-piece quantity and approved BOM reference. Leave unregistered spool identities blank until assigned.'),
                             ('Control', 'Planning/export only. This workbook is not a QA-issued Job Packet or authorization to pass a quality hold point.'),
                         ]
+                        if retained_numbers:
+                            info.append(('Retained numbers', 'Retained assembly part number preserves a distinct earlier number only where it differs from the GPN / Assembly number. The export does not rename or modify any record.'))
                         _write(writer, 'Export info', ('Entry', 'Value'), [{'Entry': key, 'Value': value} for key, value in info])
                         writer.write_overflow()
                         writer.finish(created_at)

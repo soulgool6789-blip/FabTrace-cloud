@@ -2,9 +2,9 @@
 
 Start in **Purchase orders** (`/?orders=1`). New work follows:
 
-**P.O → G.P.N → Assembly → Spools.**
+**P.O → GPN / Assembly → Spools.**
 
-The four numbered navigation steps keep each level separate. Select a P.O to see its G.P.Ns, select a G.P.N to see its assemblies, then open an assembly to manage its spools. Use the step links or Back action to return to the parent level. Assembly part numbers and required spool counts stay beside the assembly; the spool screen provides its materials, welds and process records.
+The three navigation steps use the GPN as the assembly number. Select a P.O to see its combined GPN/Assembly register, then choose **Open spools** on the intended row. Required, linked, missing and ready spool counts appear beside that one number. Use the navigation steps or Back action to return to the parent screen.
 
 Administrators and supervisors create and edit the order structure. All active employees in supported positions can view it and download its scoped Excel BOM. Existing job permissions still govern physical work, inspections, custody transfers and release.
 
@@ -14,17 +14,21 @@ Choose **New P.O**. Enter the customer's P.O number, customer and setup notes. T
 
 If the work is already registered, select **Existing project to connect** and document why that project belongs to this PO. Confirm the existing customer and any configured Job Packet PO before saving. This keeps its project ID, physical item IDs, QR labels and history. Existing projects are not enrolled automatically. The same normalized PO number cannot be entered twice for the same customer.
 
-## 2. Add the GPN
+## 2. Add the GPN / Assembly in one form
 
-Open the P.O and choose **Add G.P.N**. Enter the actual G.P.N. One P.O can contain several G.P.N groups. Choose **Open assemblies** on the intended G.P.N to open its Assembly step.
+Open the P.O and choose **Add GPN / Assembly**. Enter the **GPN / Assembly number** once, the whole number of **Spools needed**, the actual current location and the employee who holds the item. Save to register the assembly and open its Spools screen in one operation.
 
-The G.P.N, assembly part number and physical tracking ID are separate identities. The assembly screen uses the selected parent G.P.N, so it does not ask for another G.P.N or a description. Grouping an existing assembly does not overwrite its retained item part number.
+FabTrace generates the unique physical QR tracking ID automatically. You do not need to invent another number. **More options** lets you enter a custom QR ID, drawing reference or connect an eligible existing physical assembly from this P.O. There is no item-description field or separate assembly part-number field.
 
-## 3. Enter each assembly and the spool count beside it
+### Finish a GPN that was entered earlier
 
-Choose **Add assembly** under the intended GPN. Either register a new assembly or connect an existing eligible Assembly record from the same project.
+An existing GPN without an assembly appears in the same register with **Finish setup**. Select it, confirm its prefilled number, enter the required spool count and actual custody/location information, then save. This completes that existing GPN; it does not create another group. Until setup is completed, its spool requirement remains undeclared rather than zero or finished.
 
-For a new assembly, enter its unique assembly/QR ID, current location and current custodian. Enter the **Assembly part number** and **Spools needed**. No item description is requested. This is a whole count from 1 to 10,000 of unique physical spools needed for this one assembly. Two physical assemblies with the same design part number still need separate tracking IDs and their own spool counts.
+Existing physical assemblies keep their IDs and history. Older records that used a different assembly part number retain that number as secondary information. If an older GPN already contains multiple physical assemblies, each physical assembly remains a separate row with its own QR ID and spool scope. The normal combined creation form prevents accidental duplicate setup of an already configured number.
+
+## 3. Read the required spool count and progress
+
+**Spools needed** is a whole count from 1 to 10,000 of unique physical spools required for that one assembly.
 
 The table displays these measures side by side:
 
@@ -47,9 +51,9 @@ Physical items are identified by tracking ID and part number. New item registrat
 
 If the spool already has a traveler, use the assembly's **Process flow** linking action at step 17 or 18 after the spool has completed its route and has current ordinary QA readiness. The older planning dialog cannot rewrite a controlled traveler parent link.
 
-The app rejects cross-project links, duplicate use of a physical spool and links exceeding the assembly's required count. You can correct the required count with a reason while the assembly is unreleased and before its traveler begins, provided it stays at least as large as the linked count. Once that traveler begins, its declared count and assembly part number are locked. A released parent must be returned to work before changing its child scope or links. Stale forms must be refreshed before retrying.
+The app rejects cross-project links, duplicate use of a physical spool and links exceeding the assembly's required count. You can correct the required count with a reason while the assembly is unreleased and before its traveler begins, provided it stays at least as large as the linked count. The same edit form corrects its GPN/Assembly number together when eligible. Numbers shared by multiple older assemblies cannot be renamed through a single row. Once the assembly traveler begins, its declared count and number are locked. A released parent must be returned to work before changing its child scope or links. Stale forms must be refreshed before retrying.
 
-Each linked spool provides shortcuts to **Create / edit BOM**, **Welds**, **Process flow** and **Item & QR**. Return to Purchase orders to resume the selected PO/GPN/assembly.
+Each linked spool provides shortcuts to **Create / edit BOM**, **Welds**, **Process flow** and **Item & QR**. Return to Purchase orders to resume the selected P.O and GPN/Assembly.
 
 ## 5. Build the material list for each spool
 
@@ -64,11 +68,11 @@ See [PARTS_GUIDE.md](PARTS_GUIDE.md) for allocation, preparation and controlled 
 From Purchase orders, choose either:
 
 - **Download BOM Excel** for the currently recorded material requirements and progress.
-- **Excel BOM template** for an editable planning workbook with the selected PO, GPN, assembly and spool context and blank material-entry rows.
+- **Excel BOM template** for an editable planning workbook with the selected P.O, GPN/Assembly and spool context and blank material-entry rows.
 
-Open the whole PO, a GPN or an assembly before downloading to choose the export scope. The workbook contains **Assembly summary**, **Bill of materials** (or **BOM template**), **Spool register** and **Export info** sheets.
+Download from the combined register for the selected P.O scope, or open an assembly's Spools screen for that physical assembly. Older filtered GPN links also retain their displayed selection. The workbook contains **Assembly summary**, **Bill of materials** (or **BOM template**), **Spool register** and **Export info** sheets.
 
-The BOM carries PO number, GPN, assembly ID and part number, spool ID and part number, material part number/description, required/assigned/received/prepared/remaining quantities, units and BOM reference. Redundant assembly and spool description columns are omitted. Material requirement descriptions remain part of the BOM. The assembly summary retains missing spool counts. Unmapped existing project records appear in an unfiltered PO export with their planning status, so they are not silently omitted. A filtered GPN/assembly export includes only its selected scope.
+The BOM carries the P.O number, one **GPN / Assembly number**, separate physical **Assembly ID**, spool ID/part number, material part number/description, required/assigned/received/prepared/remaining quantities, units and BOM reference. A **Retained assembly part number** column appears only when the selected older records contain a differing number, with values only for those affected records. Item descriptions remain omitted; material requirement descriptions remain part of the BOM. The assembly summary retains missing spool counts and unfinished GPN setup. Unmapped project records appear in an unfiltered P.O export with their planning status. A filtered export includes only its selected scope.
 
 Materials are counted once per actual physical spool. They are not multiplied again by the assembly's required spool count. If a required spool or its BOM has not been entered, the workbook flags the missing planning instead of inventing material quantities. Leading-zero identifiers remain text in Excel.
 

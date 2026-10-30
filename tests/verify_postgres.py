@@ -794,6 +794,67 @@ def verify_purchase_order_transactions(application, api):
         assert (traveler and traveler.expected_children == scope.required_spools == 1) or (not traveler and scope.required_spools == 2)
         assert session.query(OrderGpn).filter_by(project_id=project_id).count() == 1
 
+    # The combined form creates the number, physical identity and mapping in one
+    # transaction. Competing clicks must not leave a spare GPN or orphan Item.
+    current = ok(api.get(root))
+    with application.SessionLocal() as session:
+        items_before = session.query(application.Item).count()
+    combined_body = {'expected_version': current['order']['version'], 'gpn': '000-PG-COMBINED',
+        'required_spools': 2, 'create_item': {'location': 'Test rack', 'handler': BADGES['handler']}}
+    combined_codes = race([('POST', root + '/gpn-assemblies', combined_body) for _ in range(2)])
+    current = ok(api.get(root))
+    combined = next(row for row in current['assemblies'] if row['gpn'] == '000-PG-COMBINED')
+    combined_id = combined['item_id']
+    with application.SessionLocal() as session:
+        assert session.query(application.Item).count() == items_before + 1
+        assert session.query(OrderGpn).filter_by(project_id=project_id).count() == 2
+        assert session.query(OrderAssembly).filter_by(gpn_id=combined['gpn_id']).count() == 1
+        item = session.get(application.Item, combined_id)
+        assert item.google_part_number == combined['assembly_part_number'] == combined['gpn']
+        assert item.description == '' and not item.released
+
+    # Existing GPN-only drafts are finished explicitly, retaining the GPN ID.
+    draft = ok(api.post(root + '/gpns', {'expected_version': current['order']['version'],
+        'gpn': '000-PG-DRAFT', 'description': 'Retained draft metadata'}), 201)
+    draft_id = next(row['id'] for row in draft['gpns'] if row['gpn'] == '000-PG-DRAFT')
+    finish_body = {'expected_version': draft['order']['version'], 'gpn_id': draft_id,
+        'gpn': '000-PG-DRAFT', 'required_spools': 1,
+        'create_item': {'location': 'Test rack', 'handler': BADGES['handler']}}
+    finish_codes = race([('POST', root + '/gpn-assemblies', finish_body) for _ in range(2)])
+    with application.SessionLocal() as session:
+        group = session.get(OrderGpn, draft_id)
+        assert group.description == 'Retained draft metadata'
+        assert session.query(OrderAssembly).filter_by(gpn_id=draft_id).count() == 1
+        assert session.query(application.Item).count() == items_before + 2
+
+    # Number corrections keep the GPN and assembly number together under the
+    # order revision, including the generated item's matching part number.
+    current = ok(api.get(root))
+    renumber_codes = race([('PATCH', root + '/gpn-assemblies/' + combined_id, {
+        'expected_version': current['order']['version'], 'gpn': number,
+        'required_spools': 2, 'reason': 'Synthetic concurrent number correction',
+    }) for number in ('000-PG-CORRECTED-A', '000-PG-CORRECTED-B')])
+    current = ok(api.get(root))
+    combined = next(row for row in current['assemblies'] if row['item_id'] == combined_id)
+    with application.SessionLocal() as session:
+        item = session.get(application.Item, combined_id)
+        assert item.google_part_number == combined['assembly_part_number'] == combined['gpn']
+    ok(api.post('/api/tracking/spools/' + combined_id + '/plan', {
+        'project_id': project_id, 'planned_welds': 0,
+        'zero_weld_reason': 'Synthetic assembly has no added joining welds', 'drawing_revision': 'TEST',
+    }))
+    combined_scope_codes = race([
+        ('POST', '/api/flow/items/' + combined_id + '/start', {'route': 'assembly', 'expected_children': 2}),
+        ('PATCH', root + '/gpn-assemblies/' + combined_id, {
+            'expected_version': current['order']['version'], 'gpn': combined['gpn'],
+            'required_spools': 3, 'reason': 'Synthetic simultaneous combined scope correction',
+        }),
+    ])
+    with application.SessionLocal() as session:
+        scope = session.get(OrderAssembly, combined_id)
+        traveler = session.get(FlowPlan, combined_id)
+        assert (traveler and traveler.expected_children == scope.required_spools == 2) or (not traveler and scope.required_spools == 3)
+
     before, unsafe = database_state(api), []
 
     def observe(connection, cursor, statement, parameters, context, many):
@@ -811,6 +872,9 @@ def verify_purchase_order_transactions(application, api):
     assert not unsafe and database_state(api) == before
     return {'duplicate_po': duplicate_codes, 'stale_gpn_revision': gpn_codes,
         'assembly_capacity': capacity_codes, 'traveler_vs_order_scope': scope_codes,
+        'combined_creation': combined_codes, 'finish_existing_gpn': finish_codes,
+        'combined_renumber': renumber_codes, 'traveler_vs_combined_scope': combined_scope_codes,
+        'orphan_assemblies': 0,
         'orphan_projects': 0, 'invented_ready_spools': 0, 'readonly_views_and_workbooks': 4}
 
 

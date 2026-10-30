@@ -4,7 +4,9 @@ FabTrace Cloud is a FastAPI and PostgreSQL application for shared fabrication re
 
 ## Start with the purchase order
 
-Open **Purchase orders** (`/?orders=1`) to organize work through four clear steps: **P.O → G.P.N → Assembly → Spools**. Select a P.O to see its G.P.Ns, a G.P.N to see its assemblies, then an assembly to manage its spools. Administrators and supervisors can create a PO or explicitly connect an existing project, add GPNs, and register or attach physical assemblies. Each assembly shows required, linked, missing and ready spool counts alongside its part number. Physical tracking IDs and customer part numbers stay separate.
+Open **Purchase orders** (`/?orders=1`) to organize work through **P.O → GPN / Assembly → Spools**. The GPN is the assembly number. One **Add GPN / Assembly** form takes that number, the required spool count and actual location/custodian; one save registers it and opens its spools. A unique physical QR ID is generated automatically, with custom ID, drawing and existing-assembly choices under More options. Existing GPN-only rows offer **Finish setup**, preserving the original record. Physical tracking IDs remain separate from the business number.
+
+Each combined row shows required, linked, missing and ready spool counts. Existing physical assemblies and older differing part numbers are retained, and multiple older physical instances remain separately traceable. The normal combined creation form prevents accidental duplicate setup. Number/count corrections are versioned and obey the existing production and release locks.
 
 Physical item descriptions are removed from current order/item forms, lists and QR labels. New individual and bulk item registration works with identifiers without a description. Older API clients/CSV files can still supply a description, and existing records and issued packet history are retained. Material requirement descriptions, work explanations and quality references remain available in their appropriate records.
 
