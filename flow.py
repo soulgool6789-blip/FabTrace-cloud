@@ -293,7 +293,9 @@ def _component_ids(s, spool_id):
 
 
 def _spool_ids(s, assembly_id):
-    return list(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.assembly_id == assembly_id).order_by(SpoolPlan.item_id)))
+    from order_spools import effective_child_ids
+    from removals import item_is_removed
+    return effective_child_ids(s, assembly_id, include_removed=item_is_removed(s, assembly_id))
 
 
 def _lock_children(s, item, plan):
@@ -311,6 +313,14 @@ def _project(s, item):
     plan = s.get(SpoolPlan, item.id)
     if plan:
         return plan.project_id, plan.subproject_id
+    from order_spools import registered_spool
+    registration = registered_spool(s, item.id)
+    if registration:
+        from orders import OrderAssembly, OrderGpn
+        assembly = s.get(OrderAssembly, registration.assembly_id)
+        group = s.get(OrderGpn, assembly.gpn_id) if assembly else None
+        if group:
+            return group.project_id, None
     link = s.get(ComponentLink, item.id)
     parent = s.get(SpoolPlan, link.spool_id) if link else None
     return (parent.project_id, parent.subproject_id) if parent else (item.project or '', None)
@@ -438,11 +448,17 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
 
 
 def flow_release_errors(s, item, approving_step=None, for_update=True):
+    from order_spools import registered_spool
+    registration = registered_spool(s, item.id)
+    if registration and not s.get(SpoolPlan, item.id):
+        return ['Declare the registered spool\'s actual weld plan and complete its spool traveler before ordinary final QA release']
     plan = s.get(FlowPlan, item.id)
     if not plan:
         from orders import OrderAssembly
         if s.get(OrderAssembly, item.id):
             return ['Start the purchase-order assembly traveler before ordinary final QA release; its required spools and QA steps must be recorded']
+        if registration:
+            return ['Start the purchase-order spool traveler before ordinary final QA release; its fabrication and QA steps must be recorded']
         return []
     required = 15 if plan.route == 'spool' else 22 if plan.route == 'assembly' else None
     if required is None:
@@ -476,9 +492,10 @@ def guard_reopen(s, item):
     flow = s.get(FlowPlan, item.id)
     if flow and flow.status in ('shipped', 'delivered'):
         raise HTTPException(409, 'A shipped or delivered assembly cannot be reopened through the production workflow')
-    spool_plan = s.get(SpoolPlan, item.id)
-    if spool_plan and spool_plan.assembly_id:
-        parent_item = lock_item(s, spool_plan.assembly_id)
+    from order_spools import effective_parent_id
+    parent_id = effective_parent_id(s, item.id)
+    if parent_id:
+        parent_item = lock_item(s, parent_id)
         parent = s.get(FlowPlan, parent_item.id)
         if parent and (parent.status != 'active' or (parent.current_step or 99) >= 19 or parent_item.released):
             raise HTTPException(409, 'Return the parent assembly to step 17 or 18 through its controlled QA/rework flow before reopening a child spool')
@@ -557,7 +574,8 @@ def detail(s, item, user):
     spool_ids = _spool_ids(s, item.id)
     link = s.get(ComponentLink, item.id)
     spool_plan = s.get(SpoolPlan, item.id)
-    parent_id = link.spool_id if link else spool_plan.assembly_id if spool_plan else None
+    from order_spools import effective_parent_id
+    parent_id = link.spool_id if link else effective_parent_id(s, item.id)
     parent_item = s.get(Item, parent_id) if parent_id else None
     parent_plan = s.get(FlowPlan, parent_id) if parent_id else None
     actions = []

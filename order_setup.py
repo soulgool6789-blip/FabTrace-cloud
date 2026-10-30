@@ -13,7 +13,7 @@ from sqlalchemy import (Boolean, CheckConstraint, Column, DateTime, ForeignKey,
 from sqlalchemy.orm import Session
 
 from main import Base, Employee, Item, auth, db, permit, utcnow
-from tracking import Project, SpoolPlan, new_id
+from tracking import Project, new_id
 from flow import lock_topology
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _event,
                     _flush, _gpn, _key, _locked, read_snapshot)
@@ -255,10 +255,10 @@ def guard_assembly_registration(s, group, required_spools, item_id=None):
     if count >= plan['assembly_quantity']:
         raise HTTPException(409, 'The required number of physical assemblies is already registered for this assembly number.')
     if item_id is not None:
+        from order_spools import effective_children
         limits = {_key(line['spool_number']): line['quantity_per_assembly'] for line in plan['spools']}
         assigned = defaultdict(int)
-        for child in s.scalars(select(Item).join(SpoolPlan, SpoolPlan.item_id == Item.id)
-                .where(SpoolPlan.assembly_id == item_id, item_not_removed(Item.id))):
+        for child, _ in effective_children(s, item_id, include_removed=False):
             key = _key(child.google_part_number or '')
             if key not in limits:
                 raise HTTPException(409, f'Linked spool {child.id} does not match a required spool number in the saved assembly setup.')
@@ -269,6 +269,8 @@ def guard_assembly_registration(s, group, required_spools, item_id=None):
 
 def guard_spool_requirement(s, item, assembly_id):
     """Apply declared spool-number quantities to one actual parent assembly."""
+    from order_spools import effective_children, guard_registered_spool
+    guard_registered_spool(s, item)
     mapping = s.get(OrderAssembly, assembly_id) if assembly_id else None
     if mapping is None or s.get(OrderAssemblyRequirement, mapping.gpn_id) is None:
         return
@@ -279,8 +281,8 @@ def guard_spool_requirement(s, item, assembly_id):
         OrderSpoolRequirement.active.is_(True)))
     if line is None:
         raise HTTPException(409, 'This spool number is not listed in the assembly setup. The physical spool part number must match one of its required spool numbers.')
-    peers = s.scalars(select(Item).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(
-        SpoolPlan.assembly_id == assembly_id, Item.id != item.id, item_not_removed(Item.id))).all()
+    peers = [peer for peer, _ in effective_children(s, assembly_id, include_removed=False)
+             if peer.id != item.id]
     if sum(_key(peer.google_part_number or '') == key for peer in peers) >= line.quantity_per_assembly:
         raise HTTPException(409, f'This assembly already has the required {line.quantity_per_assembly} physical spool(s) for spool number {line.spool_number}.')
 

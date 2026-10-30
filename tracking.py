@@ -676,6 +676,7 @@ def _after(left, right):
 
 
 def _assembly_errors(s, item_id, project_id, assembly_id):
+    from order_spools import effective_children, effective_parent_id
     errors = []
     seen = {item_id}
     parent_id = assembly_id
@@ -692,9 +693,9 @@ def _assembly_errors(s, item_id, project_id, assembly_id):
         if parent_plan and parent_plan.project_id != project_id:
             errors.append('Linked assembly belongs to a different project')
             break
-        parent_id = parent_plan.assembly_id if parent_plan else None
-    children = s.scalars(select(SpoolPlan).where(SpoolPlan.assembly_id == item_id)).all()
-    if any(child.project_id != project_id for child in children):
+        parent_id = effective_parent_id(s, parent_id)
+    children = effective_children(s, item_id)
+    if any((plan.project_id if plan else child.project) != project_id for child, plan in children):
         errors.append('Assembly has child spools in another project; reassign those links before moving the assembly')
     return errors
 
@@ -838,6 +839,8 @@ def spool_dict(s, item, user=None):
     from administration import release_summary
     from production import with_process_permissions
     from removals import item_is_removed, removal_summary
+    from order_spools import registered_spool
+    registration = registered_spool(s, item.id)
     parts = parts_summary(s, item.id)
     return {
         **({'removal': removal_summary(s, 'item', item.id), 'can_mutate': not item_is_removed(s, item.id)} if user is not None else {}),
@@ -845,6 +848,7 @@ def spool_dict(s, item, user=None):
         'item': {**asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
                  'release_control': release_summary(s, item)},
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
+        'registered_assembly_id': registration.assembly_id if registration else None,
         'summary': tracking_summary(s, item),
         'production_process': with_process_permissions(s, item.id, _snapshot(s, item.id)['production_process'], user),
         'welds': [weld_dict(s, row, user) for row in _welds(s, item.id)],

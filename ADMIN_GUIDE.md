@@ -1,5 +1,15 @@
 # FabTrace administrator controls
 
+## Change an employee's position
+
+1. Sign in as an **Administrator** and open **Employees**.
+2. Find the employee and choose **Change position**. The same action is available in **Admin controls → Employee accounts**.
+3. Choose the new position. To promote a **Handler / Material coordinator**, choose **Administrator**.
+4. Review the permissions, enter the reason and choose **Save position**.
+5. Have the employee sign in again to use the new permissions. Their previous sessions are revoked as soon as the change is saved.
+
+This form changes only the employee's position. The name, permanent badge, PIN, active/inactive state, assigned items and recorded work remain attached to the same account. **Edit account** retains the broader name/access controls. Only an active Administrator can change positions, and the last active Administrator cannot be removed or demoted.
+
 ## Removing P.O.s and physical items
 
 Use **Remove** in **Purchase orders**, the GPN / Assembly register, the inventory list or an item's detail screen. Review the affected scope, enter the displayed record number exactly and record a reason before confirming. A P.O. includes its project scope; a GPN / Assembly includes its physical descendants. Open timers and independently linked child items display the action needed before removal. Ordinary work and quality controls continue to apply.

@@ -125,10 +125,14 @@ def gpn_is_removed(s, gpn_id):
 
 def _parents(s, item_id):
     from parts import PartAllocation, PartLine
+    from order_spools import registered_spool
     result = set()
     plan = s.get(SpoolPlan, item_id)
     if plan and plan.assembly_id:
         result.add(plan.assembly_id)
+    registration = registered_spool(s, item_id)
+    if registration:
+        result.add(registration.assembly_id)
     link = s.get(ComponentLink, item_id)
     if link:
         result.add(link.spool_id)
@@ -215,11 +219,13 @@ def _identity(s, kind, record_id):
 
 def _descendants(s, item_ids):
     from parts import PartAllocation, PartLine
+    from order_spools import OrderSpool
     descendants = set(item_ids)
     while True:
         previous = len(descendants)
         if descendants:
             descendants.update(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.assembly_id.in_(descendants))))
+            descendants.update(s.scalars(select(OrderSpool.item_id).where(OrderSpool.assembly_id.in_(descendants))))
             descendants.update(s.scalars(select(ComponentLink.component_id).where(ComponentLink.spool_id.in_(descendants))))
             descendants.update(s.scalars(select(PartAllocation.component_id).join(PartLine,
                 PartLine.id == PartAllocation.line_id).where(PartLine.spool_id.in_(descendants))))
@@ -288,6 +294,8 @@ def _project_ids(s, keys):
 
 def _blockers(s, kind, record_id, action, state, scope):
     from production import SpoolProcessEvent
+    from parts import PartAllocation
+    from order_spools import registered_spool, effective_children
     blockers, scope_set = [], set(scope)
     if action == 'remove':
         if state and state.removed:
@@ -302,7 +310,20 @@ def _blockers(s, kind, record_id, action, state, scope):
                 continue
             for parent in sorted(_parents(s, item_id)):
                 if ('item', parent) not in scope_set:
-                    blockers.append(f'{item_id} is linked to {parent}. Unassign it through Spool parts or correct its weld plan first, or remove the containing assembly/P.O. together.')
+                    registration = registered_spool(s, item_id)
+                    if (registration and parent == registration.assembly_id
+                            and s.get(SpoolPlan, item_id) is None
+                            and s.get(ComponentLink, item_id) is None
+                            and s.get(PartAllocation, item_id) is None):
+                        # A registration reserves identity and parent only. It
+                        # can be removed/replaced without inventing an unlink
+                        # or altering the saved demand. Keep its fixed parent
+                        # for history and enforce capacity on restoration.
+                        continue
+                    if registration:
+                        blockers.append(f'{item_id} has planned work in assembly {parent}. Remove the containing assembly/P.O. together to preserve its physical spool identities and work.')
+                    else:
+                        blockers.append(f'{item_id} is linked to {parent}. Unassign it through Spool parts or correct its weld plan first, or remove the containing assembly/P.O. together.')
             project_id = _project_id(s, item_id)
             if project_id and ('order', project_id) not in scope_set and project_is_removed(s, project_id):
                 blockers.append(f'Restore the parent P.O. before removing {item_id} separately.')
@@ -334,7 +355,8 @@ def _blockers(s, kind, record_id, action, state, scope):
         # Removing an actual assembly frees active capacity for a replacement.
         # Restoring the original identity must obey the same explicit quantity
         # cap, including every item restored together in this removal batch.
-        from order_setup import OrderAssemblyRequirement
+        from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
+        from orders import _key
         restored_ids = {record_id for record_kind, record_id in scope if record_kind == 'item'}
         restored_mappings = s.scalars(select(OrderAssembly).where(
             OrderAssembly.item_id.in_(restored_ids))).all() if restored_ids else []
@@ -347,6 +369,33 @@ def _blockers(s, kind, record_id, action, state, scope):
             if len(active | (restored_ids & mappings)) > required.assembly_quantity:
                 group = s.get(OrderGpn, gpn_id)
                 blockers.append(f'Restoring these records would exceed the {required.assembly_quantity} planned assembly quantity for {group.gpn}. Remove the replacement assembly before restoring its original identity.')
+        # Count the registered/planned union once, including retained legacy
+        # children. A restored spool must fit both its parent's total and the
+        # declared quantity of that spool number.
+        parent_ids = {parent for item_id in restored_ids for parent in _parents(s, item_id)}
+        for parent_id in sorted(parent_ids):
+            mapping = s.get(OrderAssembly, parent_id)
+            if mapping is None:
+                continue
+            children = [(item, plan) for item, plan in effective_children(s, parent_id)
+                        if item.id in restored_ids or not item_is_removed(s, item.id)]
+            if len(children) > mapping.required_spools:
+                blockers.append(f'Restoring these records would exceed the {mapping.required_spools} required spools for assembly {parent_id}. Remove the replacement scope before restoring its original identities.')
+            required = s.get(OrderAssemblyRequirement, mapping.gpn_id)
+            if required is None:
+                continue
+            limits = {row.normalized_number: row for row in s.scalars(select(OrderSpoolRequirement)
+                .where(OrderSpoolRequirement.gpn_id == mapping.gpn_id,
+                       OrderSpoolRequirement.active.is_(True))).all()}
+            counts = {}
+            for child, _ in children:
+                number = _key(child.google_part_number or '')
+                counts[number] = counts.get(number, 0) + 1
+            for number, count in counts.items():
+                limit = limits.get(number)
+                if limit is None or count > limit.quantity_per_assembly:
+                    label = limit.spool_number if limit else number or '(missing spool number)'
+                    blockers.append(f'Restoring these records would exceed or conflict with the saved quantity for spool {label} in assembly {parent_id}. Resolve the replacement scope before restoring its original identities.')
     return list(dict.fromkeys(blockers))
 
 
@@ -354,6 +403,7 @@ def _preview(s, kind, record_id, action):
     from parts import PartAllocation, PartLine, SpoolPartsPlan
     from production import SpoolProcessEvent
     from transfers import ItemTransferState
+    from order_spools import OrderSpool
     identity = _identity(s, kind, record_id)
     state = _state(s, kind, record_id)
     full_scope = _scope(s, kind, record_id) if action == 'remove' else _restore_scope(s, state)
@@ -370,7 +420,8 @@ def _preview(s, kind, record_id, action):
         if target_kind == 'item':
             detail.update(plan=_values(s.get(SpoolPlan, value)), flow=_values(s.get(FlowPlan, value)),
                 parts=_values(s.get(SpoolPartsPlan, value)), transfer=_values(s.get(ItemTransferState, value)),
-                mapping=_values(s.get(OrderAssembly, value)), parents=sorted(_parents(s, value)))
+                mapping=_values(s.get(OrderAssembly, value)),
+                spool_registration=_values(s.get(OrderSpool, value)), parents=sorted(_parents(s, value)))
         basis['scope'].append(detail)
     for value in sorted(project_ids):
         basis['projects'].append(_values(s.get(PurchaseOrder, value)))
