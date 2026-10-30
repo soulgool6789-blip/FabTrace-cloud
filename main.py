@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-removal.1'
+APP_VERSION='2026.10.30-progress.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -597,6 +597,9 @@ app.include_router(orders_router)
 
 from removals import router as removals_router, RecordRemoval
 app.include_router(removals_router)
+
+from production_progress import router as production_progress_router
+app.include_router(production_progress_router)
 
 from exports import router as exports_router
 app.include_router(exports_router)

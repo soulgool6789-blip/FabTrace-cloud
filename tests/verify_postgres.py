@@ -591,6 +591,75 @@ def verify_readonly_dossier_progress_and_immutable_downloads(application, api):
             "download_does_not_dispatch": True}
 
 
+def verify_readonly_order_flow_progress(application, api):
+    """Both all-P.O. and one-P.O. views use one released-auth read snapshot."""
+    from test_orders import new_order, group, add_assembly, plan
+    from test_progress import database_state
+
+    project_id = new_order(api, number="PG-FLOW-PROGRESS-READONLY")["order"]["project_id"]
+    gpn_id = group(api, project_id, number="PG-FLOW-PROGRESS-GPN")
+    add_assembly(api, project_id, gpn_id, item_id="PG-FLOW-PROGRESS-ASSEMBLY", count=2)
+    api.item("PG-FLOW-PROGRESS-SPOOL", kind="Spool", welds_required=0)
+    ok(plan(api, "PG-FLOW-PROGRESS-SPOOL", project_id, "PG-FLOW-PROGRESS-ASSEMBLY"))
+    before = database_state(api)
+    unsafe, snapshots, borrowed = [], [], set()
+    peak = 0
+
+    def checkout(connection, record, proxy):
+        nonlocal peak
+        borrowed.add(id(record))
+        peak = max(peak, len(borrowed))
+
+    def checkin(connection, record):
+        borrowed.discard(id(record))
+
+    def observe(connection, cursor, statement, parameters, context, many):
+        sql = statement.lstrip().upper()
+        if (sql.startswith(("INSERT", "UPDATE", "DELETE", "LOCK "))
+                or re.search(r"\bFOR\s+(?:NO KEY UPDATE|KEY SHARE|UPDATE|SHARE)\b", sql)
+                or "PG_ADVISORY" in sql):
+            unsafe.append(statement)
+        # Authentication intentionally precedes the separate snapshot. Only
+        # observe data reads on its explicitly isolated connection here.
+        isolation_option = str(connection.get_execution_options().get("isolation_level", "")).lower()
+        if sql.startswith("SELECT") and isolation_option == "repeatable read":
+            with connection.connection.cursor() as probe:
+                probe.execute("SHOW transaction_read_only")
+                read_only = probe.fetchone()[0]
+                probe.execute("SHOW transaction_isolation")
+                isolation = probe.fetchone()[0]
+                probe.execute("SELECT pg_backend_pid()")
+                backend_pid = probe.fetchone()[0]
+            snapshots.append((read_only, isolation, backend_pid))
+
+    event.listen(application.engine, "before_cursor_execute", observe)
+    event.listen(application.engine, "checkout", checkout)
+    event.listen(application.engine, "checkin", checkin)
+    counts = []
+    try:
+        for path in ("/api/progress/orders", "/api/progress/orders?project_id=" + project_id):
+            snapshots.clear()
+            response = api.get(path)
+            assert response.status_code == 200, response.text
+            assert snapshots, "Progress must use its explicit repeatable-read snapshot"
+            assert all(read_only == "on" and isolation == "repeatable read"
+                       for read_only, isolation, _ in snapshots), snapshots
+            assert len({backend_pid for _, _, backend_pid in snapshots}) == 1, snapshots
+            assert not borrowed, "Progress leaked a borrowed database connection"
+            counts.append(len(snapshots))
+    finally:
+        event.remove(application.engine, "before_cursor_execute", observe)
+        event.remove(application.engine, "checkout", checkout)
+        event.remove(application.engine, "checkin", checkin)
+    assert not unsafe, "A production progress GET wrote or took production locks"
+    assert peak == 1, "Release the auth connection before opening the read snapshot"
+    assert database_state(api) == before, "Production progress changed retained records"
+    return {"all_and_single_po_views": 2, "mutations": 0, "production_locks": 0,
+            "isolation": "repeatable read", "read_only": True,
+            "peak_borrowed_connections": peak, "snapshot_query_counts": counts,
+            "rows_unchanged": True}
+
+
 def verify_readonly_quality_gate_views(application, api):
     from test_flow import PROJECT
     from test_quality import assembly_at_step, create_requirement, workspace
@@ -1412,6 +1481,7 @@ def verify(dsn):
         order_concurrency = verify_purchase_order_transactions(application, api)
         from removal_postgres import verify_record_removals
         removal_concurrency = verify_record_removals(application, api)
+        order_flow_progress = verify_readonly_order_flow_progress(application, api)
         transfer_concurrency = verify_concurrent_transfers(application, api)
         admin_dispositions = verify_admin_dispositions(application, api)
         queued_permissions = verify_queued_permission_revocation(application, api)
@@ -1439,6 +1509,7 @@ def verify(dsn):
             "concurrent_parts_allocation": parts_concurrency,
             "purchase_order_transactions": order_concurrency,
             "record_removal_transactions": removal_concurrency,
+            "readonly_order_flow_progress": order_flow_progress,
             "concurrent_transfers": transfer_concurrency,
             "administrative_dispositions": admin_dispositions,
             "queued_permission_revocation": queued_permissions,

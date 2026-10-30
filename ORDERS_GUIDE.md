@@ -1,5 +1,17 @@
 # Purchase orders, assembly spool counts and Excel BOMs
 
+## See one P.O. or all P.O.s from Inventory to Finish
+
+1. Open **Production progress** from the main navigation. The P.O. dropdown starts at **All P.O.s**; select a particular P.O. to narrow the view.
+2. Expand a P.O. to see its GPN / Assembly entries. Expand an assembly to see its individual spools, then expand a spool to see its component parts.
+3. Read each item's bar and current step. Expand its process details to see which numbered steps are recorded complete, current, still pending or missing from an earlier baseline.
+4. Use search and status filters to find a P.O., assembly, spool or part. The summary continues to describe the full selected scope, so filtering the list does not turn unfinished work into completion.
+5. Open **Process flow** or **Item & QR** to work with the underlying record. Use **Project detail** for the earlier project progress screen, including structured projects that are not enrolled in a P.O.
+
+The main stages are **Inventory → Prep → Fit-up → Welding → Assembly → Finish**. QA checks remain at their actual numbered hold points. Shipment and delivery appear separately. Each physical record follows its applicable route: a component completes preparation, a spool completes fabrication, and an assembly completes final inspection and release. Nested parent rows show the later work that contains the part.
+
+The bars describe recorded production steps. Missing required spools, incomplete parts assignments, undeclared scope, open holds and unrecorded baseline steps remain identified beside them. Read the scope warning and physical finish status along with a percentage. An administrative release does not record missing work or QA acceptance.
+
 ## Remove a P.O., GPN / Assembly or part
 
 Sign in as an **administrator**. Other positions can continue their permitted work but cannot remove or restore records.

@@ -1,5 +1,11 @@
 # FabTrace Cloud
 
+## Expandable production progress
+
+Open **Production progress** (`/?production-progress=1`). Use the **P.O.** dropdown to see all active P.O.s or one selected P.O., then expand its GPN / Assembly, spools and component parts. Each physical item has its own recorded-step bar, current process, location and responsible employee. Inventory, Prep, Fit-up, Welding, Assembly and Finish follow the existing numbered traveler; ready-to-ship, shipment and delivery are separate milestones. Search and status filters help locate individual work while preserving the full scope behind the summary bars.
+
+Missing required spools, unassigned components, undeclared scope and earlier unrecorded steps remain visible. Progress comes from recorded current-route events and existing quality state. Component preparation, spool fabrication and final assembly each have their own route; completion of one route does not imply completion of its parent. The new view reads existing records and does not change work, QR transfers, permissions or quality releases. **Project detail** retains the earlier project register and its detailed filters.
+
 FabTrace Cloud is a FastAPI and PostgreSQL application for shared fabrication records, employee badge sign-in, QR labels, custody handoffs, and project-to-weld traceability. The browser interface uses plain HTML, CSS, and JavaScript.
 
 ## Start with the purchase order
@@ -29,7 +35,7 @@ The **Projects & welds** workspace organizes **project → subproject / work pac
 - Audit-readiness workspaces with the five-prompt Kelvion matrix, controlled document revisions, actual evidence, signed reviews, corrective actions and current-state Excel reports.
 - Spool process timers with start, move, pause, resume and finish controls; current-process age, visit history, repeat-visit totals, and Excel timing reports.
 - A numbered **Process flow** workspace following CLM's 24-step material-to-shipment chart, with linked components/spools/assemblies, scanned or entered identity checks, custody handoffs, QA gates, exception/rework returns, and separate shipment and delivery confirmation.
-- **Project progress** with progress bars for registered parts, WIP/finished/shipped/delivered filters, work-package and part-type filters, and links to each physical record.
+- **Production progress** with an all/one-P.O. selector and expandable GPN, spool and part flow. Its **Project detail** shortcut retains the earlier registered-parts dashboard, WIP/finished/shipped/delivered filters, work-package and part-type filters, and physical-record links.
 - **Spool parts** with required quantities by part type, actual QR-item allocations, receiving/preparation progress, shortages and versioned scope corrections.
 - **Job Packets / CLM Final Dossiers** organized into ten sections and 25 detailed checks, based on Kelvion QF-QAS-100 Rev B page 8. Current fabrication records, uploaded controlled files, signed QA reviews, immutable issued revisions, printable packets, ZIP downloads and separately recorded physical/digital handovers are linked by project and item.
 

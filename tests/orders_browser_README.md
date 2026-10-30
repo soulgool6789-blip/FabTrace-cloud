@@ -57,3 +57,24 @@ workbooks, and `report.json` are saved in `ORDERS_TEST_OUT`; on failure the fold
 also receives `failure.json` and `failure.png`. Use a new output directory for
 each run when retaining historical results. No production browser account,
 database, or credentials are needed.
+
+## Expandable production-progress verification
+
+Use the same fresh loopback fixture and browser environment above to run:
+
+```bash
+PRODUCTION_PROGRESS_TEST_OUT=/tmp/fabtrace-production-progress-review \
+  node tests/production_progress_browser_smoke.cjs
+```
+
+This runner creates synthetic P.O.s, an assembly, spool and component records on
+the local fixture. It checks the all/one-P.O. dropdown, nested flow stages,
+missing quantities, real holds, unrecorded historical baselines, individual
+route bars, filters and parent context, keyboard expansion, mobile layout,
+refresh and existing process/QR/project shortcuts. Progress-view interactions
+are verified to use GET requests only. It also verifies access through a QA/QC
+account. Removed synthetic orders are absent from the active selector.
+
+The runner rejects remote hosts and writes screenshots plus `report.json` to
+`PRODUCTION_PROGRESS_TEST_OUT`. A passing report has `status: "passed"` and no
+page errors. Stop the fixture after the checks; its database is disposable.

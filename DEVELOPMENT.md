@@ -25,6 +25,7 @@ This guide describes the implemented tracking extension and the constraints that
 | `QUALITY_API.md` | Quality endpoint contracts, payloads, state meanings, review permissions and dependency rules. |
 | `dossier.py`, `dossier_templates.py` | Project-scoped Job Packet checklist, immutable uploaded files/reviews/issues, physical/digital handovers, currentness and coating/shipment gates. |
 | `progress.py` | Read-only project/part scope, recorded progress, physical completion, filters and sorting. |
+| `production_progress.py`, `static/production-progress.js`, `static/production-progress.css` | Read-only P.O. production trees, unique-item stage totals, and expandable P.O./GPN/assembly/spool/part progress. |
 | `DOSSIER_API.md`, `DOSSIER_GUIDE.md` | Packet/progress contracts and the operating guide for preparation, issue and transfer. |
 | `exports.py` | Administrator-only Excel snapshot of business records/history and calculated timing/readiness reports, excluding authentication secrets. |
 | `init_db.py` | Additive schema initialization, first-account bootstrap, PostgreSQL transaction/advisory lock, and immutable-history triggers. |
@@ -40,7 +41,19 @@ This guide describes the implemented tracking extension and the constraints that
 | `render.yaml`, `Procfile` | Deployment configuration. The Blueprint includes initialization before startup. |
 | `tests/` | API regression tests, a Node client smoke harness, and guarded local PostgreSQL verification. |
 
-`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
+`main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
+
+## Expandable P.O. production progress
+
+Version `2026.10.30-progress.1` adds `GET /api/progress/orders?project_id=` for active authenticated employees. An omitted/blank project ID returns all active enrolled P.O.s; a supplied ID selects one active P.O. while keeping the complete P.O. selector available. An unknown, removed or unenrolled ID returns 404. The endpoint releases the authentication connection before opening the existing consistent read snapshot (PostgreSQL REPEATABLE READ READ ONLY, or an explicit SQLite read transaction). It makes no business writes, holds no row/advisory locks and adds no tables.
+
+The response includes `as_of`, `selected_project_id`, `choices`, `definitions`, `stage_catalog`, full-scope `summary` and `stages`, and `orders`. Each order contains its GPN groups and unassigned physical records. A GPN group contains its actual assembly instances; physical nodes contain `children`, their own `progress`, `steps`, `stages`, current step/location/custodian, and explicit scope/readiness warnings. Parent summaries aggregate unique physical identities. Removed branches are excluded from this active view, while existing historical progress, exports and issued Job Packets keep their retained identities.
+
+The six fabrication phases are Inventory (1–4), Prep (5–8), Fit-up (9–12), Welding (13–16), Assembly (17–19) and Finish (20–22). Components contribute eight applicable fabrication steps, spools contribute eight, and assemblies contribute six. Shipping steps 23–24 and delivery remain separate facts. Only actual current-pass `advance` events count as recorded completion; fail/reopen/administrative-return events reset affected downstream steps. Historical baseline steps remain `not_recorded`. A parent reaching Finish never completes a child's own route, and an administrator's release never supplies missing work or ordinary QA evidence.
+
+Percentages describe the registered physical scope. Missing required spools/parts, undeclared scope and draft GPNs remain explicit; unknown quantities do not become invented denominator values. Empty scope has no percentage. A recorded 100% is displayed with incomplete-scope warnings unless the required scope is satisfied. Physical finish/preparation, holds, recorded-step progress, shipping and delivery are separate fields. Aggregate phases without declared scope use `scope_unknown`; phases outside an individual item's route may use `not_applicable`.
+
+The projection calls the existing `progress.project_rows` once per request and preloads additional current flow/custody/hold facts. That historical helper retains its existing per-item parts/readiness queries; this feature does not change dossier fingerprints or claim a constant database-query count. The browser renders detail bodies when expanded, retains ancestors for filtered matches, and keeps full-scope totals while filters narrow the displayed rows. It cancels stale navigation/refresh requests. The new deep link is `/?production-progress=1&project=PROJECT_ID`; the old `/?progress=1&project=PROJECT_ID` and `FabProgress.open` remain available as Project detail for legacy projects.
 
 ## Purchase-order hierarchy and API
 
