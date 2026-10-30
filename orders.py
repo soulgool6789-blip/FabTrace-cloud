@@ -257,17 +257,18 @@ def _event(s, order, user, action, *, before=None, after=None, reason='', item_i
     })
 
 
-def _linked(s, assembly_id):
-    return s.execute(select(Item, SpoolPlan).join(SpoolPlan, SpoolPlan.item_id == Item.id)
-                     .where(SpoolPlan.assembly_id == assembly_id).order_by(Item.id)).all()
+def _linked(s, assembly_id, *, include_removed=True):
+    from order_spools import effective_children
+    return effective_children(s, assembly_id, include_removed=include_removed)
 
 
 def order_scope(s, item_id):
     """Lightweight context for flow forms; does not calculate progress or write."""
     mapping = s.get(OrderAssembly, item_id)
     if mapping is None:
-        plan = s.get(SpoolPlan, item_id)
-        mapping = s.get(OrderAssembly, plan.assembly_id) if plan and plan.assembly_id else None
+        from order_spools import effective_parent_id
+        parent_id = effective_parent_id(s, item_id)
+        mapping = s.get(OrderAssembly, parent_id) if parent_id else None
     if mapping is None:
         return None
     group = s.get(OrderGpn, mapping.gpn_id)
@@ -290,6 +291,8 @@ def guard_plan_scope(s, item, oldplan, values):
     from removals import require_active_item, require_active_project, require_active_gpn
     require_active_item(s, item.id)
     require_active_project(s, values['project_id'])
+    from order_spools import guard_registered_spool
+    guard_registered_spool(s, item, values)
     old_parent_id = oldplan.assembly_id if oldplan else None
     new_parent_id = values.get('assembly_id')
     scope_keys = ('project_id', 'subproject_id', 'assembly_id', 'planned_welds', 'drawing_revision', 'zero_weld_reason')
@@ -318,7 +321,7 @@ def guard_plan_scope(s, item, oldplan, values):
             raise HTTPException(422, 'Purchase-order assembly children must be registered as Spool items, not individual Parts or Assemblies')
         if values['project_id'] != group.project_id:
             raise HTTPException(409, 'Spool and purchase-order assembly must belong to the same project')
-        other = len([child for child, _ in _linked(s, parent_id) if child.id != item.id])
+        other = len([child for child, _ in _linked(s, parent_id, include_removed=False) if child.id != item.id])
         if other >= parent.required_spools:
             raise HTTPException(409, f'This assembly already has its {parent.required_spools} required spools')
         from order_setup import guard_spool_requirement
@@ -349,11 +352,12 @@ def _validate_assembly_scope(s, order, item, required_spools):
         raise HTTPException(409, 'Assembly and purchase order must belong to the same project')
     if plan and plan.assembly_id:
         raise HTTPException(409, 'A purchase-order assembly cannot be nested inside another assembly')
-    linked = _linked(s, item.id)
+    linked = _linked(s, item.id, include_removed=False)
     if len(linked) > required_spools:
         raise HTTPException(409, 'Required spool count cannot be smaller than the existing linked spool count')
-    if any(child.kind != 'Spool' or child_plan.project_id != order.project_id for child, child_plan in linked):
-        raise HTTPException(409, 'Every existing child must be a Spool item planned in this purchase-order project')
+    if any(child.kind != 'Spool' or (child_plan.project_id if child_plan else child.project) != order.project_id
+           for child, child_plan in linked):
+        raise HTTPException(409, 'Every existing child must be a Spool item registered in this purchase-order project')
     traveler = s.get(FlowPlan, item.id)
     if traveler and (traveler.route != 'assembly' or traveler.expected_children != required_spools):
         raise HTTPException(409, 'Required spool count must match the existing assembly traveler; the order does not rewrite established production scope')
@@ -362,21 +366,29 @@ def _validate_assembly_scope(s, order, item, required_spools):
 def _assembly_detail(s, mapping, group, progress_rows):
     from removals import removal_summary
     item = s.get(Item, mapping.item_id)
+    item_removal = removal_summary(s, 'item', item.id)
     plan = s.get(SpoolPlan, item.id)
     flow = s.get(FlowPlan, item.id)
     spools = []
     blockers = []
-    for child, child_plan in _linked(s, item.id):
+    for child, child_plan in _linked(s, item.id, include_removed=bool(item_removal and item_removal['removed'])):
         child_flow = s.get(FlowPlan, child.id)
         row = progress_rows.get(child.id, {})
         errors = list(row.get('blockers', []))
-        if child.kind != 'Spool' or child_plan.project_id != group.project_id:
+        child_project = child_plan.project_id if child_plan else child.project
+        if child.kind != 'Spool' or child_project != group.project_id:
             errors.append('Child identity or project does not match the purchase-order assembly')
-        ready = bool(child.kind == 'Spool' and child_flow and child_flow.route == 'spool'
+        if child_plan is None:
+            errors.append('Spool weld scope and drawing plan have not been set up')
+        if child_flow is None:
+            errors.append('Set up the purchase-order spool traveler before ordinary final QA release')
+        errors = list(dict.fromkeys(errors))
+        ready = bool(child.kind == 'Spool' and child_plan and child_flow and child_flow.route == 'spool'
                      and child_flow.status == 'completed' and row.get('fabrication_finished') and not errors)
         spools.append({'item_id': child.id, 'description': child.description, 'google_part_number': child.google_part_number,
                        'removal': removal_summary(s, 'item', child.id),
-                       'project_id': child_plan.project_id, 'subproject_id': child_plan.subproject_id,
+                       'project_id': child_project, 'subproject_id': child_plan.subproject_id if child_plan else None,
+                       'planning_needed': child_plan is None, 'weld_plan_exists': child_plan is not None,
                        'flow_status': child_flow.status if child_flow else 'not_started',
                        'current_step': child_flow.current_step if child_flow else None,
                        'ready_for_assembly': ready, 'fabrication_finished': bool(row.get('fabrication_finished')),
@@ -393,7 +405,7 @@ def _assembly_detail(s, mapping, group, progress_rows):
     if flow and flow.expected_children != mapping.required_spools:
         blockers.append('Traveler count does not match the purchase-order requirement')
     return {**_row(mapping, ASSEMBLY_FIELDS), 'gpn': group.gpn,
-            'removal': removal_summary(s, 'item', item.id),
+            'removal': item_removal,
             'description': item.description, 'google_part_number': item.google_part_number, 'drawing': item.drawing,
             'linked_spools': linked, 'missing_spools': max(0, mapping.required_spools - linked),
             'ready_spools': ready, 'not_ready_spools': linked - ready, 'planning_needed': plan is None,
@@ -407,14 +419,14 @@ def order_summary(s, order):
     groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id == order.project_id, gpn_not_removed(OrderGpn.id))).all()
     ids = [group.id for group in groups]
     mappings = s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id.in_(ids), item_not_removed(OrderAssembly.item_id))).all() if ids else []
-    linked = sum(len(_linked(s, row.item_id)) for row in mappings)
+    linked = sum(len(_linked(s, row.item_id, include_removed=False)) for row in mappings)
     required = sum(row.required_spools for row in mappings)
     setup_needed = len(groups) - len({row.gpn_id for row in mappings})
     return {**_row(order, ORDER_FIELDS), 'project_name': project.name,
             'removal': removal_summary(s, 'order', order.project_id),
             'gpn_count': len(groups), 'assembly_count': len(mappings),
             'combined_count': len(mappings) + setup_needed, 'setup_needed_count': setup_needed, 'required_spools': required,
-            'linked_spools': linked, 'missing_spools': sum(max(0, row.required_spools - len(_linked(s, row.item_id))) for row in mappings)}
+            'linked_spools': linked, 'missing_spools': sum(max(0, row.required_spools - len(_linked(s, row.item_id, include_removed=False))) for row in mappings)}
 
 
 def order_detail(s, project_id, user=None):

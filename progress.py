@@ -72,21 +72,34 @@ def project_rows(s, project_id=None):
     used by project-package scope validation and the Excel snapshot connection.
     """
     from administration import release_summary
+    from order_spools import OrderSpool
+    from orders import OrderAssembly, OrderGpn
+    from removals import RecordRemoval
     with s.no_autoflush:
         projects = s.scalars(select(Project).where(Project.id == project_id) if project_id else select(Project)).all()
         project_ids = {p.id for p in projects}
         if not project_ids:
             return []
         all_plans = {p.item_id: p for p in s.scalars(select(SpoolPlan)).all()}
+        all_registrations = {r.item_id: r for r in s.scalars(select(OrderSpool)).all()}
+        registered_projects = {r.item_id: project for r, project in s.execute(
+            select(OrderSpool, OrderGpn.project_id)
+            .join(OrderAssembly, OrderAssembly.item_id == OrderSpool.assembly_id)
+            .join(OrderGpn, OrderGpn.id == OrderAssembly.gpn_id)).all()}
         all_links = {r.component_id: r for r in s.scalars(select(ComponentLink)).all()}
         selected_ids = {key for key, plan in all_plans.items() if plan.project_id in project_ids}
+        selected_ids |= {key for key, project in registered_projects.items() if project in project_ids}
         selected_ids |= {key for key, link in all_links.items() if link.spool_id in selected_ids}
         items = s.scalars(select(Item).where(or_(Item.id.in_(selected_ids), Item.project.in_(project_ids))).order_by(Item.id)).all()
         scopes = {}
         for item in items:
             plan, link = all_plans.get(item.id), all_links.get(item.id)
+            registration = all_registrations.get(item.id)
             parent = all_plans.get(link.spool_id) if link else None
-            if plan:
+            if registration:
+                scope = (registered_projects[item.id], plan.subproject_id if plan else None,
+                         registration.assembly_id, 'order_spool_registration')
+            elif plan:
                 scope = (plan.project_id, plan.subproject_id, plan.assembly_id, 'spool_plan')
             elif parent:
                 scope = (parent.project_id, parent.subproject_id, parent.item_id, 'component_link')
@@ -99,6 +112,9 @@ def project_rows(s, project_id=None):
         if not ids:
             return []
         by_id = {item.id: item for item in items}
+        removed_ids = set(s.scalars(select(RecordRemoval.record_id).where(
+            RecordRemoval.kind == 'item', RecordRemoval.removed.is_(True),
+            RecordRemoval.record_id.in_(ids))).all())
         flows = {f.item_id: f for f in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(ids))).all()}
         flow_events = _group(s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids),
             FlowEvent.action.in_(('advance', 'fail', 'reopen', 'admin_return_to_work'))).order_by(FlowEvent.sequence)).all(), 'item_id')
@@ -120,12 +136,14 @@ def project_rows(s, project_id=None):
         # The existing helper only reads work/requirements/holds. A full repair
         # history is unnecessary for these progress counts.
         subs = {r.id: r for r in s.scalars(select(Subproject)).all()}
-        component_children, spool_children = defaultdict(list), defaultdict(list)
+        component_children, spool_children = defaultdict(list), defaultdict(set)
         for link in all_links.values():
             component_children[link.spool_id].append(link.component_id)
         for plan in all_plans.values():
             if plan.assembly_id:
-                spool_children[plan.assembly_id].append(plan.item_id)
+                spool_children[plan.assembly_id].add(plan.item_id)
+        for registration in all_registrations.values():
+            spool_children[registration.assembly_id].add(registration.item_id)
         raw, base_errors = {}, {}
         previous = s.info.get('tracking_read_snapshot')
         try:
@@ -199,6 +217,8 @@ def project_rows(s, project_id=None):
             if not flow or flow.route == 'component':
                 return []
             children = component_children[item_id] if flow.route == 'spool' else spool_children[item_id]
+            if item_id not in removed_ids:
+                children = [child for child in children if child not in removed_ids]
             errors = []
             if len(children) != flow.expected_children:
                 errors.append(f'Child scope incomplete: {len(children)} linked of {flow.expected_children} declared')

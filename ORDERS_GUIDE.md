@@ -34,6 +34,27 @@ All supported active employees can read this setup. Administrators and superviso
 
 Saving setup establishes requirements. Actual receiving, custody, fabrication and QA records are added later through **Production records**, **Process flow** and the other existing workspaces.
 
+## Generate assembly and spool QR codes directly from the P.O.
+
+Open a saved P.O. and choose **Generate QR labels**. To work with one Google part number, expand that assembly number and choose **QR labels**. The screen reads the saved numbers and quantities automatically.
+
+1. Choose **GPN / Assembly labels** or **Spool labels** under **Label type**.
+2. Select **All GPNs on this P.O.** or a specific GPN. Review **QR codes ready** and **QR codes still to generate**.
+3. Enter the actual **Current location** and select the **Responsible employee** for the new records. Review the quantities, then select **Generate … QR codes**.
+4. Choose **Print labels**. Print at **100% scale**, or choose **Save as PDF** in the browser print dialog. **Download QR** saves one label image; **Open assembly** or **Open spool** opens its record.
+
+Each physical item gets a different permanent code. For example, a GPN requiring three assemblies with two `S1` spools and one `S2` spool per assembly needs **3 assembly codes and 9 spool codes**. The spools are assigned to each exact physical assembly. Generating spool codes also creates any missing assembly records automatically; existing registered assemblies and linked spools count toward the saved quantities. FabTrace never claims an unassigned spool merely because its number matches.
+
+An assembly label shows the **GPN / assembly number**, **P.O.** and unique **tracking ID**. A spool label shows the **spool number**, **P.O.**, **parent GPN**, **physical assembly ID** and unique **spool tracking ID**. The QR opens that individual item's record. Reprinting or generating again uses the existing IDs and creates only a genuine shortfall.
+
+A generation request creates up to **500 new items**, including parent assemblies. For larger orders, choose Generate again for the remaining batch. The label screen and print sheet show up to **100 labels per page**; use **Next 100** to print later pages. Creating records locks the GPN's initial quantity setup, just as individual registration does.
+
+Generated spools retain their required parent and spool number before production planning. **Set weld plan** opens the existing weld-planning form with the correct assembly selected. Enter the real weld count and approved scope there. QR generation does not invent a weld plan, zero-weld justification, traveler step, receipt, fabrication completion, inspection or QA acceptance. Ordinary final release still requires the applicable production and quality checks.
+
+Administrators and supervisors can generate missing records. Other active employee positions can view and reprint labels. Removed physical items are excluded from working label lists; their IDs and history remain retained, and capacity checks prevent restoration over a replacement's saved quantity.
+
+If someone changes the P.O. while the screen is open, **Reload saved labels** before generating. If a response is interrupted, reload and check what was saved before retrying. Allow pop-ups for FabTrace to open the print sheet. Printing waits for every QR image; an image failure shows a retry message and keeps printing disabled.
+
 ## See one P.O. or all P.O.s from Inventory to Finish
 
 1. Open **Production progress** from the main navigation. The P.O. dropdown starts at **All P.O.s**; select a particular P.O. to narrow the view.

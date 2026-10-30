@@ -1,0 +1,44 @@
+#orderLabelsPage{--ol-ink:#21384e;--ol-muted:#60788b;color:var(--ol-ink)}
+#orderLabelsPage .ol-head,#orderLabelsPage .ol-section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:18px 0 24px}
+#orderLabelsPage h1{font-size:30px;line-height:1.2;margin:6px 0 10px;overflow-wrap:anywhere}
+#orderLabelsPage h2{font-size:21px;line-height:1.35;margin:0 0 10px}
+#orderLabelsPage p{line-height:1.55;margin:8px 0;color:var(--ol-muted)}
+#orderLabelsPage .ol-eyebrow{font-size:11px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:#4e7288}
+#orderLabelsPage .ol-filters{display:grid;grid-template-columns:minmax(200px,1fr) minmax(0,2fr);gap:20px;margin:20px 0}
+#orderLabelsPage .ol-scope{min-width:0;margin:0}
+#orderLabelsPage label{display:block;font-size:13px;font-weight:700;margin:0 0 8px}
+#orderLabelsPage input,#orderLabelsPage select{width:100%;min-width:0;min-height:48px;border:1px solid #b8cbdc;border-radius:8px;padding:11px 13px;background:white;color:var(--ol-ink);font-size:16px}
+#orderLabelsPage input:focus,#orderLabelsPage select:focus{border-color:#308bb7;outline:3px solid #d3edfa}
+#orderLabelsPage fieldset{border:0;padding:0;margin:0;min-width:0}
+#orderLabelsPage .ol-counts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:20px 0}
+#orderLabelsPage .ol-counts>div{border:1px solid #d8e6f0;background:#edf5fb;border-radius:10px;padding:16px 18px;min-width:0}
+#orderLabelsPage .ol-counts span{display:block;font-size:13px;color:var(--ol-muted);margin-bottom:8px}
+#orderLabelsPage .ol-counts strong{font-size:27px;line-height:1.2;overflow-wrap:anywhere}
+#orderLabelsPage .ol-create,#orderLabelsPage .ol-labels{padding:24px;border:1px solid #d5e1eb;background:#fff;border-radius:13px;margin:20px 0}
+#orderLabelsPage .ol-create>p{max-width:790px;margin-bottom:20px}
+#orderLabelsPage .ol-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:14px 0}
+#orderLabelsPage .ol-fields .field{margin:0;min-width:0}
+#orderLabelsPage .ol-note{font-size:13px;color:var(--ol-muted);line-height:1.5;margin:14px 0}
+#orderLabelsPage .ol-batch-note{display:inline-block;font-size:13px;margin:10px 15px;color:var(--ol-muted)}
+#orderLabelsPage .ol-ready,#orderLabelsPage .ol-warning,#orderLabelsPage .ol-error,#orderLabelsPage .ol-state{padding:18px 20px;border-radius:10px;margin:18px 0;line-height:1.5;overflow-wrap:anywhere}
+#orderLabelsPage .ol-ready{border:1px solid #b5dacb;background:#edf8f2;color:#225f4a}
+#orderLabelsPage .ol-ready p{color:#3d6f5c}
+#orderLabelsPage .ol-warning{border:1px solid #e6ce9a;background:#fff7e7;color:#785b27}
+#orderLabelsPage .ol-error{border:1px solid #e9baba;background:#fff0f0;color:#903434}
+#orderLabelsPage .ol-state{border:1px dashed #c6d7e3;background:white;color:var(--ol-muted)}
+#orderLabelsPage .ol-section-head{margin:0 0 20px}
+#orderLabelsPage .ol-section-head p{font-size:13px}
+#orderLabelsPage .ol-label-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+#orderLabelsPage .ol-label{display:flex;align-items:flex-start;gap:15px;min-width:0;padding:16px;border:1px solid #d5e1eb;border-radius:9px}
+#orderLabelsPage .ol-qr{width:90px;min-width:90px;color:var(--ol-muted);font-size:12px}
+#orderLabelsPage .ol-qr img{width:90px;height:90px;image-rendering:pixelated}
+#orderLabelsPage .ol-label-copy{display:grid;gap:7px;min-width:0;flex:1;overflow-wrap:anywhere}
+#orderLabelsPage .ol-label-copy>strong{font-size:17px}
+#orderLabelsPage .ol-label-copy>span:not(.ol-eyebrow){font-size:12px;color:var(--ol-muted)}
+#orderLabelsPage .ol-label-copy code{font-size:11px;overflow-wrap:anywhere}
+#orderLabelsPage .ol-label-copy .actions{margin-top:3px;gap:8px;align-items:center}
+#orderLabelsPage .ol-label-copy button,#orderLabelsPage .ol-label-copy a{font-size:12px}
+#orderLabelsPage .ol-label-copy a{color:#126b9c}
+#orderLabelsPage .ol-pagination{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:20px 0;font-size:13px}
+@media(max-width:760px){#orderLabelsPage .ol-head,#orderLabelsPage .ol-section-head{flex-direction:column;gap:12px}#orderLabelsPage .ol-filters,#orderLabelsPage .ol-fields,#orderLabelsPage .ol-label-grid{grid-template-columns:1fr}#orderLabelsPage .ol-create,#orderLabelsPage .ol-labels{padding:18px}#orderLabelsPage .ol-label{padding:12px;gap:12px}#orderLabelsPage .ol-counts>div{padding:14px}#orderLabelsPage h1{font-size:27px}#orderLabelsPage .ol-head .actions{width:100%}}
+@media(max-width:420px){#orderLabelsPage .ol-qr,#orderLabelsPage .ol-qr img{width:72px;min-width:72px;height:72px}#orderLabelsPage .ol-label-copy>strong{font-size:15px}#orderLabelsPage .ol-pagination{flex-wrap:wrap}#orderLabelsPage .ol-counts span{font-size:12px}}

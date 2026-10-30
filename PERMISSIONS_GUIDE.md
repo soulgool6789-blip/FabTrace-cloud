@@ -4,10 +4,10 @@ Each employee has one assigned application position. That position determines wh
 
 ## Assign an employee's position
 
-1. Sign in as an administrator and open **Admin controls → Employee accounts**.
-2. Find the employee and select **Account controls → Edit account**.
+1. Sign in as an administrator and open **Employees**, or **Admin controls → Employee accounts**.
+2. Find the employee and select **Change position**.
 3. Choose the appropriate **job position**. Review its description and permission summary.
-4. Enter the reason for the assignment and save.
+4. Enter the reason for the assignment and choose **Save position**. Choose **Administrator** to promote a Handler / Material coordinator to full administrator access.
 5. Have the employee sign in again. A role change revokes that employee's previous sessions, including a write waiting behind the account change.
 
 For a new employee, open **Add employee / print QR badges**, enter the employee details and explicitly choose a position. The form does not automatically choose Administrator. Badge IDs remain permanent. Existing employee assignments are retained during deployment; an account assigned Administrator continues to have full authority until an administrator assigns another position.

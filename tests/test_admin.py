@@ -366,6 +366,45 @@ def test_role_change_revokes_old_session_and_new_login_gets_current_authority(ap
         assert signed_in.get(ROOT + "/overview").status_code == 403
 
 
+def test_admin_can_promote_handler_to_admin_with_current_permissions_and_retained_identity(api):
+    badge = BADGES['handler']
+    ok(api.post('/api/items', {'id': 'POSITION-CHANGE-CUSTODY', 'kind': 'Part',
+        'google_part_number': '000-PART', 'location': 'Synthetic receiving',
+        'handler': badge, 'welds_required': 0}), 201)
+    with api.session_factory() as session:
+        person = session.get(api.application.Employee, badge)
+        identity = (person.badge, person.name, person.active, person.pin_hash, person.created_at)
+        item = session.get(api.application.Item, 'POSITION-CHANGE-CUSTODY')
+        recorded_item = {column.name: getattr(item, column.name) for column in item.__table__.columns}
+    with TestClient(api.application.app) as signed_in:
+        ok(signed_in.post('/api/login', json={'badge': badge, 'pin': TEST_PIN}))
+        assert signed_in.get(ROOT + '/overview').status_code == 403
+        updated = edit_employee(api, badge, role='admin')
+        assert updated['role'] == 'admin' and updated['active'] is True
+        assert updated['reauthenticate'] is False, 'The acting administrator remains signed in'
+        assert signed_in.get('/api/me').status_code == 401
+        assert signed_in.get(ROOT + '/overview').status_code == 401
+        ok(signed_in.post('/api/login', json={'badge': badge, 'pin': TEST_PIN}))
+        account = ok(signed_in.get('/api/me'))
+        assert account['role'] == 'admin' and account['role_label'] == 'Administrator'
+        assert 'admin' in account['permissions']['capabilities']
+        assert 'manage_production' in account['permissions']['capabilities']
+        assert signed_in.get(ROOT + '/overview').status_code == 200
+        assert ok(signed_in.get(ROOT + '/employees'))['active_admins'] == 2
+    with api.session_factory() as session:
+        person = session.get(api.application.Employee, badge)
+        assert (person.badge, person.name, person.active, person.pin_hash, person.created_at) == identity
+        item = session.get(api.application.Item, 'POSITION-CHANGE-CUSTODY')
+        assert {column.name: getattr(item, column.name) for column in item.__table__.columns} == recorded_item
+        events = session.scalars(select(api.application.Audit).where(
+            api.application.Audit.event == 'EMPLOYEE_UPDATED')).all()
+        assert len(events) == 1
+        assert events[0].actor == BADGES['admin']
+        assert events[0].details['from']['role'] == 'handler'
+        assert events[0].details['to']['role'] == 'admin'
+        assert events[0].details['existing_sessions_revoked'] is True
+
+
 def test_deactivate_reactivate_keeps_old_session_revoked_and_history_identity(api):
     badge = BADGES["welder"]
     item_id = api.item()["id"]

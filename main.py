@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-setup.1'
+APP_VERSION='2026.10.30-qr.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -318,6 +318,8 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
     before=r.google_part_number
     r.google_part_number=data.google_part_number.strip()
     if not r.google_part_number:raise HTTPException(422,'Google part number cannot be blank')
+    from order_spools import guard_registered_spool
+    guard_registered_spool(s,r)
     from order_setup import guard_spool_requirement, requirements_by_gpn
     from orders import _key
     plan=s.get(SpoolPlan,r.id)
@@ -566,6 +568,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(RecordRemoval.record_id).limit(1))
     s.execute(select(OrderAssemblyRequirement.gpn_id).limit(1))
     s.execute(select(OrderSpoolRequirement.id).limit(1))
+    s.execute(select(OrderSpool.item_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -611,6 +614,11 @@ app.include_router(removals_router)
 
 from order_setup import router as order_setup_router, OrderAssemblyRequirement, OrderSpoolRequirement
 app.include_router(order_setup_router)
+
+from order_spools import OrderSpool
+
+from order_labels import router as order_labels_router
+app.include_router(order_labels_router)
 
 from production_progress import router as production_progress_router
 app.include_router(production_progress_router)

@@ -41,6 +41,7 @@ from transfers import ItemTransferState, TransferLocation
 from administration import EmployeeAccessState, EmployeeRemovalState
 from orders import PurchaseOrder, OrderGpn, OrderAssembly
 from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
+from order_spools import OrderSpool
 from removals import RecordRemoval
 
 
@@ -94,6 +95,7 @@ TABLE_SPECS = (
     _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn description created_by created_at updated_at'),
     _spec(OrderAssembly, 'Order assemblies', 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at', 'item_id'),
     _spec(OrderAssemblyRequirement, 'Assembly quantity plans', 'gpn_id assembly_quantity created_by created_at updated_at', 'gpn_id'),
+    _spec(OrderSpool, 'Registered order spools', 'item_id assembly_id requirement_id created_by created_at', 'item_id'),
     _spec(OrderSpoolRequirement, 'Spool quantity plans', 'id gpn_id spool_number normalized_number quantity_per_assembly active created_by created_at updated_at'),
     _spec(Subproject, 'Subprojects', 'id project_id name description created_by created_at'),
     _spec(SpoolPlan, 'Spool plans', 'item_id project_id subproject_id assembly_id planned_welds drawing_revision due_date notes zero_weld_reason version created_by created_at updated_at', 'item_id'),
@@ -207,6 +209,7 @@ RELATIONSHIPS = (
     'tracking_spool_plans.item_id -> items.id; one plan enrolls one existing physical item.',
     'tracking_spool_plans.project_id -> tracking_projects.id; subproject_id -> tracking_subprojects.id.',
     'tracking_spool_plans.assembly_id -> items.id (optional Assembly). Assembly links organize records; they do not certify child-spool release.',
+    'order_spools.item_id -> items.id; assembly_id -> order_assemblies.item_id; requirement_id -> order_spool_requirements.id. This registers a physical spool against an exact assembly before its weld plan exists. It is not fabrication, receipt or QA evidence.',
     'tracking_welds.item_id -> items.id; number is unique within its spool. id is the permanent weld identity.',
     'tracking_welds.template_id -> tracking_requirement_templates.id. Each template row is an immutable revision.',
     'tracking_requirements.item_id -> items.id; weld_id -> tracking_welds.id. Blank weld_id identifies a spool-level requirement.',
@@ -219,7 +222,7 @@ RELATIONSHIPS = (
     'tracking_process_events.item_id -> items.id; actor -> employees.badge. sequence is the immutable per-spool order and concurrency version.',
     'Process visits and Process totals are calculated reports from Process events, grouped by item_id and process. visit_id is the sequence that started that visit, not a separate database row.',
     'flow_plans.item_id / flow_events.item_id / flow_exceptions.item_id -> items.id. Flow event sequence is the per-item traveler revision; it differs from the separate process-timer sequence.',
-    'flow_component_links.component_id -> individual component items.id; spool_id -> the parent spool items.id. SpoolPlan.assembly_id remains the spool-to-assembly relationship.',
+    'flow_component_links.component_id -> individual component items.id; spool_id -> the parent spool items.id. Registered order_spools and tracking_spool_plans identify spool-to-assembly scope; a spool with both is counted once.',
     'Process reports use the current SpoolPlan project/subproject, or the assigned parent spool plan for a component. Unassigned component project/subproject cells remain blank; past project assignments are not frozen in timing events.',
     'Flow steps contains the current numbered CLM process definitions. Recorded event data retains its own definition version and step/checklist snapshot.',
     'Flow plans stores shipment and receipt details. shipped_at confirms dispatch; delivered_at exists only after a separately recorded delivery receipt.',

@@ -1,5 +1,13 @@
 # Deploy or update FabTrace Cloud on Render
 
+### P.O. assembly/spool QR labels and employee positions: `2026.10.30-qr.1`
+
+Deploy the complete reviewed source, including `order_labels.py`, `order_spools.py`, their order/quantity/flow/tracking/removal/progress/export integrations, `static/order-labels.js` / `.css`, updated setup/admin/tracking assets and the synchronized HTML shells. The label page is `/?order-labels=1&po=PROJECT_ID`, with `&kind=Spool` for spool labels. **Employees → Change position** uses the existing administrator-only, versioned account-update API.
+
+Keep the same PostgreSQL database, public HTTPS origin, secrets, pre-deploy `python init_db.py` and start command. Initialization adds only the `order_spools` table; the schema becomes 51 tables. It does not alter existing columns or generate physical records, assign positions or modify employee accounts. Generation is an explicit administrator/supervisor action using saved order quantities plus actual location and active employee, never a startup, GET, print or deployment side effect.
+
+Verify `/healthz` reports `2026.10.30-qr.1` and the intended commit, changed assets match, the registry table is present and label APIs require authentication. Compare retained production/employee counts without creating operational test records or promoting a production employee. Use isolated API, PostgreSQL and browser fixtures for per-assembly spool quantities, current-version idempotency, same-version races, parent/number scope, removal/restoration capacity, release gates, QR image readiness and Handler-to-Administrator session revocation.
+
 ### Simple P.O. quantity setup: `2026.10.30-setup.1`
 
 Include `order_setup.py`, `static/order-setup.js`, `static/order-setup.css`, the synchronized shells, and the reviewed order/progress/Excel integrations. **Purchase orders** and the administrator/supervisor landing page now open `/?order-setup=1`: P.O. number, multiple Google part number / assembly numbers with assembly quantities, then spool numbers with **Qty per assembly**. One final save records the whole setup. The existing `/?orders=1` screen remains available through **Production records** for later physical registration and Excel downloads.

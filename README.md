@@ -1,5 +1,17 @@
 # FabTrace Cloud
 
+## GPN and spool QR labels from a saved P.O.
+
+Open **Purchase orders → Open P.O. → Generate QR labels**, then choose **GPN / Assembly labels** or **Spool labels**. FabTrace uses the saved quantities and generates only missing physical records. Choose the actual current location and responsible employee once per batch. Each assembly and spool receives its own permanent QR code; reprinting retains the same identity.
+
+Spool generation creates any missing parent assemblies automatically. It assigns the required spool numbers and quantities to **each individual assembly**, including repeated spool numbers. Spool labels show the spool number, P.O., parent GPN, physical assembly ID and unique spool ID. Print all labels or filter to one GPN, in pages of 100. Generation handles up to 500 new items per batch, including any parent assemblies; continue with the next batch when needed.
+
+Initial quantity setup becomes locked once physical records exist. Label generation creates no weld plans, travelers, receipts, completed work or QA acceptance. Use **Set weld plan** when actual weld scope is ready; the registered parent is retained. Active employees can view and reprint labels; administrators and supervisors can generate missing identities. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md). Release `2026.10.30-qr.1` adds the physical `order_spools` registration table without changing existing columns or generating production records at deployment.
+
+## Change an employee's position
+
+An administrator can open **Employees → Change position**, select the new position, record a reason and save. To promote a Handler, select **Administrator**. The employee signs in again to receive the updated permissions. Their permanent badge, PIN and recorded work remain associated with the same account. **Admin controls → Employee accounts** offers the same action. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
+
 ## Simple P.O. setup
 
 Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** Administrators and supervisors land here after signing in. Setup has three short steps:
@@ -67,7 +79,7 @@ An active administrator can open **Admin controls** (`/?admin=1`) to release any
 
 ### Job positions and restricted controls
 
-Administrators assign one position per employee in **Admin controls → Employee accounts**: Administrator, Supervisor, Material coordinator, Welder, Fit-up welder, Process welder, QA/QC, Painter, Finisher or Miscellaneous. **Welder** covers both welding stages; the two specialist positions separate fit-up from production welding. Finisher completes component preparation, Painter completes sandblast/paint, and QA/QC performs inspection and acceptance. Supervisors plan and coordinate without physical welding/painting completion authority.
+Administrators assign one position per employee through **Employees → Change position** or **Admin controls → Employee accounts**: Administrator, Supervisor, Material coordinator, Welder, Fit-up welder, Process welder, QA/QC, Painter, Finisher or Miscellaneous. **Welder** covers both welding stages; the two specialist positions separate fit-up from production welding. Finisher completes component preparation, Painter completes sandblast/paint, and QA/QC performs inspection and acceptance. Supervisors plan and coordinate without physical welding/painting completion authority.
 
 The server enforces job-specific work, timer and evidence permissions. Job Packet checks/uploads are scoped to the trade; QA review/issue and package handover have separate permissions. Ordinary dual-badge custody transfers remain available to all supported positions. A position change revokes existing sessions, including a queued write waiting behind that change. Employee badges, historical records and existing assignments remain intact; an Administrator account retains full authority until explicitly reassigned. No schema, resource or automatic account changes are introduced. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the complete matrix and setup instructions.
 
