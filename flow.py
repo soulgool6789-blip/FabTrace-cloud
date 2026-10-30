@@ -438,6 +438,9 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
 def flow_release_errors(s, item, approving_step=None, for_update=True):
     plan = s.get(FlowPlan, item.id)
     if not plan:
+        from orders import OrderAssembly
+        if s.get(OrderAssembly, item.id):
+            return ['Start the purchase-order assembly traveler before ordinary final QA release; its required spools and QA steps must be recorded']
         return []
     required = 15 if plan.route == 'spool' else 22 if plan.route == 'assembly' else None
     if required is None:
@@ -544,6 +547,7 @@ def detail(s, item, user):
     from production import process_snapshot
     from parts import parts_summary
     from transfers import transfer_snapshot
+    from orders import order_scope
     parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
     process = process_snapshot(s, item.id, user=user)
@@ -574,6 +578,7 @@ def detail(s, item, user):
         actions.append('deliver')
     return {
         **({'parts': parts} if parts else {}),
+        'order_scope': order_scope(s, item.id),
         'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
                  'release_control': release_summary(s, item)},
         'release_control': release_summary(s, item),
@@ -637,6 +642,9 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
         raise HTTPException(422, 'An Assembly must use the assembly traveler')
     if data.route == 'assembly' and data.expected_children < 1:
         raise HTTPException(422, 'Declare at least one required child spool for the assembly')
+    if data.route == 'assembly':
+        from orders import guard_flow_scope as guard_order_scope
+        guard_order_scope(s, item.id, data.expected_children)
     if data.route == 'spool' and data.expected_children == 0 and len(data.material_reference) < 2:
         raise HTTPException(422, 'Declare required components, or record the controlled legacy material basis for an existing spool')
     if data.route == 'spool':
@@ -908,6 +916,8 @@ def link_spool(item_id: str, data: LinkIn, u: Employee = Depends(auth), s: Sessi
     child_flow = s.get(FlowPlan, child.id)
     if child.kind == 'Assembly' or not child_plan or child.id == assembly.id:
         raise HTTPException(422, 'Assembly children must be individual tracked spools')
+    from orders import guard_plan_scope
+    guard_plan_scope(s, child, child_plan, {'project_id': child_plan.project_id, 'assembly_id': assembly.id})
     if child_plan.project_id != assembly_plan.project_id:
         raise HTTPException(409, 'Child spool and assembly must belong to the same project')
     if child_plan.assembly_id:
@@ -939,6 +949,9 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
     if plan.route == 'spool':
         from parts import guard_flow_scope
         guard_flow_scope(s, item_id, data.expected_children)
+    elif plan.route == 'assembly':
+        from orders import guard_flow_scope as guard_order_scope
+        guard_order_scope(s, item_id, data.expected_children)
     if plan.status != 'active' or item.released or not (
             plan.route == 'spool' and plan.current_step == 9 or
             plan.route == 'assembly' and plan.current_step in (17, 18)):

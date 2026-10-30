@@ -2,7 +2,15 @@
 
 FabTrace Cloud is a FastAPI and PostgreSQL application for shared fabrication records, employee badge sign-in, QR labels, custody handoffs, and project-to-weld traceability. The browser interface uses plain HTML, CSS, and JavaScript.
 
-## What this version adds
+## Start with the purchase order
+
+Open **Purchase orders** (`/?orders=1`) to organize new work as **PO number → GPN → assembly and assembly part number → required spools → spool material lists**. Administrators and supervisors can create a PO or explicitly connect an existing project, add multiple GPN groups, and register or attach physical assemblies. Each assembly shows required, linked, missing and ready spool counts alongside its part number. Physical tracking IDs and customer part numbers stay separate.
+
+Use the assembly's shortcuts to set its weld plan, register/link actual spools and create each spool's BOM. **Download BOM Excel** exports the selected PO/GPN/assembly with its material quantities and current progress; **Excel BOM template** creates an editable offline planning workbook. Missing spools and missing material plans stay visible, and material quantities are not multiplied twice. Excel edits do not update FabTrace; enter approved requirements in the site. All active supported employees can download these scoped BOMs; the full backend export remains administrator-only.
+
+Existing projects are not converted automatically. Explicit attachment preserves their IDs, QR links, workflow records and issued packet history. Required spool counts are validated against existing links and the assembly traveler. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for the complete setup and Excel workflow.
+
+## Fabrication and quality workspaces
 
 The **Projects & welds** workspace organizes **project → subproject / work package → spool → individual weld**. A spool plan attaches to an existing item, keeping its item ID, QR link, custody, and inspection history.
 
@@ -73,7 +81,7 @@ Incoming verification and the four QA checkpoints have controlled failure return
 
 Numbered steps drive the existing process clock automatically. Staff can pause/resume for delays; moving to another numbered step requires completing the current one. Quality release occurs at spool QA step 15 or assembly final QA step 22; subsequent handoff and shipping steps remain available. Step 24 records shipment with a carrier, reference and destination. **Confirm delivery** separately records the receipt reference and recipient.
 
-For work already underway, a supervisor can select the current starting step and record its existing-work reference and reason. Earlier steps remain **Not recorded**. A spool using existing controlled material records instead of newly linked component travelers needs an explicit material reference. No historical completion or timing is invented. Required-child counts can be corrected with a reference and reason while the traveler is still at its material-selection/collection stage.
+For work already underway, a supervisor can select the current starting step and record its existing-work reference and reason. Earlier steps remain **Not recorded**. A spool using existing controlled material records instead of newly linked component travelers needs an explicit material reference. No historical completion or timing is invented. Required-child counts can generally be corrected with a reference and reason while the traveler is still at its material-selection/collection stage. A PO-managed assembly's count must instead be corrected while unreleased and before starting its traveler; afterward it is locked to its declared order scope.
 
 ## Prepare for the Kelvion audit
 
@@ -191,6 +199,6 @@ See the developer guide before running that local check.
 
 Tracking and Audit readiness retain controlled report references and notes. Job Packets additionally accept PDF, PNG/JPEG, TXT/CSV, DOCX and XLSX files, up to 8 MiB per file and 256 MiB of retained uploads per project. File bytes are stored in PostgreSQL with immutable metadata and SHA-256; no persistent Render disk or additional storage service is required. Procedure and qualification applicability remain authorized reviews. The application does not calculate qualification ranges or choose governing acceptance criteria.
 
-Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. Job Packet pressure, torque, NDE and coating checks retain actual result fields and supporting reports; technical acceptance remains the authorized reviewer's decision. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Assemblies outside that workflow retain the original physical-release behavior; dossier issuance separately verifies current child packets. Carrier labels, automated emails, customer portal submission and cryptographic customer signatures are not generated. Use the print/ZIP output and record the actual transfer and receipt.
+Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. Job Packet pressure, torque, NDE and coating checks retain actual result fields and supporting reports; technical acceptance remains the authorized reviewer's decision. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Legacy assemblies outside that workflow and not enrolled under a PO retain the original physical-release behavior. A PO-managed assembly requires its traveler before ordinary QA release; dossier issuance separately verifies current child packets. Carrier labels, automated emails, customer portal submission and cryptographic customer signatures are not generated. Use the print/ZIP output and record the actual transfer and receipt.
 
 Badge/PIN sign-in and audit records are the current controls. PostgreSQL history triggers reject routine updates and deletes, but do not protect against a database owner deliberately removing those controls. Validate configured work and acceptance rules with the people responsible for the job before using them for fabrication release. This application is not a certification of compliance.

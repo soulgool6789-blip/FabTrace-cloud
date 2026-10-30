@@ -39,6 +39,7 @@ from progress import project_rows, summarize as progress_summary
 from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_snapshot
 from transfers import ItemTransferState, TransferLocation
 from administration import EmployeeAccessState, EmployeeRemovalState
+from orders import PurchaseOrder, OrderGpn, OrderAssembly
 
 
 router = APIRouter(prefix='/api/exports', tags=['exports'])
@@ -86,6 +87,9 @@ TABLE_SPECS = (
     _spec(ItemTransferState, 'Item transfer states', 'item_id version location_id operational_status created_at updated_by updated_at', 'item_id'),
     _spec(TransferLocation, 'Transfer locations', 'id label normalized_label active version created_by created_at updated_by updated_at'),
     _spec(Project, 'Projects', 'id name client description created_by created_at'),
+    _spec(PurchaseOrder, 'Purchase orders', 'project_id purchase_order normalized_number customer normalized_customer notes version created_by created_at updated_at', 'project_id'),
+    _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn description created_by created_at updated_at'),
+    _spec(OrderAssembly, 'Order assemblies', 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at', 'item_id'),
     _spec(Subproject, 'Subprojects', 'id project_id name description created_by created_at'),
     _spec(SpoolPlan, 'Spool plans', 'item_id project_id subproject_id assembly_id planned_welds drawing_revision due_date notes zero_weld_reason version created_by created_at updated_at', 'item_id'),
     _spec(RequirementTemplate, 'Weld templates', 'id code name revision source requirements required_operations created_by created_at'),
@@ -292,6 +296,16 @@ def _json_text(value):
 
 
 def _width(header):
+    # Human-readable headers used by the focused purchase-order BOM workbook.
+    if header in ('Value', 'Notes', 'Line notes', 'Blockers'):
+        return 64
+    if header in ('Assembly description', 'Spool description', 'Material description', 'Planning status'):
+        return 44
+    if header in ('PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Spool ID',
+                  'Spool part number', 'Material part number', 'Assigned component IDs', 'BOM reference'):
+        return 28
+    if header == 'Entry':
+        return 28
     if header in ('details', 'requirements', 'notes', 'measurements', 'reason', 'close_notes', 'text', 'value',
                   'customer_requirement', 'clm_response', 'supporting_documentation', 'required_evidence',
                   'collected_evidence', 'gaps_and_corrective_actions', 'blockers'):

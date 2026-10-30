@@ -983,6 +983,8 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     before = asdict(plan, PLAN_KEYS) if plan else None
     from flow import guard_plan_change
     guard_plan_change(s, item, plan, values)
+    from orders import guard_plan_scope
+    guard_plan_scope(s, item, plan, values)
     from parts import guard_plan_project
     guard_plan_project(s, item, values)
     if plan:
