@@ -80,7 +80,7 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   await context.FabTracking.open({project:'P1',view:'spools'});
   assert.match(html(),/value="unrelated search"/,'ordinary navigation preserves existing filters');
   await context.FabTracking.open({project:'P1',subproject:'',view:'spools',resetFilters:true});
-  assert.match(html(),/Spool &lt;one&gt;/,'setup shortcut clears an unrelated prior search and process filter');
+  assert.match(html(),/data-ft-id="S1"/,'setup shortcut clears an unrelated prior search and process filter');assert.doesNotMatch(html(),/Spool &lt;one&gt;/,'physical descriptions are hidden');
   assert.doesNotMatch(html(),/unrelated search/);assert.match(html(),/<option value="" selected>All processes/);
   assert.equal(calls.at(-1).url,'/api/tracking/overview?project_id=P1','setup shortcut opens the whole exact project');
 

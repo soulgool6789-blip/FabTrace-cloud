@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-orders.1'
+APP_VERSION='2026.10.30-orders.2'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -275,7 +275,7 @@ def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Se
         'release_control':release_summary(s,r)} for r in rows]}
 class ItemIn(BaseModel):
     id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')
-    description:str=Field(min_length=2,max_length=300)
+    description:str=Field(default='',max_length=300)
     kind:Literal['Part','Assembly','Spool']='Part'
     project:str=Field(default='',max_length=120)
     google_part_number:str=Field(default='',max_length=160)
@@ -313,7 +313,7 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
 class BulkItemRow(BaseModel):
     id:str=Field(default='',max_length=60)
     google_part_number:str=Field(min_length=1,max_length=160)
-    description:str=Field(min_length=2,max_length=300)
+    description:str=Field(default='',max_length=300)
     kind:Literal['Part','Assembly','Spool']='Part'
     project:str=Field(default='',max_length=120)
     drawing:str=Field(default='',max_length=160)

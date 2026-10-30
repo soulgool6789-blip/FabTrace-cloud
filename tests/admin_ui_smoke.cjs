@@ -46,7 +46,7 @@ async function check(name,fn){await fn();checks.push(name)}
 (async()=>{
  await check('admin-only access, navigation, read-only overview and escaped search',async()=>{
   await context.FabAdmin.open();assert.equal(calls.length,0);context.me={badge:'HANDLER',name:'Handler',role:'handler'};await context.FabAdmin.open();assert.equal(calls.length,0);assert.equal(routes.at(-1).type,'items');assert.match(messages.at(-1),/Administrator access/);
-  context.me={badge:'ADMIN',name:'Admin <one>',role:'admin'};await el('navAdmin').onclick();assert.equal(context.page,'adminPage');assert.equal(context.current,null);assert.equal(context.url,'/?admin=1');assert.match(html(),/Cooling spool &lt;synthetic&gt;/);assert.match(html(),/Admin &lt;one&gt;/);assert.equal(writes().length,0);
+  context.me={badge:'ADMIN',name:'Admin <one>',role:'admin'};await el('navAdmin').onclick();assert.equal(context.page,'adminPage');assert.equal(context.current,null);assert.equal(context.url,'/?admin=1');assert.match(html(),/<strong>SPL-001<\/strong>/);assert.doesNotMatch(html(),/Cooling spool &lt;synthetic&gt;/);assert.match(html(),/Admin &lt;one&gt;/);assert.equal(writes().length,0);
   set('adminSearch','JOB & <one>');await submit('adminSearchForm');assert.ok(calls.some(c=>c.url.includes('search=JOB+%26+%3Cone%3E')));assert.match(html(),/JOB &amp; &lt;one&gt;/);
  });
  await check('explicit administrative release retains blockers and sends current version',async()=>{

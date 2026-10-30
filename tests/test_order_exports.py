@@ -101,6 +101,8 @@ def test_bom_scope_quantities_gaps_and_literal_identifiers(api, order_scope):
     first = next(row for row in summary if row['Assembly ID'] == 'ASM-A')
     assert first['PO number'] == '000012345' and first['GPN'] == '000007'
     assert first['Assembly part number'] == '000099-ASM-A'
+    assert 'Assembly description' not in first
+    assert all('Spool description' not in row for row in values(book, 'Spool register'))
     assert (first['Required spools'], first['Linked spools'], first['Missing spools']) == (2, 1, 1)
     assert first['Ready spools'] == 0 and first['Linked spools not ready'] == 1
     bom = values(book, 'Bill of materials')
@@ -154,6 +156,8 @@ def test_template_is_editable_context_not_invented_material_or_receipt(api, orde
     book = download(api, order_scope['project'], suffix='bom-template.xlsx')
     assert list(book.sheets) == ['Assembly summary', 'BOM template', 'Spool register', 'Export info']
     rows = values(book, 'BOM template')
+    assert all('Assembly description' not in row for row in values(book, 'Assembly summary'))
+    assert all('Spool description' not in row for row in values(book, 'Spool register'))
     assert {row['Spool ID'] for row in rows} == {'SP-A', 'SP-B'}
     assert all(row['Material part number'] is None and row['Material description'] is None and
                row['Required quantity'] is None for row in rows)

@@ -167,7 +167,7 @@ const liveValues=()=>elements.get('trackingContent').clockNodes.map(n=>n.textCon
   processData=runningProcess();await context.FabTracking.open({view:'spools'});
   assert.match(html(),/Current process \/ elapsed/);assert.match(html(),/ftProcessFilter/);
   elements.get('ftProcessFilter').value='welding';elements.get('ftProcessFilter').onchange();
-  assert.match(html(),/Spool One/);assert.doesNotMatch(html(),/Untimed spool/);
+  assert.match(html(),/data-ft-id="S1"/);assert.doesNotMatch(html(),/data-ft-id="S2"/);assert.doesNotMatch(html(),/Spool One|Untimed spool/,'physical item descriptions are hidden');
   assert.equal(timers.size,1);
   context.FabTracking.cancelPending();assert.equal(timers.size,0,'navigation stops live updates');
 

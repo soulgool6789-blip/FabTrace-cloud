@@ -5,7 +5,7 @@ Use **Scan & Handoff** to record who currently holds a physical part, spool or a
 ## Record a handoff
 
 1. Sign in and open **Scan & Handoff**, or choose **Transfer** from the item record.
-2. Scan the item's existing QR label, use a keyboard scanner, or enter its ID and load the item. Check the displayed description, current custodian, recorded location and process/quality state.
+2. Scan the item's existing QR label, use a keyboard scanner, or enter its ID and load the item. Check the tracking ID and part number, current custodian, recorded location and process/quality state.
 3. Scan or enter the **sending employee's badge** and confirm the employee shown. This must be an active employee whose badge matches the item's recorded current custodian. Displaying the current custodian does not count as scanning their badge.
 4. Scan or enter the **receiving employee's badge** and confirm the employee shown. This employee must also be active. Camera scanning and keyboard scanners use the same employee records.
 5. Choose a **destination location** and **current work status** from their dropdowns. Add a note if it helps explain the move or delay.

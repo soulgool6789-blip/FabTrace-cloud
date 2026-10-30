@@ -64,7 +64,7 @@ async function ready(receiver='SHOP2'){await lookup('Sender','SHOP1');await look
 (async()=>{
   await context.FabHandoff.open({item:'SPL-001'});
   assert.equal(context.page,'handoffPage');assert.match(context.url,/handoff=1&item=SPL-001/);
-  assert.match(el('handoffItemInfo').innerHTML,/Alex Sender|Legacy Rack 7/);assert.match(el('handoffItemInfo').innerHTML,/Fixture &lt;spool&gt;/);
+  assert.match(el('handoffItemInfo').innerHTML,/Alex Sender|Legacy Rack 7/);assert.match(el('handoffItemInfo').innerHTML,/<strong>SPL-001<\/strong>/);assert.doesNotMatch(el('handoffItemInfo').innerHTML,/Fixture &lt;spool&gt;/);
   assert.equal(el('handoffSender').value,'','recorded custodian never prefills sender input');assert.equal(el('handoffReceiver').value,'');assert.equal(el('handoffLocation').value,'current');assert.equal(el('handoffStatus').value,'queued');
   assert.doesNotMatch(el('handoffLocation').innerHTML,/Retired rack/);assert.match(el('handoffControls').innerHTML,/does not advance the process, pause its timer, or grant QA release/);
   assert.equal(el('handoffConfirm').disabled,true);await lookup('Sender','SHOP3');assert.match(el('handoffSenderInfo').textContent,/recorded custodian/);assert.equal(el('handoffConfirm').disabled,true);

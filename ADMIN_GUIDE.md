@@ -4,7 +4,7 @@ Sign in with an active **administrator** account and open **Admin controls**. Th
 
 ## Release an item by administrator decision
 
-1. Open **Admin controls → Items & release** and search by item ID, description or project. You can also select **Release as administrator** or **Admin controls** from an item record.
+1. Open **Admin controls → Items & release** and search by item ID or project. You can also select **Release as administrator** or **Admin controls** from an item record.
 2. Open the item's controls and review its current custodian, location, release state and outstanding requirements.
 3. Select **Release as administrator**.
 4. Enter the actual reason for the decision. Add an authorization, disposition or other record reference when applicable.

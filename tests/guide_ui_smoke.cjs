@@ -137,7 +137,7 @@ async function check(name,fn){await fn();checks.push(name);}
     const id='P<&"/1',f=complete(id,'<img src=x onerror=alert(1)>');f.progress.items[0].fabrication_finished=false;
     f.progress.items[0].id='C"<unsafe>';f.progress.items[0].description='<script>unsafe</script>';f.progress.items[0].blockers=['Hold <blocked>'];
     f.dossier.completion_blockers=['QA <required>'];setProjects(f);context.me.role='<employee>';await context.FabGuide.open({project:id});
-    assert.match(html(),/Your role: &lt;employee&gt;/);assert.match(html(),/&lt;img src=x onerror=alert\(1\)&gt;/);assert.match(html(),/&lt;script&gt;unsafe&lt;\/script&gt;/);assert.match(html(),/Hold &lt;blocked&gt;/);assert.match(html(),/QA &lt;required&gt;/);
+    assert.match(html(),/Your role: &lt;employee&gt;/);assert.match(html(),/&lt;img src=x onerror=alert\(1\)&gt;/);assert.doesNotMatch(html(),/&lt;script&gt;unsafe&lt;\/script&gt;/,'physical item descriptions are not displayed');assert.match(html(),/Hold &lt;blocked&gt;/);assert.match(html(),/QA &lt;required&gt;/);
     assert.match(html(),/data-guide-id="C&quot;&lt;unsafe&gt;"/);assert.doesNotMatch(html(),/data-guide-action="packet" data-guide-id="C&quot;&lt;unsafe&gt;"/,'components do not receive invented item packets');assert.doesNotMatch(html(),/<script>|<img src=x/);assert.equal(new URL(context.url,'https://example.test').searchParams.get('project'),id);
     assert.ok(calls.some(c=>c.url==='/api/progress/projects/'+encodeURIComponent(id)));input('guideSearch','"<input unsafe>');assert.match(html(),/value="&quot;&lt;input unsafe&gt;"/);assert.doesNotMatch(html(),/<input unsafe>/);
     context.me.role='handler';
