@@ -214,7 +214,11 @@ See [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for the final packet sequence and [PERM
 
 ## 8. Use the drawing BOM and each piece's records
 
-Open **BOM & drawings** beside the saved spool number for its reference documents, or **Materials & QA/QC** on a unique physical spool for its material records and inspections. The bar beneath **Welds per spool** is production progress, not the BOM link.
+Open **BOM & drawings** on a physical spool, then select **BOM**. The table displays one row for every physical piece, with **QA-001 Pass/Fail** at the end of each row. Confirm the full numbered spool label before entering material information or a decision. The existing **Materials & QA/QC** screen shows these same records and provides MTR uploads and the separate overall arrival inspection.
+
+For example, a BOM with two **100708 flanges** and one **102391 pipe** appears as three individually identified rows: flange piece 001, flange piece 002, and pipe piece 001. Each row has quantity one and its own approval. Save the required heat number and MTR reference for the piece, then QA/QC records Pass or Fail with the inspection reference and findings.
+
+When opening a shared BOM from order setup, choose the numbered physical copy being inspected if several copies exist. Every approval belongs to that selected copy. If the copy uses an individual BOM revision, open that copy's current BOM. If its saved material register still uses an earlier revision, review the new pieces and choose **Use this BOM for this spool** on the same page, entering the reason. This starts blank material entries and pending QA-001 decisions for that copy's new BOM, while retaining the previous records and history. Enter and verify the new pieces' heat/MTR information before approving them.
 
 The existing approved reference for drawing **643-777 revision 2** remains available for **643-777-PCW-03-01** (sheet 2) and **643-777-PCW-03-02** (sheet 3). Its two BOM lines describe one pipe piece and two flange pieces for one physical spool. The flanges have separate heat/MTR entries and QA-001 decisions even when they share a TAS line number. Uploaded structured BOMs follow the same whole-piece rule.
 

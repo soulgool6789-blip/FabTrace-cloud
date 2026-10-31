@@ -10,7 +10,8 @@
   const UPLOAD_ACCEPT='.pdf,.jpg,.jpeg,.png,.xlsx,.csv,.tsv,application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
   const MAX_REVIEW_BYTES=900*1024;
   const documentKind=review=>['bom','isometric'].includes(review?.data.source.document_kind)?review.data.source.document_kind:null;
-  const busy=()=>state.loading||state.working||state.saving;
+  const pieceSaving=()=>window.FabDocumentPieceQa?.isSaving()===true;
+  const busy=()=>state.loading||state.working||state.saving||pieceSaving();
   const bytes=value=>value>=1048576?(value/1048576).toFixed(1)+' MB':Math.max(1,Math.ceil(value/1024))+' KB';
   const label=kind=>kind==='bom'?'Bill of material':'Isometric drawings';
   const button=(action,caption,extra='',primary=false,disabled=false)=>`<button type="button" data-sdoc-action="${action}" ${extra}${disabled?' disabled':''}${primary?' class="primary"':''}>${esc(caption)}</button>`;
@@ -58,7 +59,7 @@
     const doc=state.data.active[state.tab];
     if(!doc)return `<section class="sdoc-empty"><h3>No ${state.tab==='bom'?'bill of material':'isometric drawing'} uploaded yet</h3><p>${state.tab==='bom'?'Choose an Excel workbook, CSV, or a scanned PDF bill of material.':'Upload the complete drawing PDF, or scan and add every page below.'}</p></section>`;
     const viewer=state.viewer===doc.id&&fileUrl(doc.view_url)&&doc.media_type==='application/pdf';
-    return `<section class="sdoc-saved"><div class="sdoc-saved-title"><div><span class="sdoc-eyebrow">${doc.inherited?'From assembly / spool setup':'Saved for this spool'}</span><h3>${esc(doc.filename)}</h3></div><span class="sdoc-badge">${doc.revision?'Revision '+esc(doc.revision):'Version '+doc.version}</span></div><p class="sdoc-meta">${doc.page_count?`${doc.page_count} page${doc.page_count===1?'':'s'} · `:''}${bytes(doc.size_bytes||0)} · Uploaded by ${esc(doc.uploaded_by||'—')}${doc.uploaded_at?' · '+esc(new Date(doc.uploaded_at).toLocaleString()):''}</p>${documentActions(doc)}${doc.bom?`<div id="sdocSavedGrid">${table(doc.bom,'BOM · '+state.data.context.spool_number)}</div>`:''}${viewer?`<div class="sdoc-viewer"><iframe src="${esc(fileUrl(doc.view_url))}" title="Complete ${esc(label(doc.kind).toLowerCase())} · ${doc.page_count||''} pages"></iframe><p class="sdoc-meta">Use the viewer controls to move through all pages. You can also open the full file using the link above.</p></div>`:''}</section>`;
+    return `<section class="sdoc-saved"><div class="sdoc-saved-title"><div><span class="sdoc-eyebrow">${doc.inherited?'From assembly / spool setup':'Saved for this spool'}</span><h3>${esc(doc.filename)}</h3></div><span class="sdoc-badge">${doc.revision?'Revision '+esc(doc.revision):'Version '+doc.version}</span></div><p class="sdoc-meta">${doc.page_count?`${doc.page_count} page${doc.page_count===1?'':'s'} · `:''}${bytes(doc.size_bytes||0)} · Uploaded by ${esc(doc.uploaded_by||'—')}${doc.uploaded_at?' · '+esc(new Date(doc.uploaded_at).toLocaleString()):''}</p>${documentActions(doc)}${doc.bom?'<div id="sdocSavedGrid"><p class="sdoc-loading" role="status">Loading individual material pieces…</p></div>':''}${viewer?`<div class="sdoc-viewer"><iframe src="${esc(fileUrl(doc.view_url))}" title="Complete ${esc(label(doc.kind).toLowerCase())} · ${doc.page_count||''} pages"></iframe><p class="sdoc-meta">Use the viewer controls to move through all pages. You can also open the full file using the link above.</p></div>`:''}</section>`;
   }
   function filesView(draft){
     if(!draft.files.length)return '';
@@ -143,12 +144,12 @@
   }
   function render(){
     node('spoolDocumentsSubtitle').textContent=state.data?'Spool '+state.data.context.spool_number:state.target?.spool_number?'Spool '+state.target.spool_number:'';
-    node('spoolDocumentsClose').disabled=state.saving;node('spoolDocumentsDone').disabled=state.saving;node('spoolDocumentsBack').disabled=state.saving;
+    node('spoolDocumentsClose').disabled=state.saving||pieceSaving();node('spoolDocumentsDone').disabled=state.saving||pieceSaving();node('spoolDocumentsBack').disabled=state.saving||pieceSaving();
     node('spoolDocumentsDone').textContent=state.target?.kind==='requirements'?'Return to setup':'Return to spool';
     const content=node('spoolDocumentsContent');content.setAttribute('aria-busy',String(busy()));
-    if(state.loading&&!state.data){content.innerHTML='<p class="sdoc-loading" role="status">Loading spool documents…</p>';return;}
-    if(state.error&&!state.data){content.innerHTML=`<div class="sdoc-error" role="alert"><p>${esc(state.error)}</p>${button('reload','Try again')}</div>`;return;}
-    if(!state.data){content.innerHTML='';return;}
+    if(state.loading&&!state.data){window.FabDocumentPieceQa?.unmount();content.innerHTML='<p class="sdoc-loading" role="status">Loading spool documents…</p>';return;}
+    if(state.error&&!state.data){window.FabDocumentPieceQa?.unmount();content.innerHTML=`<div class="sdoc-error" role="alert"><p>${esc(state.error)}</p>${button('reload','Try again')}</div>`;return;}
+    if(!state.data){window.FabDocumentPieceQa?.unmount();content.innerHTML='';return;}
     const saved=state.data.active.bom||state.data.active.isometric,showTabs=saved||state.view==='saved',active=state.view==='upload'?'upload':state.tab;
     const tabs=[...(state.data.permissions?.can_upload!==false?[['upload','Upload files']]:[]),['bom','BOM'],['isometric','Drawings']];
     const tabbar=showTabs?`<div class="sdoc-file-nav"><div class="sdoc-tabs" role="tablist" aria-label="Spool files">${tabs.map(([kind,caption])=>`<button id="sdoc-tab-${kind}" type="button" role="tab" aria-selected="${active===kind}" aria-controls="sdocPanel" tabindex="${active===kind?0:-1}" data-sdoc-tab-choice="${kind}"${busy()?' disabled':''}>${esc(caption)}</button>`).join('')}</div>${state.data.history.length?`<button id="sdoc-tab-history" class="sdoc-history-link" type="button" data-sdoc-tab-choice="history"${busy()?' disabled':''}>History</button>`:''}</div>`:'';
@@ -159,6 +160,11 @@
     for(const [id,key] of [['sdocRevision','revision'],['sdocReason','reason'],['sdocSheet','sheet']]){const input=node(id);if(input)input.oninput=()=>{const draft=state.drafts[state.tab==='isometric'?'isometric':'bom'];draft[key]=input.value;if(key==='reason')draft.reasonAutomatic=false;if(key==='sheet'){invalidatePreview(draft);const save=content.querySelector('[data-sdoc-action="save"]');if(save)save.disabled=true;}};}
     const sheet=node('sdocSheetChoice');if(sheet)sheet.onchange=()=>{const draft=state.drafts.bom;draft.sheet=sheet.value;invalidatePreview(draft);if(draft.sheet)preview();else render();};
     const mode=node('sdocSourceMode');if(mode)mode.onchange=()=>{state.sourceMode=mode.value;invalidatePreview(state.drafts.isometric);if(state.tab==='isometric'&&state.drafts.isometric.files.length)scheduleAnalysis();else render();};
+    const grid=node('sdocSavedGrid'),doc=state.data.active.bom;
+    if(grid&&state.view==='saved'&&state.tab==='bom'&&doc?.bom){
+      if(window.FabDocumentPieceQa)window.FabDocumentPieceQa.mount({host:grid,target:state.target,document:doc,context:state.data.context,busy:state.loading||state.working||state.saving,onBusyChange:()=>{if(dialog.open)render();},reloadDocuments:load});
+      else grid.innerHTML='<p class="sdoc-warning">Individual material records could not be loaded. Reload this page to view the BOM pieces and QA-001 controls.</p>';
+    }else window.FabDocumentPieceQa?.unmount();
   }
   function cancelScheduledAnalysis(){if(state.scanTimer){clearTimeout(state.scanTimer);state.scanTimer=null;}}
   function scheduleAnalysis(previous=null,kind='isometric'){
@@ -316,23 +322,23 @@
     finally{if(sequence===state.sequence){state.saving=false;render();}}
   }
   async function load(){
-    if(!state.target||state.saving)return;state.controller?.abort();const sequence=++state.sequence;state.controller=new AbortController();state.loading=true;state.error='';state.working=false;render();
+    if(!state.target||state.saving||pieceSaving())return;window.FabDocumentPieceQa?.unmount();state.controller?.abort();const sequence=++state.sequence;state.controller=new AbortController();state.loading=true;state.error='';state.working=false;render();
     try{const d=await request(ROOT+'/'+state.target.kind+'/'+enc(state.target.id),{signal:state.controller.signal});if(sequence!==state.sequence||!dialog.open)return;if(!valid(d))throw Error('The documents returned do not match this spool. Reopen the spool and try again.');state.data=d;state.package=null;if(d.permissions?.can_upload===false&&state.view==='upload'){state.view='saved';state.tab=d.active.bom?'bom':d.active.isometric?'isometric':'bom';}for(const draft of Object.values(state.drafts)){draft.stale=false;draft.preview=null;draft.error='';}}
     catch(error){if(sequence===state.sequence&&error.name!=='AbortError')state.error=errorText(error);}
     finally{if(sequence===state.sequence){state.loading=false;state.controller=null;render();}}
   }
   async function open(target,trigger=document.activeElement){
-    if(!me||state.saving||!target||!['spools','requirements'].includes(target.kind)||!idOK(target.id))return;
+    if(!me||state.saving||pieceSaving()||!target||!['spools','requirements'].includes(target.kind)||!idOK(target.id))return;
     if(!target.fresh&&state.resume?.badge===me.badge&&state.resume.target.kind===target.kind&&state.resume.target.id===target.id){
       const snapshot={...state.resume,open:true};
       if(['bom','isometric','history'].includes(target.tab))Object.assign(snapshot,{view:'saved',tab:target.tab,viewer:null,path:[]});
       return restoreNavigation(snapshot);
     }
-    cancelScheduledAnalysis();state.controller?.abort();state.sequence++;clearDrafts();state.package=null;state.resume=null;state.path=[];state.sourceMode='auto';state.uploadKind='bom';state.step='files';state.target={kind:target.kind,id:target.id,spool_number:target.spool_number||''};state.view=['bom','isometric','history'].includes(target.tab)?'saved':'upload';state.tab=['bom','isometric','history'].includes(target.tab)?target.tab:'bom';state.data=null;state.error='';state.notice='';state.viewer=null;state.trigger=trigger;state.working=false;
+    window.FabDocumentPieceQa?.reset();cancelScheduledAnalysis();state.controller?.abort();state.sequence++;clearDrafts();state.package=null;state.resume=null;state.path=[];state.sourceMode='auto';state.uploadKind='bom';state.step='files';state.target={kind:target.kind,id:target.id,spool_number:target.spool_number||''};state.view=['bom','isometric','history'].includes(target.tab)?'saved':'upload';state.tab=['bom','isometric','history'].includes(target.tab)?target.tab:'bom';state.data=null;state.error='';state.notice='';state.viewer=null;state.trigger=trigger;state.working=false;
     if(!dialog.open)dialog.showModal();node('spoolDocumentsClose').focus();await load();
   }
   function close(force=false,preserve=false){
-    if(state.saving&&!force)return;const trigger=state.trigger,snapshot=preserve?navigationState():null;cancelScheduledAnalysis();state.sequence++;state.controller?.abort();state.controller=null;state.loading=false;state.working=false;state.saving=false;clearDrafts();state.package=null;state.target=null;state.data=null;state.viewer=null;state.error='';state.notice='';state.trigger=null;state.path=[];state.resume=snapshot?{...snapshot,open:false}:null;
+    if((state.saving||pieceSaving())&&!force)return;const trigger=state.trigger,snapshot=preserve?navigationState():null;window.FabDocumentPieceQa?.reset();cancelScheduledAnalysis();state.sequence++;state.controller?.abort();state.controller=null;state.loading=false;state.working=false;state.saving=false;clearDrafts();state.package=null;state.target=null;state.data=null;state.viewer=null;state.error='';state.notice='';state.trigger=null;state.path=[];state.resume=snapshot?{...snapshot,open:false}:null;
     if(dialog.open)dialog.close();if(!force&&trigger?.isConnected)trigger.focus();
   }
   function navigate(tab,remember=true){
@@ -346,7 +352,7 @@
   }
   function back(){
     if(!dialog.open)return false;
-    if(state.saving)return true;
+    if(state.saving||pieceSaving())return true;
     if(state.working||state.scanTimer){cancelScheduledAnalysis();state.controller?.abort();state.sequence++;state.controller=null;state.working=false;state.view='upload';state.step='files';render();return true;}
     if(state.viewer){state.viewer=null;render();return true;}
     if(state.view==='upload'&&['reading','review','saved'].includes(state.step)){state.tab=state.uploadKind;state.step='files';render();return true;}
@@ -359,10 +365,10 @@
   function navigationState(){
     if(!me?.badge)return null;
     if(!dialog.open||!state.target)return state.resume?.badge===me.badge?state.resume:null;
-    return {format:1,badge:me.badge,open:true,target:{...state.target},view:state.view,tab:state.tab,uploadKind:state.uploadKind,step:state.step,sourceMode:state.sourceMode,path:clonePlain(state.path),data:clonePlain(state.data),drafts:{bom:cloneDraft(state.drafts.bom),isometric:cloneDraft(state.drafts.isometric)},package:clonePlain(state.package),viewer:state.viewer,notice:state.notice,error:state.error,pendingSave:state.saving};
+    return {format:1,badge:me.badge,open:true,target:{...state.target},view:state.view,tab:state.tab,uploadKind:state.uploadKind,step:state.step,sourceMode:state.sourceMode,path:clonePlain(state.path),data:clonePlain(state.data),drafts:{bom:cloneDraft(state.drafts.bom),isometric:cloneDraft(state.drafts.isometric)},package:clonePlain(state.package),viewer:state.viewer,notice:state.notice,error:state.error,pendingSave:state.saving,pieceQa:window.FabDocumentPieceQa?.snapshot()||null};
   }
   async function restoreNavigation(snapshot){
-    if(!snapshot||snapshot.format!==1||snapshot.badge!==me?.badge||state.saving||!idOK(snapshot.target?.id)||!['requirements','spools'].includes(snapshot.target.kind))return false;
+    if(!snapshot||snapshot.format!==1||snapshot.badge!==me?.badge||state.saving||pieceSaving()||!idOK(snapshot.target?.id)||!['requirements','spools'].includes(snapshot.target.kind))return false;
     if(!snapshot.open){state.resume=snapshot;return true;}
     await open({...snapshot.target,tab:'upload',fresh:true});
     if(!state.data||state.target?.id!==snapshot.target.id||state.target?.kind!==snapshot.target.kind){state.resume=snapshot;return false;}
@@ -372,7 +378,7 @@
     state.package=clonePlain(snapshot.package);state.view=snapshot.view;state.tab=snapshot.tab;state.uploadKind=snapshot.uploadKind||'bom';state.step=snapshot.step==='reading'?'files':snapshot.step;state.sourceMode=snapshot.sourceMode||'auto';state.path=clonePlain(snapshot.path)||[];state.viewer=snapshot.viewer;state.notice=snapshot.notice||'';state.error=snapshot.error||'';
     if(changed){for(const draft of Object.values(state.drafts)){draft.stale=true;draft.error='Saved files changed while you were away. Review your selected files again before saving.';}if(state.package){state.package.stale=true;state.package.error='Saved files changed while you were away. Refresh this review before saving; your material edits are retained.';}}
     if(!state.data.editable&&state.view==='upload'){state.view='saved';state.tab=state.data.active.bom?'bom':'isometric';}
-    state.resume=null;render();return true;
+    window.FabDocumentPieceQa?.restore(snapshot.pieceQa);state.resume=null;render();return true;
   }
   function template(){
     const content='spool_number,item,quantity,unit,part_number,description,size,material,length,notes,drawing,revision,source_page\r\n';
@@ -380,7 +386,7 @@
   }
   dialog.addEventListener('click',event=>{
     const tab=event.target.closest('[data-sdoc-tab-choice]');if(tab&&!busy())return navigate(tab.dataset.sdocTabChoice);
-    const target=event.target.closest('[data-sdoc-action]');if(!target||target.disabled)return;const action=target.dataset.sdocAction;
+    const target=event.target.closest('[data-sdoc-action]');if(!target||target.disabled||pieceSaving())return;const action=target.dataset.sdocAction;
     if(action==='reload')return load();if(action==='template')return template();if(action==='preview')return preview();if(action==='save')return save();
     if(action==='back')return back();
     if(action==='show-bom')return navigate('bom');
@@ -428,5 +434,5 @@
   dialog.addEventListener('keydown',event=>{if(!event.target.matches('[role="tab"]')||busy()||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const tabs=[...dialog.querySelectorAll('[role="tab"]')].map(tab=>tab.dataset.sdocTabChoice),current=tabs.indexOf(state.view==='upload'?'upload':state.tab),next=event.key==='Home'?tabs[0]:event.key==='End'?tabs.at(-1):tabs[(current+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];navigate(next);});
   dialog.addEventListener('cancel',event=>{event.preventDefault();close(false,true);});dialog.addEventListener('close',()=>{if(!dialog.open&&state.target)close(true,true);});node('spoolDocumentsClose').onclick=()=>close(false,true);node('spoolDocumentsDone').onclick=()=>close(false,true);node('spoolDocumentsBack').onclick=()=>back();
   document.addEventListener('click',event=>{const target=event.target.closest?.('[data-sdoc-kind]');if(!target||target.disabled)return;event.preventDefault();open({kind:target.dataset.sdocKind,id:target.dataset.sdocId,spool_number:target.dataset.sdocNumber,tab:target.dataset.sdocTab},target);});
-  window.FabSpoolDocuments={link,open,navigationState,restoreNavigation,back,canNavigateAway:()=>!state.saving,cancelPending:()=>close(true,true)};
+  window.FabSpoolDocuments={link,open,navigationState,restoreNavigation,back,canNavigateAway:()=>!state.saving&&!pieceSaving(),cancelPending:()=>close(true,true)};
 })();

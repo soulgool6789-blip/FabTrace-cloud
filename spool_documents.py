@@ -321,6 +321,81 @@ def _detail(s, scope, identity, user):
                        'max_files': MAX_FILES, 'max_pages': MAX_PAGES, 'max_bom_lines': MAX_LINES}}
 
 
+def _material_record_source_match(document_id, record, *, has_spools=False):
+    source = record['source_status'] if record else {}
+    effective_id = (source.get('current') or {}).get('document_id')
+    pinned_id = (source.get('pinned') or {}).get('document_id')
+    record_id = pinned_id if record and record['traceability']['configured'] else effective_id
+    effective_matches = bool(document_id and effective_id == document_id)
+    pinned_matches = bool(document_id and pinned_id == document_id)
+    if record is None:
+        code = 'selection_required' if has_spools else 'no_physical_spools'
+        reason = ('Choose the physical spool whose individual material records you want to view.' if has_spools
+                  else 'Generate the physical spool records before recording per-piece material or QA/QC information.')
+    elif document_id is None:
+        code, reason = 'no_document', 'There is no saved BOM document in this scope.'
+    elif not effective_matches:
+        code, reason = 'individual_override', 'This physical spool uses an individual BOM. Open that spool\'s BOM to view its corresponding material records and approvals.'
+    elif record_id != document_id:
+        code, reason = 'pinned_revision', 'This spool\'s material register still uses an earlier BOM revision. Review and adopt the current BOM before showing its material approvals here.'
+    elif not record['traceability']['materials']:
+        code, reason = 'unavailable', source.get('blocked_reason') or 'This BOM does not yet have a structured physical-piece register.'
+    else:
+        code, reason = 'matched', ''
+    return {'viewed_document_id': document_id, 'effective_document_id': effective_id,
+        'pinned_document_id': pinned_id, 'record_document_id': record_id,
+        'effective_matches_document': effective_matches, 'pinned_matches_document': pinned_matches,
+        'reason_code': code, 'reason': reason}
+
+
+def _material_records(s, scope, identity, user, spool_id=None):
+    """Resolve one exact physical register for the saved BOM page, without writes."""
+    from order_spools import SpoolQrIdentity, spool_qr_identity
+    from spool_boms import _spool_detail
+    context, item, requirement = _target(s, scope, identity)
+    _, _, active, _, _, _ = _effective(s, scope, identity, requirement)
+    document_id = (active['bom'] or {}).get('id')
+    if scope == 'spools':
+        if spool_id is not None and spool_id != item.id:
+            _fail('The selected physical spool does not belong to this document scope.', 404)
+        qr = spool_qr_identity(s, item.id)
+        spools = [{'item_id': item.id, 'display_code': qr.display_code if qr else item.id,
+                   'spool_number': context['spool_number'], 'assembly_id': context['assembly_id']}]
+        selected = item.id
+    else:
+        candidates = s.execute(select(Item, OrderSpool, SpoolQrIdentity)
+            .join(OrderSpool, OrderSpool.item_id == Item.id)
+            .join(OrderAssembly, OrderAssembly.item_id == OrderSpool.assembly_id)
+            .outerjoin(SpoolQrIdentity, SpoolQrIdentity.item_id == Item.id)
+            .where(OrderSpool.requirement_id == requirement.id,
+                   OrderAssembly.gpn_id == requirement.gpn_id, Item.kind == 'Spool',
+                   Item.project == context['project_id'], item_not_removed(Item.id),
+                   item_not_removed(OrderSpool.assembly_id))
+            .order_by(Item.id)).all()
+        spools = [{'item_id': child.id, 'display_code': qr.display_code if qr else child.id,
+                   'spool_number': child.google_part_number, 'assembly_id': registration.assembly_id}
+                  for child, registration, qr in candidates
+                  if _key(child.google_part_number or '') == requirement.normalized_number]
+        if spool_id is not None and spool_id not in {row['item_id'] for row in spools}:
+            _fail('The selected physical spool does not belong to this document scope.', 404)
+        selected = spool_id if spool_id is not None else spools[0]['item_id'] if len(spools) == 1 else None
+    selection_required = selected is None
+    record = _spool_detail(s, selected, user) if selected else None
+    match = _material_record_source_match(document_id, record, has_spools=bool(spools))
+    return {'context': context, 'document_id': document_id, 'spools': spools,
+            'selected_spool_id': selected, 'selection_required': selection_required, 'record': record,
+            'record_matches_document': match['reason_code'] == 'matched', 'source_match': match}
+
+
+@router.get('/{scope}/{identity}/material-records')
+def material_records(scope: str, identity: str, spool_id: str | None = None,
+                     user: Employee = Depends(auth), s: Session = Depends(db)):
+    role = user.role
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        return _material_records(snapshot, scope, identity, role, spool_id)
+
+
 ALIASES = {
     'item': ('item', 'itemno', 'itemnumber', 'line', 'lineno', 'lineitem', 'position', 'pos'),
     'quantity': ('quantity', 'qty', 'quant', 'quantityperspool', 'qtyperspool'),

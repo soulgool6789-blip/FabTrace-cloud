@@ -21,6 +21,7 @@
 #spoolDocumentsDialog .sdoc-tabs button[aria-selected=true]{color:white;background:#126b9c;border-color:#126b9c}
 #spoolDocumentsDialog button:focus-visible,#spoolDocumentsDialog a:focus-visible,#spoolDocumentsDialog input:focus-visible,#spoolDocumentsDialog select:focus-visible,#spoolDocumentsDialog summary:focus-visible,#spoolDocumentsDialog .sdoc-file-button:focus-within{outline:3px solid #8ec6e5;outline-offset:2px}
 #spoolDocumentsDialog .sdoc-saved,#spoolDocumentsDialog .sdoc-history article{padding:20px;border:1px solid #cfdfe9;background:white;border-radius:11px;margin-bottom:20px}
+#spoolDocumentsDialog .sdoc-saved:has(#documentPieceQa){padding:18px 14px}
 #spoolDocumentsDialog .sdoc-saved-title{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}
 #spoolDocumentsDialog .sdoc-badge{font-size:11px;font-weight:650;color:#357658;background:#e9f5ee;border:1px solid #cfe6d8;padding:6px 9px;border-radius:6px;max-width:210px;overflow-wrap:anywhere}
 #spoolDocumentsDialog .sdoc-meta{font-size:12px;color:#6c8192}

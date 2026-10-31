@@ -1,10 +1,12 @@
 # FabTrace Cloud
 
-## Individual material records, QA-001 and arrival QA/QC
+## Individual BOM rows, QA-001 and arrival QA/QC
 
-Release `2026.10.31-piece-qa-labels.1` saves a separate material record for every whole piece in a physical spool's valid uploaded structured BOM. A flange line with quantity **2** creates **two saved flange records**, each with its own heat number, MTR reference and **QA-001 Pass/Fail** decision. The common BOM stays a reference for one spool; material facts and approvals belong to each actual physical spool and piece.
+Release `2026.10.31-bom-table-qa.1` displays each saved physical material piece directly in the **BOM & drawings → BOM** table. The individual records introduced in `2026.10.31-piece-qa-labels.1` remain the shared source of material facts and decisions. A flange line with quantity **2** creates **two saved flange records**, each with its own heat number, MTR reference and **QA-001 Pass/Fail** decision. The common BOM stays a reference for one spool; material facts and approvals belong to each actual physical spool and piece.
 
-Open the spool's **Materials & QA/QC**, confirm its readable spool label, and save the heat/MTR details for every piece. Upload/view the full MTR PDF or scanned pages under the matching reference. QA/QC or an administrator then selects **Pass** or **Fail** for each piece, enters an inspection reference and findings, and chooses **Save QA-001**. No decision is selected automatically, and one piece's Pass does not approve another.
+Open **BOM & drawings** on a numbered spool and select **BOM**. A quantity-two flange line appears as two quantity-one rows, followed by the pipe's own row. Each row ends with its own **QA-001 Pass/Fail** controls. Confirm the readable spool label, save that piece's heat/MTR details, and record its inspection reference and findings. QA/QC personnel and administrators can save decisions; each piece retains its own result and history. The same records remain visible in **Materials & QA/QC**, which also provides MTR uploads and the overall arrival inspection.
+
+A shared setup BOM lists the exact physical copies registered to its order requirement. Choose the numbered spool being inspected when there is more than one copy. If a replacement BOM needs adoption, review the displayed pieces and choose **Use this BOM for this spool** on the same page, with a reason. That copy starts with blank current-revision material entries and pending inspections; earlier records and history remain available. Individual BOM overrides are identified before approvals can be recorded against the displayed file. Historical document views remain reference records.
 
 After every piece has a current QA-001 Pass, record the separate **overall arrival inspection** for the spool: identity, BOM, heat numbers, MTRs and condition. All five checks and the current piece approvals are required for an arrival Pass. A Fail can record missing documents or incorrect material immediately. Pending, failed or stale piece/arrival evidence blocks spool production, assembly readiness and release; administrative release cannot bypass it.
 
