@@ -33,6 +33,8 @@ def initialize():
     Render runs this before starting a new version. Keep PostgreSQL DDL,
     history protection and first-account bootstrap in one transaction, with a
     transaction lock so overlapping deploys cannot initialize concurrently.
+    Explicit PO weld counts live in an additive requirement table; absent
+    legacy declarations remain absent until a user supplies a count.
     create_all is intentionally additive; future column changes need an
     explicit versioned migration rather than an assumption that it alters DDL.
     """
@@ -64,4 +66,5 @@ def initialize():
                 print('Employee accounts already exist; bootstrap skipped')
     print('Schema ready: legacy records preserved; purchase orders, administration, weld, timing, process flow, transfers, audit readiness and Job Packet tables available')
 if __name__=='__main__':initialize()
+
 

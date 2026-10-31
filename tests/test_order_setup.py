@@ -38,7 +38,7 @@ def edit_body(result, *, index=0, **values):
     row = result['assemblies'][index]
     return {'expected_version': result['order']['version'], 'gpn': row['gpn'],
             'assembly_quantity': row['assembly_quantity'],
-            'spools': [{key: line[key] for key in ('spool_number', 'quantity_per_assembly')}
+            'spools': [{key: line[key] for key in ('spool_number', 'quantity_per_assembly', 'welds_per_spool') if key in line}
                        for line in row['spools']],
             'reason': 'Correct the approved synthetic initial quantity requirement', **values}
 
@@ -386,3 +386,4 @@ def test_reads_require_auth_are_pure_and_release_the_auth_connection(api):
         event.remove(engine, 'before_cursor_execute', observe)
     assert peak == 1 and not unsafe
     assert database_state(api) == before
+

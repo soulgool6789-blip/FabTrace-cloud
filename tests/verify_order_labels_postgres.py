@@ -1,4 +1,4 @@
-"""Focused assembly/spool-label races on a LOCAL, disposable PostgreSQL schema.
+"""Focused spool-label generation races on a LOCAL, disposable PostgreSQL schema.
 
 Usage: python tests/verify_order_labels_postgres.py --dsn
   'postgresql+psycopg://nobody@/fabtrace_test_setup?host=/tmp/fabtrace-po-pg/socket&port=55433'
@@ -99,13 +99,14 @@ def verify(dsn):
             event.remove(app.engine, 'before_cursor_execute', synchronize)
         assert sorted(r['status'] for r in result) == [200, 409], result
         success = next(r['body'] for r in result if r['status'] == 200)
-        assert success['created_count'] == 5 and len(set(success['created_ids'])) == 5
+        assert success['created_count'] == 20 and len(set(success['created_ids'])) == 20
+        assert success['created_assembly_count'] == 5 and success['created_spool_count'] == 15
         assert success['order']['version'] == 2
         with app.SessionLocal() as s:
-            assert s.scalar(select(func.count()).select_from(app.Item)) == 5
+            assert s.scalar(select(func.count()).select_from(app.Item)) == 20
             assert s.scalar(select(func.count()).select_from(orders.OrderAssembly)) == 5
             assert s.scalar(select(func.count()).select_from(app.Audit).where(
-                app.Audit.event == 'ORDER_ASSEMBLY_LABELS_GENERATED')) == 1
+                app.Audit.event == 'ORDER_SPOOL_LABELS_GENERATED')) == 1
             counts = dict(s.execute(select(orders.OrderGpn.gpn, func.count(orders.OrderAssembly.item_id))
                 .join(orders.OrderAssembly, orders.OrderAssembly.gpn_id == orders.OrderGpn.id)
                 .group_by(orders.OrderGpn.gpn)).all())
@@ -139,7 +140,8 @@ def verify(dsn):
             second = ok(api.get('/api/order-labels/' + project + '/labels'))
         finally:
             event.remove(app.engine, 'before_cursor_execute', observe)
-        assert first == second and len({r['qr_url'] for r in first['items']}) == 5
+        assert first == second and len({r['qr_url'] for r in first['items']}) == 15
+        assert all(row['kind'] == 'Spool' for row in first['items'])
         assert overview['totals']['remaining_quantity'] == 0
         assert not unsafe and snapshots and all(x == ('on', 'repeatable read') for x in snapshots)
         assert database_state(api) == before
@@ -254,7 +256,7 @@ def verify(dsn):
                 'queued_generation_status': expected_rejection, 'created_assemblies': 0}
 
         return {'postgresql_version': version, 'generation_race': [200, 409],
-            'created_assemblies': 5, 'gpn_quantities': counts, 'generated_order_events': 1,
+            'created_assemblies': 5, 'created_spools': 15, 'gpn_quantities': counts, 'generated_order_events': 1,
             'spool_generation': {'race': [200, 409], 'created_assemblies': 5,
                 'created_spools': 8, 'children_per_assembly': [1, 1, 2, 2, 2],
                 'repeated_generation': 'no-op', 'read_only_stable_labels': True},
@@ -284,3 +286,4 @@ if __name__ == '__main__':
     parser.add_argument('--dsn', required=True)
     args = parser.parse_args()
     print(json.dumps(verify(args.dsn), indent=2))
+

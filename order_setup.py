@@ -54,9 +54,22 @@ class OrderSpoolRequirement(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class OrderSpoolWeldRequirement(Base):
+    """An explicit weld count; an absent row preserves undeclared legacy scope."""
+    __tablename__ = 'order_spool_weld_requirements'
+    __table_args__ = (CheckConstraint('welds_per_spool >= 0 AND welds_per_spool <= 500',
+                                     name='ck_order_spool_weld_requirement_count'),)
+    requirement_id = Column(String(60), ForeignKey('order_spool_requirements.id'), primary_key=True)
+    welds_per_spool = Column(Integer, nullable=False)
+    created_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class SpoolRequirementIn(Input):
     spool_number: str = Field(min_length=1, max_length=160)
     quantity_per_assembly: int = Field(ge=1, le=10000, strict=True)
+    welds_per_spool: int | None = Field(default=None, ge=0, le=500, strict=True)
 
 
 class AssemblyRequirementIn(Input):
@@ -102,15 +115,19 @@ def requirements_by_gpn(s, gpn_ids):
         return {}
     plans = s.scalars(select(OrderAssemblyRequirement)
                       .where(OrderAssemblyRequirement.gpn_id.in_(ids))).all()
-    lines = defaultdict(list)
-    for row in s.scalars(select(OrderSpoolRequirement).where(
+    lines, weld_counts = defaultdict(list), {}
+    for row, declared in s.execute(select(OrderSpoolRequirement, OrderSpoolWeldRequirement)
+            .outerjoin(OrderSpoolWeldRequirement,
+                       OrderSpoolWeldRequirement.requirement_id == OrderSpoolRequirement.id).where(
             OrderSpoolRequirement.gpn_id.in_(ids), OrderSpoolRequirement.active.is_(True))
             .order_by(OrderSpoolRequirement.spool_number, OrderSpoolRequirement.id)):
         lines[row.gpn_id].append(row)
+        weld_counts[row.id] = declared.welds_per_spool if declared else None
     result = {}
     for plan in plans:
         spools = [{'id': line.id, 'spool_number': line.spool_number,
                    'quantity_per_assembly': line.quantity_per_assembly,
+                   'welds_per_spool': weld_counts[line.id],
                    'total_quantity': line.quantity_per_assembly * plan.assembly_quantity}
                   for line in lines[plan.gpn_id]]
         per_assembly = sum(line['quantity_per_assembly'] for line in spools)
@@ -157,6 +174,7 @@ def _groups(s, project_ids):
             'total_spools': plan['total_spools'] if plan else None,
             'spools': plan['spools'] if plan else [],
             'registered_assemblies': active[group.id], 'editable': not history[group.id],
+            'welds_editable': bool(plan and any(line['welds_per_spool'] is None for line in plan['spools'])),
             'locked_reason': ('Physical assembly records already exist. Their production scope is retained; '
                               'open Production records to review them.') if history[group.id] else ''})
     return rows
@@ -214,6 +232,17 @@ def _save_requirements(s, group, data, user):
             line.quantity_per_assembly = values.quantity_per_assembly
             line.active = True
             line.updated_at = utcnow()
+        # Flush the parent requirement first: this is an additive table, so a
+        # deploy never rewrites an old requirement or invents a legacy count.
+        if values.welds_per_spool is not None:
+            _flush(s)
+            declared = s.get(OrderSpoolWeldRequirement, line.id)
+            if declared is None:
+                s.add(OrderSpoolWeldRequirement(requirement_id=line.id,
+                    welds_per_spool=values.welds_per_spool, created_by=user.badge))
+            else:
+                declared.welds_per_spool = values.welds_per_spool
+                declared.updated_at = utcnow()
     for normalized, line in existing.items():
         if normalized not in active and line.active:
             line.active = False
@@ -287,6 +316,63 @@ def guard_spool_requirement(s, item, assembly_id):
         raise HTTPException(409, f'This assembly already has the required {line.quantity_per_assembly} physical spool(s) for spool number {line.spool_number}.')
 
 
+def guard_declared_weld_count(s, item, assembly_id, planned_welds):
+    mapping = s.get(OrderAssembly, assembly_id) if assembly_id else None
+    if mapping is None:
+        return
+    declared = s.scalar(select(OrderSpoolWeldRequirement)
+        .join(OrderSpoolRequirement, OrderSpoolRequirement.id == OrderSpoolWeldRequirement.requirement_id)
+        .where(OrderSpoolRequirement.gpn_id == mapping.gpn_id,
+               OrderSpoolRequirement.normalized_number == _key(item.google_part_number or ''),
+               OrderSpoolRequirement.active.is_(True)))
+    if declared and planned_welds != declared.welds_per_spool:
+        raise HTTPException(409, f'This spool requires {declared.welds_per_spool} welds from its purchase-order setup. '
+            'Its individual weld plan must retain that declared count.')
+
+
+def _declare_registered_weld_counts(s, order, group, data, user):
+    """Permit only first declarations after physical quantity scope is locked."""
+    from order_spools import initialize_declared_spools, pending_declared_spools
+    saved = requirements_by_gpn(s, {group.id}).get(group.id)
+    message = ('Physical assembly records already exist. Only previously undeclared weld counts can be set here; '
+               'assembly numbers, quantities, spool numbers and declared weld counts are locked.')
+    if saved is None or data.gpn != group.gpn or data.assembly_quantity != saved['assembly_quantity']:
+        raise HTTPException(409, message)
+    incoming = {_key(line.spool_number): line for line in data.spools}
+    if set(incoming) != {_key(line['spool_number']) for line in saved['spools']}:
+        raise HTTPException(409, message)
+    additions = []
+    for line in saved['spools']:
+        values = incoming[_key(line['spool_number'])]
+        if values.spool_number != line['spool_number'] or values.quantity_per_assembly != line['quantity_per_assembly']:
+            raise HTTPException(409, message)
+        count = values.welds_per_spool
+        if line['welds_per_spool'] is not None:
+            if count is not None and count != line['welds_per_spool']:
+                raise HTTPException(409, message)
+        elif count is not None:
+            line['welds_per_spool'] = count
+            additions.append((line['id'], count))
+    if not additions:
+        raise HTTPException(409, message)
+    pending = pending_declared_spools(s, order.project_id, {group.id: saved})
+    before = _basis(s, group)
+    for requirement_id, count in additions:
+        s.add(OrderSpoolWeldRequirement(requirement_id=requirement_id,
+            welds_per_spool=count, created_by=user.badge))
+    _flush(s)
+    initialized, created_welds = initialize_declared_spools(s, order.project_id, pending, user.badge)
+    _event(s, order, user, 'SETUP_WELD_COUNTS_DECLARED', before=before,
+        after={**_basis(s, group), 'initialized_spool_ids': initialized,
+               'created_weld_count': created_welds,
+               'remaining_weld_spools': len(pending) - len(initialized)}, reason=data.reason)
+    _commit(s)
+    result = setup_detail(s, order.project_id, user)
+    result.update(initialized_weld_spool_count=len(initialized), created_weld_count=created_welds,
+                  remaining_weld_spools=len(pending) - len(initialized))
+    return result
+
+
 @router.get('')
 def list_setup(user: Employee = Depends(auth), s: Session = Depends(db)):
     role = user.role
@@ -347,7 +433,7 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
     order = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
     if s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
-        raise HTTPException(409, 'Physical assembly records already exist for this number. Its existing production scope cannot be replaced by initial setup.')
+        return _declare_registered_weld_counts(s, order, group, data, user)
     duplicate = s.scalar(select(OrderGpn.id).where(OrderGpn.project_id == project_id,
         OrderGpn.normalized_gpn == _key(data.gpn), OrderGpn.id != group.id).limit(1))
     if duplicate:
@@ -359,3 +445,4 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
            after=_basis(s, group), reason=data.reason)
     _commit(s)
     return setup_detail(s, project_id, user)
+

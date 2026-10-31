@@ -888,6 +888,58 @@ def _default_definitions(template=None):
     return list(result.values())
 
 
+def validate_order_weld_scope(s, item, project_id, assembly_id, weld_count):
+    """Validate an explicit PO count without altering retained production."""
+    plan = s.get(SpoolPlan, item.id)
+    if plan:
+        if (plan.project_id != project_id or plan.assembly_id != assembly_id or
+                plan.planned_welds != weld_count):
+            raise HTTPException(409, f'Spool {item.id} already has a different weld plan. '
+                'Review its existing weld scope before declaring the purchase-order weld count; no existing work was changed.')
+        return False
+    if (item.released or item.welds_done or item.last_work_at or
+            item.dimensional != 'Not started' or item.weld != 'Not started' or
+            s.scalar(select(Weld.id).where(Weld.item_id == item.id).limit(1))):
+        raise HTTPException(409, f'Spool {item.id} already has production or inspection history without an individual weld plan. '
+            'Review that retained history before declaring its weld count; no existing work was changed.')
+    return True
+
+
+def initialize_order_weld_scope(s, item, project_id, assembly_id, weld_count, actor):
+    """Create empty numbered weld scope inside the caller's locked transaction.
+
+    Existing plans and every production/QA record are retained. A declared
+    count is planning evidence only; no operation, traveler or acceptance is
+    inferred, and each weld receives the normal pending quality requirements.
+    """
+    from orders import _flush
+    if not validate_order_weld_scope(s, item, project_id, assembly_id, weld_count):
+        return 0
+    values = {'project_id': project_id, 'assembly_id': assembly_id,
+        'planned_welds': weld_count, 'drawing_revision': '', 'notes': '',
+        'zero_weld_reason': 'Zero welds explicitly declared in purchase-order spool setup.' if weld_count == 0 else ''}
+    s.add(SpoolPlan(item_id=item.id, created_by=actor, **values))
+    welds = [Weld(id=new_id('WLD'), item_id=item.id, number=f'W{number:02d}',
+                  required_operations=['root', 'fill_cap'], created_by=actor)
+             for number in range(1, weld_count + 1)]
+    s.add_all(welds)
+    _flush(s)
+    definitions = _default_definitions()
+    for weld in welds:
+        for definition in definitions:
+            _add_requirement(s, item, weld, definition, actor)
+        audit(s, item.id, actor, 'TRACKING_WELD_CREATED', {
+            'weld_id': weld.id, 'number': weld.number,
+            'required_operations': weld.required_operations, 'source': 'purchase_order_weld_count'})
+    item.welds_required = weld_count
+    item.reinspection_due = True
+    item.updated_at = utcnow()
+    audit(s, item.id, actor, 'TRACKING_PLAN_SAVED', {
+        'before': None, 'after': values, 'source': 'purchase_order_weld_count'})
+    _flush(s)
+    return len(welds)
+
+
 @router.get('/projects')
 def get_projects(u: Employee = Depends(auth), s: Session = Depends(db)):
     from removals import project_not_removed
@@ -1005,6 +1057,8 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     guard_plan_change(s, item, plan, values)
     from orders import guard_plan_scope
     guard_plan_scope(s, item, plan, values)
+    from order_setup import guard_declared_weld_count
+    guard_declared_weld_count(s, item, values.get('assembly_id'), values['planned_welds'])
     from parts import guard_plan_project
     guard_plan_project(s, item, values)
     if plan:
@@ -1421,3 +1475,4 @@ def exceptions(project_id: str = '', subproject_id: str = '', u: Employee = Depe
     for item in _filtered_items(s, project_id, subproject_id):
         result.extend(_item_exceptions(s, item))
     return {'exceptions': result}
+

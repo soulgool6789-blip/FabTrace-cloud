@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-qr.1'
+APP_VERSION='2026.10.30-spool-welds.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -162,7 +162,8 @@ def item_dict(s,r,user=None):
     d['can_mutate']=active
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
     d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
-    d['qr_url']=phone_link('item',r.id) if phone_qr_ready() else None
+    d['qr_eligible']=r.kind != 'Assembly'
+    d['qr_url']=phone_link('item',r.id) if d['qr_eligible'] and phone_qr_ready() else None
     d['tracking_enabled']=is_tracked(s,r)
     d['tracking']=tracking_summary(s,r) if d['tracking_enabled'] else None
     flow=s.get(FlowPlan,r.id)
@@ -389,7 +390,7 @@ def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends
     except Exception:
         s.rollback()
         raise HTTPException(409,'Import failed; check duplicate IDs and retry. No items from this batch were imported.')
-    return {'created_count':len(new_items),'items':[{'id':r.id,'google_part_number':r.google_part_number,'description':r.description} for r in new_items]}
+    return {'created_count':len(new_items),'items':[{'id':r.id,'google_part_number':r.google_part_number,'description':r.description,'kind':r.kind,'qr_eligible':r.kind != 'Assembly'} for r in new_items]}
 
 @app.post('/api/items/{item_id}/scan')
 def scan_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -536,7 +537,10 @@ def all_audit(u:Employee=Depends(auth),s:Session=Depends(db)):
     return [asdict(a,'id item_id actor event details at'.split()) for a in s.scalars(select(Audit).order_by(Audit.id.desc()).limit(500)).all()]
 @app.get('/api/items/{item_id}/qr.png')
 def qr(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
-    if not s.get(Item,item_id):raise HTTPException(404,'Item not found')
+    item=s.get(Item,item_id)
+    if item is None:raise HTTPException(404,'Item not found')
+    if item.kind == 'Assembly':
+        raise HTTPException(409,'QR labels belong to individual spools. Open this assembly\'s spool records to print their labels.')
     require_phone_qr_ready()
     image=qrcode.make(phone_link('item',item_id))
     buf=io.BytesIO();image.save(buf,format='PNG');buf.seek(0)
@@ -568,6 +572,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(RecordRemoval.record_id).limit(1))
     s.execute(select(OrderAssemblyRequirement.gpn_id).limit(1))
     s.execute(select(OrderSpoolRequirement.id).limit(1))
+    s.execute(select(OrderSpoolWeldRequirement.requirement_id).limit(1))
     s.execute(select(OrderSpool.item_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
@@ -612,7 +617,8 @@ app.include_router(orders_router)
 from removals import router as removals_router, RecordRemoval
 app.include_router(removals_router)
 
-from order_setup import router as order_setup_router, OrderAssemblyRequirement, OrderSpoolRequirement
+from order_setup import (router as order_setup_router, OrderAssemblyRequirement,
+                         OrderSpoolRequirement, OrderSpoolWeldRequirement)
 app.include_router(order_setup_router)
 
 from order_spools import OrderSpool
@@ -628,4 +634,5 @@ app.include_router(exports_router)
 
 from orders_excel import router as orders_excel_router
 app.include_router(orders_excel_router)
+
 

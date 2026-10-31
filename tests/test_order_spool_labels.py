@@ -32,9 +32,10 @@ def test_spool_overview_reads_saved_total_quantities_without_registration(api):
     assert [row['planned_quantity'] for row in result['groups']] == [6, 2]
     assert [row['assembly_quantity'] for row in result['groups']] == [3, 2]
     assert [row['remaining_assembly_quantity'] for row in result['groups']] == [3, 2]
-    assert result['totals'] == {'registered_quantity': 0, 'remaining_quantity': 8, 'undeclared_groups': 0}
+    assert result['totals'] == {'registered_quantity': 0, 'remaining_quantity': 8,
+        'undeclared_groups': 0, 'remaining_weld_spools': 0, 'undeclared_weld_spools': 0}
     assert labels(api, project, kind='Spool')['items'] == []
-    assert overview(api, project)['totals']['remaining_quantity'] == 5
+    assert overview(api, project)['totals']['remaining_quantity'] == 8
     assert database_state(api) == before
 
 
@@ -49,7 +50,7 @@ def test_spool_generation_creates_missing_parents_and_exact_child_quantity_witho
     assert [row['registered_assembly_quantity'] for row in result['groups']] == [3, 2]
     output = labels(api, project, kind='Spool')
     assert output['total'] == len(output['items']) == 8
-    assert labels(api, project)['total'] == 5
+    assert labels(api, project)['total'] == 8
     assert len(set(result['created_ids'])) == 13
     registry = importlib.import_module('order_spools')
     orders = importlib.import_module('orders')
@@ -95,18 +96,23 @@ def test_spool_generation_creates_missing_parents_and_exact_child_quantity_witho
     assert database_state(api) == before
 
 
-def test_selected_spool_generation_reuses_assembly_qrs_and_keeps_other_gpn_unregistered(api):
+def test_selected_spool_generation_reuses_parent_records_and_keeps_other_gpn_unregistered(api):
     setup = scoped_setup(api)
     project, selected = setup['order']['project_id'], setup['assemblies'][1]['gpn_id']
-    parents = generate(api, project, gpn_id=selected)
-    original = labels(api, project, gpn_id=selected)
+    parent_ids = {'RETAIN-PARENT-1', 'RETAIN-PARENT-2'}
+    for parent in sorted(parent_ids):
+        register_assembly(api, setup, index=1, item_id=parent)
+    originals = {parent: ok(api.get('/api/items/' + parent)) for parent in parent_ids}
+    assert labels(api, project, gpn_id=selected)['items'] == []
     result = generate(api, project, kind='Spool', gpn_id=selected)
     assert result['created_assembly_count'] == 0 and result['created_spool_count'] == 2
     assert result['created_count'] == 2 and result['remaining_quantity'] == 0
-    assert not set(parents['created_ids']) & set(result['created_ids'])
-    assert labels(api, project, gpn_id=selected)['items'] == original['items']
-    assert [row['registered_quantity'] for row in overview(api, project, kind='Spool')['groups']] == [0, 2]
-    assert {row['assembly_id'] for row in labels(api, project, kind='Spool')['items']} == set(parents['created_ids'])
+    assert not parent_ids & set(result['created_ids'])
+    for parent in parent_ids:
+        assert ok(api.get('/api/items/' + parent)) == originals[parent]
+        assert originals[parent]['qr_url'] is None
+    assert [row['registered_quantity'] for row in overview(api, project)['groups']] == [0, 2]
+    assert {row['assembly_id'] for row in labels(api, project)['items']} == parent_ids
 
 
 def test_existing_planned_spools_are_reused_only_under_their_exact_physical_parent(api):
@@ -162,7 +168,8 @@ def test_existing_parent_scope_is_only_filled_before_release_and_during_collecti
     setup = create_setup(api, assemblies=[branch(quantity=1,
         spools=[{'spool_number': 'ONE', 'quantity_per_assembly': 1}])])
     project = setup['order']['project_id']
-    parent = generate(api, project)['created_ids'][0]
+    parent = 'EXISTING-PARENT'
+    register_assembly(api, setup, item_id=parent)
     if state == 'released':
         from test_admin import release
         release(api, parent)
@@ -181,7 +188,8 @@ def test_existing_parent_scope_is_only_filled_before_release_and_during_collecti
     else:
         assert response.status_code == 409
         assert database_state(api) == before
-    assert labels(api, project)['items'][0]['id'] == parent
+    assert all(row['kind'] == 'Spool' and row['id'] != parent for row in labels(api, project)['items'])
+    assert ok(api.get('/api/items/' + parent))['qr_url'] is None
 
 
 def test_per_number_overcapacity_is_validated_even_after_other_group_fills_batch(api):
@@ -206,7 +214,7 @@ def test_per_number_overcapacity_is_validated_even_after_other_group_fills_batch
 
 @pytest.mark.parametrize('assemblies,quantity,first_counts,remaining,second_counts', [
     (1, 501, (1, 499), 2, (0, 2)),
-    (500, 1, (500, 0), 500, (0, 500)),
+    (500, 1, (250, 250), 250, (250, 250)),
 ])
 def test_total_item_batch_limit_bounds_parent_and_spool_creation(api, assemblies, quantity,
         first_counts, remaining, second_counts):
@@ -253,8 +261,10 @@ def test_spool_generation_bad_kind_auth_and_cross_kind_id_collision_are_atomic(a
     project = setup['order']['project_id']
     before = database_state(api)
     for endpoint in (f'{ROOT}/{project}', f'{ROOT}/{project}/labels'):
-        assert api.get(endpoint, params={'kind': 'Part'}).status_code == 422
-    assert api.post(f'{ROOT}/{project}/generate', generation_body(api, project, kind='Part')).status_code == 422
+        for kind in ('Part', 'Assembly'):
+            assert api.get(endpoint, params={'kind': kind}).status_code == 422
+    for kind in ('Part', 'Assembly'):
+        assert api.post(f'{ROOT}/{project}/generate', generation_body(api, project, kind=kind)).status_code == 422
     assert api.post(f'{ROOT}/{project}/generate', generation_body(api, project, kind='Spool'), role='welder').status_code == 403
     module = importlib.import_module('order_labels')
     monkeypatch.setattr(module, 'new_id', lambda prefix: 'SAME-ASM-AND-SPOOL-ID')
@@ -277,3 +287,4 @@ def test_late_spool_registration_failure_rolls_back_new_parents_and_all_children
     monkeypatch.setattr(module, 'audit', fail_child_audit)
     assert api.post(f'{ROOT}/{project}/generate', generation_body(api, project, kind='Spool')).status_code == 409
     assert database_state(api) == before
+

@@ -1,4 +1,4 @@
-"""PO-derived assembly QR labels keep physical identity and planning separate."""
+"""PO-derived spool QR labels keep physical identity and planning separate."""
 import importlib
 
 import pytest
@@ -8,7 +8,7 @@ from sqlalchemy import select
 from conftest import BADGES
 from tracking_helpers import ok
 from test_order_setup import branch, create_setup, detail, edit_body
-from test_order_setup_integration import register_assembly
+from test_order_setup_integration import register_assembly, register_spool
 from test_progress import database_state
 from test_removal_orders import change
 
@@ -46,8 +46,9 @@ def test_overview_uses_declared_assembly_quantities_and_read_calls_do_not_write(
     result = overview(api, project)
     assert [row['gpn'] for row in result['groups']] == ['000-GPN-A', '000-GPN-B']
     assert [row['assembly_quantity'] for row in result['groups']] == [3, 2]
-    assert result['totals'] == {'registered_quantity': 0, 'remaining_quantity': 5,
-                                'undeclared_groups': 0}
+    assert result['totals'] == {'registered_quantity': 0, 'remaining_quantity': 15,
+                                'undeclared_groups': 0, 'remaining_weld_spools': 0,
+                                'undeclared_weld_spools': 0}
     assert result['qr_ready'] and result['limit'] == 500
     assert result['permissions']['can_manage']
     assert labels(api, project)['items'] == []
@@ -60,42 +61,47 @@ def test_overview_uses_declared_assembly_quantities_and_read_calls_do_not_write(
     assert database_state(api) == before
 
 
-def test_generate_registers_each_assembly_with_unique_qr_and_one_order_revision(api):
+def test_generate_registers_each_spool_with_unique_qr_and_one_order_revision(api):
     setup = create_setup(api, assemblies=[branch(), branch('000-GPN-B', 2, [
         {'spool_number': '000-SP-C', 'quantity_per_assembly': 7}])])
     project = setup['order']['project_id']
     result = generate(api, project)
-    assert result['created_count'] == len(set(result['created_ids'])) == 5
+    assert result['kind'] == 'Spool'
+    assert result['created_spool_count'] == 23 and result['created_assembly_count'] == 5
+    assert result['created_count'] == len(set(result['created_ids'])) == 28
     assert result['order']['version'] == 2 and result['remaining_quantity'] == 0
-    assert [row['registered_quantity'] for row in result['groups']] == [3, 2]
+    assert [row['registered_quantity'] for row in result['groups']] == [9, 14]
     printed = labels(api, project)
-    assert printed['total'] == len(printed['items']) == 5
-    assert {item['id'] for item in printed['items']} == set(result['created_ids'])
-    assert len({item['qr_url'] for item in printed['items']}) == 5
+    assert printed['total'] == len(printed['items']) == 23
+    assert {item['id'] for item in printed['items']}.issubset(result['created_ids'])
+    assert len({item['qr_url'] for item in printed['items']}) == 23
     order_models = importlib.import_module('orders')
+    registry = importlib.import_module('order_spools')
     with api.session_factory() as session:
         for output in printed['items']:
             item = session.get(api.application.Item, output['id'])
-            mapping = session.get(order_models.OrderAssembly, item.id)
-            assert item.id.startswith('ASM-') and len(item.id) <= 60
-            assert item.kind == 'Assembly' and item.project == project
-            assert item.google_part_number == mapping.assembly_part_number == output['gpn']
-            assert mapping.gpn_id == output['gpn_id']
-            assert mapping.required_spools == (3 if output['gpn'] == '000-GPN-A' else 7)
+            mapping = session.get(registry.OrderSpool, item.id)
+            parent = session.get(order_models.OrderAssembly, mapping.assembly_id)
+            assert item.id.startswith('SPL-') and len(item.id) <= 60
+            assert item.kind == 'Spool' and item.project == project
+            assert item.google_part_number == output['spool_number']
+            assert parent.gpn_id == output['gpn_id'] and parent.item_id == output['assembly_id']
+            assert parent.required_spools == (3 if output['gpn'] == '000-GPN-A' else 7)
             assert item.location == 'Synthetic receiving bay' and item.handler == BADGES['handler']
             assert item.welds_required == item.welds_done == 0
             assert item.dimensional == item.weld == 'Not started'
             assert not item.released and item.released_at is None and item.released_by is None
             assert output['purchase_order'] == '000123'
             assert output['qr_url'] == PUBLIC_URL + '/?item=' + item.id
+        # An old PO without declared weld counts must not invent weld scope.
         for name in ('tracking_spool_plans', 'tracking_welds', 'flow_plans', 'flow_events',
                      'tracking_process_events', 'inspections', 'reworks', 'item_transfer_events'):
             table = api.application.Base.metadata.tables.get(name)
             if table is not None:
                 assert session.execute(select(table)).all() == [], name
         events = session.scalars(select(api.application.Audit).order_by(api.application.Audit.id)).all()
-        assert len([row for row in events if row.event == 'ITEM_CREATED']) == 5
-        generated = [row for row in events if row.event == 'ORDER_ASSEMBLY_LABELS_GENERATED']
+        assert len([row for row in events if row.event == 'ITEM_CREATED']) == 28
+        generated = [row for row in events if row.event == 'ORDER_SPOOL_LABELS_GENERATED']
         assert len(generated) == 1 and generated[0].details['version'] == 2
         assert set(generated[0].details['after']['created_ids']) == set(result['created_ids'])
     for item in printed['items']:
@@ -103,8 +109,12 @@ def test_generate_registers_each_assembly_with_unique_qr_and_one_order_revision(
         assert response.status_code == 200 and response.headers['content-type'] == 'image/png'
         assert response.content.startswith(b'\x89PNG\r\n\x1a\n') and len(response.content) > 300
         assert ok(api.get('/api/items/' + item['id']))['qr_url'] == item['qr_url']
+    parents = set(result['created_ids']) - {item['id'] for item in printed['items']}
+    for parent in parents:
+        assert ok(api.get('/api/items/' + parent))['qr_url'] is None
+        assert api.get('/api/items/' + parent + '/qr.png').status_code == 409
     assert api.patch(f'/api/order-setup/{project}/assemblies/{setup["assemblies"][0]["gpn_id"]}',
-                     edit_body(detail(api, project))).status_code == 409
+                     edit_body(detail(api, project), assembly_quantity=4)).status_code == 409
 
 
 def test_existing_physical_ids_are_reused_and_reprints_and_noop_do_not_mutate(api):
@@ -115,7 +125,7 @@ def test_existing_physical_ids_are_reused_and_reprints_and_noop_do_not_mutate(ap
         prior = session.get(api.application.Item, 'KEEP-EXISTING-ASSEMBLY')
         original = {column.name: getattr(prior, column.name) for column in prior.__table__.columns}
     result = generate(api, project, location='Different registration bay', handler=BADGES['welder'])
-    assert result['created_count'] == 2
+    assert result['created_assembly_count'] == 2 and result['created_spool_count'] == 9
     assert 'KEEP-EXISTING-ASSEMBLY' not in result['created_ids']
     with api.session_factory() as session:
         prior = session.get(api.application.Item, 'KEEP-EXISTING-ASSEMBLY')
@@ -138,24 +148,25 @@ def test_selected_gpn_generates_only_its_missing_instances_and_retains_other_qua
     selected = setup['assemblies'][1]['gpn_id']
     response = ok(api.post(f'{ROOT}/{project}/generate',
         generation_body(api, project, gpn_id=selected), role='supervisor'))
-    assert response['created_count'] == 2 and len(response['groups']) == 1
+    assert response['created_assembly_count'] == 2 and response['created_spool_count'] == 6
+    assert len(response['groups']) == 1
     all_groups = overview(api, project)['groups']
-    assert [row['registered_quantity'] for row in all_groups] == [0, 2]
-    assert [row['remaining_quantity'] for row in all_groups] == [3, 0]
+    assert [row['registered_quantity'] for row in all_groups] == [0, 6]
+    assert [row['remaining_quantity'] for row in all_groups] == [9, 0]
     assert labels(api, project, gpn_id=setup['assemblies'][0]['gpn_id'])['items'] == []
     assert {row['gpn_id'] for row in labels(api, project)['items']} == {selected}
 
 
 def test_generation_is_bounded_and_paged_reprinting_uses_one_stable_identity_per_unit(api):
-    setup = create_setup(api, assemblies=[branch('000-GPN-B', 8), branch('000-GPN-A', 496)])
+    setup = create_setup(api, assemblies=[branch(quantity=1, spools=[
+        {'spool_number': 'PAGED-SPOOL', 'quantity_per_assembly': 504}])])
     project = setup['order']['project_id']
     first = generate(api, project)
-    assert first['created_count'] == 500 and first['remaining_quantity'] == 4
-    assert [row['registered_quantity'] for row in first['groups']] == [496, 4]
-    assert first['order']['version'] == 2
+    assert first['created_count'] == 500 and first['created_spool_count'] == 499
+    assert first['remaining_quantity'] == 5 and first['order']['version'] == 2
     second = generate(api, project)
-    assert second['created_count'] == 4 and second['remaining_quantity'] == 0
-    assert second['order']['version'] == 3
+    assert second['created_count'] == second['created_spool_count'] == 5
+    assert second['remaining_quantity'] == 0 and second['order']['version'] == 3
     assert not set(first['created_ids']) & set(second['created_ids'])
     before = database_state(api)
     pages = [labels(api, project, offset=offset) for offset in range(0, 600, 100)]
@@ -163,7 +174,7 @@ def test_generation_is_bounded_and_paged_reprinting_uses_one_stable_identity_per
     assert all(page['total'] == 504 for page in pages)
     ids = [item['id'] for page in pages for item in page['items']]
     assert len(set(ids)) == 504
-    assert set(ids) == set(first['created_ids'] + second['created_ids'])
+    assert set(ids).issubset(first['created_ids'] + second['created_ids'])
     assert labels(api, project, offset=600)['items'] == []
     assert labels(api, project, offset=100)['items'] == pages[1]['items']
     assert database_state(api) == before
@@ -205,6 +216,7 @@ def test_unconfigured_public_https_cannot_generate_or_offer_broken_qrs(api, monk
     setup = create_setup(api)
     project = setup['order']['project_id']
     register_assembly(api, setup)
+    register_spool(api, project, 'PHYSICAL-ASSEMBLY-1')
     monkeypatch.setattr(api.application, 'PUBLIC_BASE_URL', url)
     body = generation_body(api, project)
     before = database_state(api)
@@ -212,7 +224,7 @@ def test_unconfigured_public_https_cannot_generate_or_offer_broken_qrs(api, monk
     printed = labels(api, project)
     assert not printed['qr_ready'] and all(row['qr_url'] is None for row in printed['items'])
     assert api.post(f'{ROOT}/{project}/generate', body).status_code == 503
-    assert api.get('/api/items/PHYSICAL-ASSEMBLY-1/qr.png').status_code == 503
+    assert api.get('/api/items/PHYSICAL-SPOOL-1/qr.png').status_code == 503
     assert database_state(api) == before
 
 
@@ -223,10 +235,11 @@ def test_mixed_legacy_scope_keeps_known_ids_printable_and_requires_explicit_quan
         'expected_version': 1, 'gpn': 'LEGACY-ASSEMBLY', 'required_spools': 1,
         'create_item': {'id': 'KEEP-LEGACY-QR', 'location': 'Legacy bay', 'handler': BADGES['welder']},
     }), 201)
+    register_spool(api, project, 'KEEP-LEGACY-QR', item_id='KEEP-LEGACY-SPOOL')
     current = overview(api, project)
     assert current['totals']['undeclared_groups'] == 1
     assert current['totals']['remaining_quantity'] is None
-    assert labels(api, project)['items'][0]['id'] == 'KEEP-LEGACY-QR'
+    assert labels(api, project)['items'][0]['id'] == 'KEEP-LEGACY-SPOOL'
     before = database_state(api)
     body = generation_body(api, project)
     assert api.post(f'{ROOT}/{project}/generate', body).status_code == 409
@@ -234,8 +247,8 @@ def test_mixed_legacy_scope_keeps_known_ids_printable_and_requires_explicit_quan
     assert api.post(f'{ROOT}/{project}/generate', body).status_code == 409
     assert database_state(api) == before
     selected = generate(api, project, gpn_id=setup['assemblies'][0]['gpn_id'])
-    assert selected['created_count'] == 3
-    assert 'KEEP-LEGACY-QR' in {row['id'] for row in labels(api, project)['items']}
+    assert selected['created_assembly_count'] == 3 and selected['created_spool_count'] == 9
+    assert 'KEEP-LEGACY-SPOOL' in {row['id'] for row in labels(api, project)['items']}
 
 
 def test_foreign_unknown_and_removed_scopes_reject_without_partial_registration(api):
@@ -266,9 +279,11 @@ def test_foreign_unknown_and_removed_scopes_reject_without_partial_registration(
 
 
 def test_removed_physical_identity_is_retained_and_replacement_gets_a_new_qr(api):
-    setup = create_setup(api, assemblies=[branch(quantity=1)])
+    setup = create_setup(api, assemblies=[branch(quantity=1, spools=[
+        {'spool_number': 'ONE', 'quantity_per_assembly': 1}])])
     project = setup['order']['project_id']
-    original = generate(api, project)['created_ids'][0]
+    generate(api, project)
+    original = labels(api, project)['items'][0]['id']
     change(api, 'item', original)
     assert labels(api, project)['items'] == []
     assert overview(api, project)['groups'][0]['remaining_quantity'] == 1
@@ -328,3 +343,4 @@ def test_id_collision_and_late_scope_failure_roll_back_entire_batch(api, monkeyp
         response = api.post(f'{ROOT}/{project}/generate', body)
         assert response.status_code == 409
     assert len(calls) == 2 and database_state(api) == before
+

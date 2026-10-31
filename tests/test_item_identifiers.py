@@ -39,3 +39,24 @@ def test_bulk_registration_accepts_new_identifier_only_and_legacy_rows_together(
     assert api.get('/api/items/LEGACY-DESCRIPTION').json()['description'] == (
         'Retained description supplied by an older client')
 
+
+def test_assembly_identity_retained_without_a_qr_and_spool_codes_still_work(api, monkeypatch):
+    monkeypatch.setattr(api.application, 'PUBLIC_BASE_URL', 'https://fabtrace-training.example')
+    common = {'location': 'Receiving', 'handler': BADGES['handler']}
+    for kind in ('Assembly', 'Spool', 'Part'):
+        item_id = 'QR-SCOPE-' + kind.upper()
+        response = api.post('/api/items', {**common, 'id': item_id, 'kind': kind})
+        assert response.status_code == 201, response.text
+        saved = api.get('/api/items/' + item_id).json()
+        qr = api.get('/api/items/' + item_id + '/qr.png')
+        if kind == 'Assembly':
+            assert saved['qr_url'] is None and saved['qr_eligible'] is False
+            assert qr.status_code == 409
+            assert 'individual spools' in qr.json()['detail']
+        else:
+            assert saved['qr_url'].endswith('/?item=' + item_id)
+            assert saved['qr_eligible'] is True
+            assert qr.status_code == 200
+            assert qr.headers['content-type'] == 'image/png'
+
+
