@@ -1,0 +1,67 @@
+.sdoc-link{display:inline-flex;margin:5px 0;padding:7px 10px;font-size:12px;color:#175b80;background:#eef7fc;border-color:#c2dce9;text-align:left;white-space:normal}
+#spoolDocumentsDialog{width:min(1060px,calc(100vw - 28px));max-height:calc(100dvh - 28px);padding:0;color:#21384e;border:1px solid #c4d6e3;border-radius:15px;box-shadow:0 22px 90px #0c2f4f55;overflow:auto}
+#spoolDocumentsDialog::backdrop{background:#0c2538aa}
+#spoolDocumentsDialog *{box-sizing:border-box}
+#spoolDocumentsDialog h2{font-size:25px;margin:3px 0 4px}
+#spoolDocumentsDialog h3{font-size:17px;line-height:1.45;margin:3px 0 8px;overflow-wrap:anywhere}
+#spoolDocumentsDialog h4{margin:0 0 9px;font-size:16px}
+#spoolDocumentsDialog p{line-height:1.55;margin:7px 0 12px}
+#spoolDocumentsDialog .sdoc-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding:22px 26px;border-bottom:1px solid #d5e2ec;background:#f5fafd;position:sticky;top:0;z-index:2}
+#spoolDocumentsDialog .sdoc-head p{font-size:13px;color:#59748a;margin:0;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-head>button{flex:0 0 42px;width:42px;height:42px;font-size:25px;line-height:20px;padding:8px;background:white;color:#59748a}
+#spoolDocumentsDialog .sdoc-eyebrow{font-size:10px;font-weight:750;letter-spacing:.07em;text-transform:uppercase;color:#537991}
+#spoolDocumentsContent{padding:22px 26px}
+#spoolDocumentsDialog .sdoc-context{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 12px}
+#spoolDocumentsDialog .sdoc-context>div{background:#eef5fa;border:1px solid #d5e4ee;border-radius:8px;padding:12px}
+#spoolDocumentsDialog .sdoc-context dt{font-size:11px;color:#658095;font-weight:650;margin-bottom:5px}
+#spoolDocumentsDialog .sdoc-context dd{font-size:13px;color:#274b65;margin:0;font-weight:700;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-scope{font-size:12px;color:#637c8e;margin-bottom:21px}
+#spoolDocumentsDialog .sdoc-tabs{display:flex;gap:6px;border-bottom:1px solid #cfdfeb;padding-bottom:10px;margin-bottom:20px}
+#spoolDocumentsDialog .sdoc-tabs button{color:#53738b;background:#f6f9fc;border-color:#d3e2eb;padding:11px 16px;font-size:13px}
+#spoolDocumentsDialog .sdoc-tabs button[aria-selected=true]{color:white;background:#126b9c;border-color:#126b9c}
+#spoolDocumentsDialog button:focus-visible,#spoolDocumentsDialog a:focus-visible,#spoolDocumentsDialog input:focus-visible,#spoolDocumentsDialog select:focus-visible,#spoolDocumentsDialog summary:focus-visible,#spoolDocumentsDialog .sdoc-file-button:focus-within{outline:3px solid #8ec6e5;outline-offset:2px}
+#spoolDocumentsDialog .sdoc-saved,#spoolDocumentsDialog .sdoc-history article{padding:20px;border:1px solid #cfdfe9;background:white;border-radius:11px;margin-bottom:20px}
+#spoolDocumentsDialog .sdoc-saved-title{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}
+#spoolDocumentsDialog .sdoc-badge{font-size:11px;font-weight:650;color:#357658;background:#e9f5ee;border:1px solid #cfe6d8;padding:6px 9px;border-radius:6px;max-width:210px;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-meta{font-size:12px;color:#6c8192}
+#spoolDocumentsDialog .sdoc-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:15px 0}
+#spoolDocumentsDialog .sdoc-actions button,#spoolDocumentsDialog .sdoc-actions a{font-size:13px}
+#spoolDocumentsDialog .sdoc-primary-link{background:#126b9c;color:white;border:1px solid #126b9c;text-decoration:none;font-weight:650;padding:10px 13px;border-radius:8px}
+#spoolDocumentsDialog .sdoc-table{overflow:auto;border:1px solid #d4e1ea;border-radius:7px;max-height:420px;margin-top:12px}
+#spoolDocumentsDialog table{border-collapse:collapse;table-layout:auto;min-width:620px;width:100%}
+#spoolDocumentsDialog th{position:sticky;top:0;background:#eef5fa;z-index:1;text-transform:none;font-size:11px;white-space:nowrap;padding:10px}
+#spoolDocumentsDialog td{font-size:12px;padding:10px;vertical-align:top;max-width:420px;overflow-wrap:anywhere}
+#spoolDocumentsDialog caption{padding:10px;text-align:left;font-size:12px;font-weight:700;background:#f7fafc;color:#4a6d86}
+#spoolDocumentsDialog .sdoc-empty{background:#f9fbfd;border:1px dashed #c8dbe8;border-radius:10px;padding:24px;margin-bottom:20px}
+#spoolDocumentsDialog .sdoc-empty p{font-size:13px;color:#6d8394}
+#spoolDocumentsDialog .sdoc-upload{border:1px solid #c6dae8;border-radius:10px;background:#f6fafd;margin-bottom:16px}
+#spoolDocumentsDialog .sdoc-upload>summary{font-size:15px;font-weight:700;color:#275f82;padding:17px 20px;cursor:pointer}
+#spoolDocumentsDialog .sdoc-upload-inner{border-top:1px solid #d6e4ed;padding:18px 20px}
+#spoolDocumentsDialog .sdoc-upload-inner>p{font-size:13px;color:#5f7a8e}
+#spoolDocumentsDialog .sdoc-file-button{position:relative;display:inline-block;font-size:13px;font-weight:650;color:#235e80;background:white;border:1px solid #abcbdc;border-radius:8px;padding:10px 13px;overflow:hidden;cursor:pointer;margin:0}
+#spoolDocumentsDialog .sdoc-file-button input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+#spoolDocumentsDialog .sdoc-upload-fields{display:grid;grid-template-columns:1fr 2fr;gap:16px;margin-top:16px}
+#spoolDocumentsDialog .field label{font-size:12px;margin-bottom:7px}
+#spoolDocumentsDialog input,#spoolDocumentsDialog select{font-size:14px;min-height:44px}
+#spoolDocumentsDialog .sdoc-files{list-style:none;margin:15px 0;padding:0;display:grid;gap:8px}
+#spoolDocumentsDialog .sdoc-files li{display:flex;gap:12px;align-items:center;background:white;border:1px solid #d5e2eb;padding:10px;border-radius:8px}
+#spoolDocumentsDialog .sdoc-file-order{font-size:12px;color:#638095;min-width:15px;font-weight:750}
+#spoolDocumentsDialog .sdoc-files img,#spoolDocumentsDialog .sdoc-file-icon{width:48px;height:58px;object-fit:contain;background:#eef4f8;border:1px solid #d8e3eb;border-radius:3px;flex:0 0 48px}
+#spoolDocumentsDialog .sdoc-file-icon{font-size:10px;color:#608098;display:flex;align-items:center;justify-content:center;text-align:center}
+#spoolDocumentsDialog .sdoc-file-name{flex:1;min-width:0;font-size:12px;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-file-name span{display:block;color:#718898;font-size:11px;margin-top:3px}
+#spoolDocumentsDialog .sdoc-file-actions{display:flex;gap:5px}
+#spoolDocumentsDialog .sdoc-file-actions button{font-size:11px;padding:7px 9px;min-height:34px}
+#spoolDocumentsDialog .sdoc-preview{background:#eff8f3;border:1px solid #c2dfd0;border-radius:8px;padding:17px;margin:15px 0}
+#spoolDocumentsDialog .sdoc-preview>p{font-size:13px;color:#3c715a}
+#spoolDocumentsDialog .sdoc-error,#spoolDocumentsDialog .sdoc-warning,#spoolDocumentsDialog .sdoc-notice,#spoolDocumentsDialog .sdoc-locked{padding:13px 16px;border-radius:8px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-error{background:#fff0f0;border:1px solid #e7b7ba;color:#963c42}
+#spoolDocumentsDialog .sdoc-warning,#spoolDocumentsDialog .sdoc-locked{background:#fff7e6;border:1px solid #ecd7a6;color:#7d612b}
+#spoolDocumentsDialog .sdoc-notice{background:#eaf7ef;border:1px solid #bddcc9;color:#26734c}
+#spoolDocumentsDialog .sdoc-viewer{margin-top:18px}
+#spoolDocumentsDialog iframe{display:block;width:100%;height:530px;border:1px solid #d1e0e9;border-radius:7px;background:#eef2f5}
+#spoolDocumentsDialog .sdoc-footer{border-top:1px solid #d6e3ec;padding:16px 26px;display:flex;align-items:center;justify-content:space-between;gap:15px;background:#f7fafc}
+#spoolDocumentsDialog .sdoc-footer p{font-size:11px;color:#718697;margin:0}
+#spoolDocumentsDialog .sdoc-loading{font-size:14px;color:#54768e;padding:24px}
+@media(max-width:650px){#spoolDocumentsDialog{width:calc(100vw - 12px);max-height:calc(100dvh - 12px);border-radius:11px}#spoolDocumentsDialog .sdoc-head{padding:17px 16px;gap:10px}#spoolDocumentsDialog h2{font-size:22px}#spoolDocumentsContent{padding:16px}#spoolDocumentsDialog .sdoc-context{grid-template-columns:1fr 1fr;gap:7px}#spoolDocumentsDialog .sdoc-context>div{padding:10px}#spoolDocumentsDialog .sdoc-context dd{font-size:12px}#spoolDocumentsDialog .sdoc-scope{font-size:11px}#spoolDocumentsDialog .sdoc-tabs{gap:5px}#spoolDocumentsDialog .sdoc-tabs button{font-size:11px;padding:10px 9px;flex:1}#spoolDocumentsDialog .sdoc-saved,#spoolDocumentsDialog .sdoc-history article{padding:14px}#spoolDocumentsDialog .sdoc-saved-title{flex-direction:column;gap:5px}#spoolDocumentsDialog .sdoc-upload-inner{padding:14px}#spoolDocumentsDialog .sdoc-upload>summary{padding:15px;font-size:14px}#spoolDocumentsDialog .sdoc-upload-fields{grid-template-columns:1fr;gap:0}#spoolDocumentsDialog .sdoc-files li{flex-wrap:wrap;gap:8px}#spoolDocumentsDialog .sdoc-file-actions{margin-left:auto}#spoolDocumentsDialog .sdoc-file-name{flex-basis:calc(100% - 91px)}#spoolDocumentsDialog .sdoc-file-actions button{min-height:40px}#spoolDocumentsDialog .sdoc-actions{gap:10px}#spoolDocumentsDialog .sdoc-actions button,#spoolDocumentsDialog .sdoc-actions a,#spoolDocumentsDialog .sdoc-file-button{font-size:12px}#spoolDocumentsDialog .sdoc-preview{padding:12px}#spoolDocumentsDialog iframe{height:400px}#spoolDocumentsDialog .sdoc-footer{padding:14px 16px}}
+@media print{.sdoc-link{display:none!important}}

@@ -43,6 +43,7 @@ from orders import PurchaseOrder, OrderGpn, OrderAssembly
 from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
 from order_spools import OrderSpool
 from spool_boms import SpoolBomTrace, SpoolBomMaterial, SpoolBomEvent
+from spool_documents import SpoolDocumentSet, SpoolDocument
 from removals import RecordRemoval
 
 
@@ -101,6 +102,8 @@ TABLE_SPECS = (
     _spec(SpoolBomTrace, 'Spool BOM trace configs', 'spool_id catalog_id spool_number source_sha256 definition version created_by created_at updated_by updated_at', 'spool_id'),
     _spec(SpoolBomMaterial, 'Spool BOM material pieces', 'spool_id piece_key supplier supplier_piece_id heat_number mtr_reference mtr_url notes updated_by updated_at', 'spool_id piece_key'),
     _spec(SpoolBomEvent, 'Spool BOM trace events', 'spool_id version actor at reason changes', 'spool_id version'),
+    _spec(SpoolDocumentSet, 'Spool document scopes', 'id requirement_id spool_id scope_snapshot version created_by created_at'),
+    _spec(SpoolDocument, 'Spool uploaded documents', 'id set_id kind version filename media_type size_bytes sha256 selection_sha256 page_count revision uploaded_by uploaded_at reason source_files bom'),
     _spec(Subproject, 'Subprojects', 'id project_id name description created_by created_at'),
     _spec(SpoolPlan, 'Spool plans', 'item_id project_id subproject_id assembly_id planned_welds drawing_revision due_date notes zero_weld_reason version created_by created_at updated_at', 'item_id'),
     _spec(RequirementTemplate, 'Weld templates', 'id code name revision source requirements required_operations created_by created_at'),
@@ -206,6 +209,8 @@ RELATIONSHIPS = (
     'spool_parts_plans.spool_id -> the tracked spool items.id; spool_part_lines.spool_id -> its optional controlled parts plan. Quantities are whole physical pieces, not weld counts or length.',
     'spool_part_allocations.component_id -> one individual Part items.id and line_id -> spool_part_lines.id. Each allocation must also match the existing flow_component_links parent; a QR identity is counted once.',
     'spool_parts_events preserves versioned parts-list edits, allocations and removals. Spool parts progress derives actual receipt step1 and current prepared steps7+8; historical baselines are not invented.',
+    'spool_document_sets belongs to exactly one order_spool_requirements.id or physical items.id. Registered spools inherit only the documents on their exact requirement; individual uploads override that kind for that physical spool. File upload is not material receipt or QA approval.',
+    'spool_documents retains immutable BOM/drawing revisions, source-file hashes, page counts, uploader and parsed BOM values. Binary spool_document_files.content is excluded from Excel; retrieve full files from the spool or an issued Job Packet ZIP, which retains exact document IDs.',
     'items.handler -> employees.badge; items.id is the original physical item identity.',
     'inspections.item_id / reworks.item_id / audit_events.item_id -> items.id. Audit item_id may be blank for account or project events.',
     'inspections.inspector -> employees.badge; rework assigned / closed_by and audit actor retain employee badge identities.',

@@ -209,6 +209,9 @@ def _basis(s, group):
 
 
 def _save_requirements(s, group, data, user):
+    from spool_documents import guard_document_requirement_identity
+    guard_document_requirement_identity(s, group,
+        spool_numbers=[line.spool_number for line in data.spools])
     plan = s.get(OrderAssemblyRequirement, group.id)
     if plan is None:
         plan = OrderAssemblyRequirement(gpn_id=group.id,
@@ -434,6 +437,8 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
                               user: Employee = Depends(auth), s: Session = Depends(db)):
     order = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
+    from spool_documents import guard_document_requirement_identity
+    guard_document_requirement_identity(s, group, gpn=data.gpn)
     if s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
         return _declare_registered_weld_counts(s, order, group, data, user)
     duplicate = s.scalar(select(OrderGpn.id).where(OrderGpn.project_id == project_id,

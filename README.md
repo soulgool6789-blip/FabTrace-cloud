@@ -1,12 +1,20 @@
 # FabTrace Cloud
 
+## Upload spool bills of material and full isometric drawings
+
+Release `2026.10.31-spool-documents.1` adds **Documents (optional)** as the fourth P.O. setup step. After entering quantities and weld counts, choose **Save & add documents**. The P.O. is saved once, then each spool offers **Upload / view BOM** and **Upload / view isometric**. Choose **Finish setup** or **Skip for now** when done. Existing spools offer **BOM & drawings** from their saved setup, production records, labels, and item/QR screen.
+
+The document dialog has **Bill of material**, **Isometric drawings**, and **History** tabs. Preview a CSV or XLSX BOM, select its worksheet if needed, and save the material grid and source file. A scanned BOM PDF is viewable as a document. A full drawing PDF or ordered PDF/JPEG/PNG pages are retained as one complete viewable PDF; the phone camera can add individual pages. **View full isometric** opens all pages. Document revision and upload history remain available.
+
+Uploads in setup belong to that exact P.O., assembly, and spool requirement. Its registered physical spools inherit those references. An individual spool upload overrides only that spool's corresponding document. Repeated spool numbers elsewhere do not receive files automatically. Existing material heat/MTR records remain separate and unchanged. Uploaded references are included with the exact issued Job Packet revision; upload alone records no receipt, production work, or QA approval.
+
 ## GPN and spool QR labels from a saved P.O.
 
-Open **Purchase orders → Open P.O. → Generate QR labels**, then choose **GPN / Assembly labels** or **Spool labels**. FabTrace uses the saved quantities and generates only missing physical records. Choose the actual current location and responsible employee once per batch. Each assembly and spool receives its own permanent QR code; reprinting retains the same identity.
+Open **Purchase orders → Open P.O. → Generate spool QR labels**. FabTrace uses the saved quantities and generates only missing physical records. Choose the actual current location and responsible employee once per batch. Each physical spool receives its own permanent QR code; reprinting retains the same identity.
 
 Spool generation creates any missing parent assemblies automatically. It assigns the required spool numbers and quantities to **each individual assembly**, including repeated spool numbers. Spool labels show the spool number, P.O., parent GPN, physical assembly ID and unique spool ID. Print all labels or filter to one GPN, in pages of 100. Generation handles up to 500 new items per batch, including any parent assemblies; continue with the next batch when needed.
 
-Initial quantity setup becomes locked once physical records exist. Label generation creates no weld plans, travelers, receipts, completed work or QA acceptance. Use **Set weld plan** when actual weld scope is ready; the registered parent is retained. Active employees can view and reprint labels; administrators and supervisors can generate missing identities. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md). Release `2026.10.30-qr.1` adds the physical `order_spools` registration table without changing existing columns or generating production records at deployment.
+Initial quantity setup becomes locked once physical records exist. Declared weld counts create independent numbered weld records for each generated physical spool, with inspections still pending. Label generation records no receipts, completed work or QA acceptance. Active employees can view and reprint labels; administrators and supervisors can generate missing identities. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md).
 
 ## Change an employee's position
 
@@ -14,13 +22,14 @@ An administrator can open **Employees → Change position**, select the new posi
 
 ## Simple P.O. setup
 
-Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** Administrators and supervisors land here after signing in. Setup has three short steps:
+Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** Administrators and supervisors land here after signing in. Setup has three entry steps followed by an optional document step:
 
 1. **P.O. number** — enter the purchase-order number.
 2. **Assemblies & quantities** — add each **Google part number / Assembly number** and answer **How many assemblies?** Use **+ Add another assembly number** for additional numbers on the same P.O.
-3. **Spools & quantities** — under each assembly number, enter its spool numbers and **Qty per assembly**. Use **+ Add spool number** as needed, then **Save P.O.**
+3. **Spools & welds** — under each assembly number, enter its spool numbers, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** as needed, then **Save & add documents**.
+4. **Documents (optional)** — upload/view the BOM and all pages of the corresponding isometric for each selected spool. Finish setup or skip for now; the P.O. and quantities are already saved.
 
-Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. One final save records the complete setup. Initial setup asks only for these numbers and quantities; physical records and custody are entered later.
+Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. The setup save records the numbers, quantities, and weld counts together; optional documents are saved separately to the selected spool scope. Physical records and custody are entered later.
 
 The saved P.O. shows **Assembly numbers**, **Assemblies needed** and **Total spools needed**. Use **Add assembly number** for another branch or **Edit quantities** for an eligible correction with a reason. Existing undeclared quantities show **Not entered**. Once a branch has physical assembly history, its initial quantity setup is locked. All supported active employees can view the quantities; administrators retain the existing removal and restoration controls.
 

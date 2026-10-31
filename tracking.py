@@ -1061,6 +1061,8 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
     guard_declared_weld_count(s, item, values.get('assembly_id'), values['planned_welds'])
     from parts import guard_plan_project
     guard_plan_project(s, item, values)
+    from spool_documents import guard_document_spool_identity
+    guard_document_spool_identity(s, item, values)
     if plan:
         _version(plan, data.expected_version)
         changed_scope = any(getattr(plan, key) != values[key] for key in (

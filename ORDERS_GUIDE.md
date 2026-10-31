@@ -1,14 +1,25 @@
 # Purchase-order setup, quantities and later production records
 
-## Set up a P.O. in three steps
+## Set up a P.O. and upload spool documents
 
 Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** This is the default landing screen for administrators and supervisors. The highest level is the P.O.; it can contain multiple Google part number / assembly numbers, each with its own quantity and spool requirements.
 
 1. **P.O. number:** enter the number and choose **Next →**.
 2. **Assemblies & quantities:** enter **Google part number / Assembly number** and **How many assemblies?** Use **+ Add another assembly number** for each additional number. Choose **Next →**.
-3. **Spools & quantities:** beneath each assembly number, enter **Spool number** and **Qty per assembly**. Use **+ Add spool number** for more spool types. Review the calculated totals and choose **Save P.O.**
+3. **Spools & welds:** beneath each assembly number, enter **Spool number**, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** for more spool types. Review the calculated totals and choose **Save & add documents**.
+4. **Documents (optional):** the P.O. is now saved. At each spool choose **Upload / view BOM** or **Upload / view isometric**, preview the file, and save. Include all drawing pages. Choose **Finish setup** or **Skip for now** to return to the saved P.O.
 
-The setup asks only for these numbers and quantities. **Back** keeps your entries. Nothing is saved until the final save records the complete P.O. together.
+**Back** keeps your entries during the first three steps. **Save & add documents** saves the P.O., quantities and weld counts together. Document uploads are separate saves against the exact spool selected in step 4, so a failed upload can be retried without creating a duplicate P.O.
+
+### BOM and isometric files
+
+Open **BOM & drawings** on a saved spool to use the **Bill of material**, **Isometric drawings**, and **History** tabs. Download the blank BOM template for the supported column headings. Upload an Excel `.xlsx` workbook or `.csv` with quantities for one spool; choose the matching worksheet when prompted, preview its rows, then save. A scanned PDF BOM can be uploaded and viewed directly. Spreadsheet formulas must be converted to saved values before upload.
+
+Upload a complete isometric PDF from a computer or scanner. On a phone, **Scan a page with camera** adds a JPG/PNG image; add every page and use the arrows to arrange the files before preview. Multiple PDFs and scan images are combined in that order. **View full isometric** opens the complete saved document in a new tab; **Preview all pages** opens its embedded viewer. PDFs are normalized into a viewable file with active actions removed; original source filenames and hashes are recorded. Page graphics and page count are preserved.
+
+Setup uploads belong only to the P.O., assembly and spool requirement shown. Each physical spool registered under that requirement can view them. Uploading on a unique physical spool overrides that document only for that spool; its siblings continue to use their setup document. No association is made to matching spool numbers in other P.O.s.
+
+Each file is limited to 20 MiB, each upload to 40 MiB, a drawing set to 200 pages, and a parsed spool BOM to 500 lines. Authorized administrators, supervisors, material coordinators and QA/QC may upload; other active positions can view. Released scope must return to work before a revision is uploaded. **History** retains earlier versions. Uploads preserve existing heat/MTR records and do not grant QA acceptance. Issued Job Packet ZIPs include the exact uploaded versions retained at issue.
 
 ### How the quantities work
 

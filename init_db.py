@@ -16,6 +16,8 @@ HISTORY_TABLES = (
     'flow_events',
     'spool_parts_events',
     'spool_bom_events',
+    'spool_documents',
+    'spool_document_files',
     'quality_documents',
     'quality_evidence',
     'quality_reviews',

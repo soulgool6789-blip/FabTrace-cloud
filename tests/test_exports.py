@@ -42,6 +42,8 @@ TABLES = {
     "Spool BOM trace configs": ("spool_boms", "SpoolBomTrace"),
     "Spool BOM material pieces": ("spool_boms", "SpoolBomMaterial"),
     "Spool BOM trace events": ("spool_boms", "SpoolBomEvent"),
+    "Spool document scopes": ("spool_documents", "SpoolDocumentSet"),
+    "Spool uploaded documents": ("spool_documents", "SpoolDocument"),
     "Subprojects": ("tracking", "Subproject"),
     "Spool plans": ("tracking", "SpoolPlan"),
     "Weld templates": ("tracking", "RequirementTemplate"),

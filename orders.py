@@ -587,6 +587,8 @@ def create_gpn(project_id: str, data: CreateGpnIn, user: Employee = Depends(auth
 def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Depends(auth), s: Session = Depends(db)):
     row = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
+    from spool_documents import guard_document_requirement_identity
+    guard_document_requirement_identity(s, group, gpn=data.gpn)
     if data.gpn != group.gpn:
         from order_setup import OrderAssemblyRequirement
         if s.get(OrderAssemblyRequirement, group.id):
@@ -737,6 +739,8 @@ def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAsse
     order = _locked(s, project_id, data.expected_version, user)
     mapping = _assembly(s, project_id, item_id)
     group = _gpn(s, project_id, mapping.gpn_id)
+    from spool_documents import guard_document_requirement_identity
+    guard_document_requirement_identity(s, group, gpn=data.gpn)
     item = lock_item(s, item_id)
     number_changed = data.gpn != group.gpn
     guard_assembly_registration(s, group, data.required_spools, item_id=item_id)

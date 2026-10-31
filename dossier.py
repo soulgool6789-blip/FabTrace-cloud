@@ -14,6 +14,7 @@ import tempfile
 import zipfile
 from collections import defaultdict
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -335,6 +336,12 @@ def _material_trace_rows(bases):
             for basis in bases for piece in basis['materials']]
 
 
+def _spool_document_scope(s, item):
+    """Exact uploaded references; no upload is treated as a QA approval."""
+    from spool_documents import spool_document_scope_basis
+    return spool_document_scope_basis(s, item.id) if item else []
+
+
 def _physical_structure(s,item,plan,seen=None):
     """Relevant child construction proof, without releases, logistics or coating."""
     seen=set(seen or ())
@@ -350,9 +357,11 @@ def _physical_structure(s,item,plan,seen=None):
     from parts import parts_basis
     parts = parts_basis(s, item.id)
     material_trace = _material_trace_scope(s, item)
+    spool_documents = _spool_document_scope(s, item)
     return _structural({'tracking':spool_dict(s,item),'component_links':[row_dict(x) for x in links],
         **({'parts': {'basis': parts}} if parts else {}),
         **({'material_trace': material_trace} if material_trace else {}),
+        **({'spool_documents': spool_documents} if spool_documents else {}),
         'child_spools':children,'reworks':[row_dict(x) for x in s.scalars(select(Rework).where(Rework.item_id.in_(ids)).order_by(Rework.id))],
         'flow_events':[row_dict(x) for x in s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids)).order_by(FlowEvent.id))]})
 
@@ -397,8 +406,10 @@ def _actual_records(s, item, plan, user):
                        'components': [{key:value for key,value in component.items() if key != 'can_remove'}
                                       for component in line['components']]} for line in snapshot['lines']]}
     material_trace = _material_trace_scope(s, item)
+    spool_documents = _spool_document_scope(s, item)
     return {'tracking': tracking, 'inspections': inspections, 'reworks': reworks,
         **({'parts': part_records} if part_records else {}),
+        **({'spool_documents': spool_documents} if spool_documents else {}),
         **({'material_trace': material_trace,
             'material_trace_records': _material_trace_rows(material_trace)} if material_trace else {}),
         'component_links': [row_dict(x) for x in components], 'child_spools': children,
@@ -416,6 +427,7 @@ def _structural(records):
     return {'item_id':tr['item']['id'], 'drawing':tr['item']['drawing'],
         **({'parts': records['parts']['basis']} if records.get('parts') else {}),
         **({'material_trace': records['material_trace']} if records.get('material_trace') else {}),
+        **({'spool_documents': records['spool_documents']} if records.get('spool_documents') else {}),
         'plan':{k:tr['plan'][k] for k in ('project_id','subproject_id','assembly_id','planned_welds','drawing_revision','zero_weld_reason')},
         'welds':welds, 'components':records['component_links'],
         'children':[{'item_id':x['item_id'],'physical_basis':x.get('physical_basis')} for x in records['child_spools']],
@@ -448,6 +460,8 @@ def _check_basis(cfg, item, spec, entry, records, documents):
         data['actual']={'item_id':item.id,'sections':SECTIONS,'version':VERSION}
     elif code=='drawings':
         data['actual']={'drawing':item.drawing,'revision':records['tracking']['plan']['drawing_revision']}
+        drawings=[d for d in records.get('spool_documents',[]) if d['kind']=='isometric']
+        if drawings:data['actual']['spool_documents']=drawings
     elif code in ('pressure','torque','customer_hold','procedures','materials','weld_log','brazing_bonding'):
         data['actual']=_structural(records)
     elif code in ('visual','nde'):
@@ -963,6 +977,12 @@ def _selected_documents(packet):
     return [d for d in packet['documents'] if d['id'] in selected]
 
 
+def _unique_spool_documents(documents):
+    """Freeze exact file identities and their physical spool associations."""
+    rows={(d['spool_id'],d['document_id']):d for d in documents}
+    return [rows[key] for key in sorted(rows)]
+
+
 def _external_references(packet):
     return [{'scope':packet['item']['id'],'check':c['code'],'reference':c['reference'],
         'embedded_document_ids':c['document_ids'],'source':c['source']}
@@ -1003,15 +1023,18 @@ def issue_item(item_id:str,data:SignedIn,user:Employee=Depends(auth),s:Session=D
     packet['documents']=_selected_documents(packet)
     children=[_get_issue(s,c['issue_id']) for c in packet['child_packets']]
     documents={d['id']:d for d in packet['documents']}
+    spool_documents=list(packet['records'].get('spool_documents',[]))
     references=_external_references(packet)
     for child in children:
         documents.update({d['id']:d for d in child.snapshot['documents']})
+        spool_documents.extend(child.snapshot.get('spool_documents',[]))
         references.extend(child.snapshot['external_references'])
     at=utcnow()
     snapshot={'format':VERSION,'kind':'item','issued':_issued_header(cfg.project_id,item_id,revision,data,user,at),
         'source_note':SOURCE_NOTE,'source_references':SOURCE_REFERENCES,'packet':packet,
         'child_issues':[row_dict(child,('snapshot',)) for child in children],
         'documents':sorted(documents.values(),key=lambda d:d['id']),'external_references':references}
+    if spool_documents:snapshot['spool_documents']=_unique_spool_documents(spool_documents)
     _save_issue(s,cfg,item_id,'item',packet['fingerprint'],snapshot,data,user,at)
     _commit(s)
     return item_detail(s,item,user)
@@ -1032,6 +1055,7 @@ def issue_project(project_id:str,data:SignedIn,user:Employee=Depends(auth),s:Ses
     revision=(latest.revision+1) if latest else 1
     issues=[s.get(DossierIssue,p['latest_issue']['id']) for p in packets]
     documents={d['id']:d for issue in issues for d in issue.snapshot['documents']}
+    spool_documents=_unique_spool_documents([d for issue in issues for d in issue.snapshot.get('spool_documents',[])])
     at=utcnow()
     snapshot={'format':VERSION,'kind':'project','issued':_issued_header(project_id,None,revision,data,user,at),
         'source_note':SOURCE_NOTE,'source_references':SOURCE_REFERENCES,
@@ -1039,6 +1063,7 @@ def issue_project(project_id:str,data:SignedIn,user:Employee=Depends(auth),s:Ses
         'item_issues':[row_dict(issue,('snapshot',)) for issue in issues],
         'documents':sorted(documents.values(),key=lambda d:d['id']),
         'external_references':[r for issue in issues for r in issue.snapshot['external_references']]}
+    if spool_documents:snapshot['spool_documents']=spool_documents
     _save_issue(s,cfg,None,'project',fingerprint,snapshot,data,user,at)
     _commit(s)
     return project_detail(s,project_id,user)
@@ -1225,6 +1250,15 @@ def _render_item(snapshot,draft=False):
         body+='</section>'
     records=packet['records'];tr=records['tracking']
     body+='<h2>Actual generated fabrication records</h2>'
+    if records.get('spool_documents'):
+        body+='<h3>Uploaded spool bills of material and isometric drawings</h3>'
+        body+=_table(records['spool_documents'],['spool_id','kind','filename','revision','page_count','sha256'])
+        body+='<p>These files retain the references uploaded for each spool. Uploading a file does not record engineering or QA acceptance. The complete files are included with the digital packet.</p><ul>'
+        for document in {d['document_id']:d for d in records['spool_documents']}.values():
+            link=('/api/spool-documents/files/'+str(document['document_id']) if draft else
+                  'spool-files/'+str(document['document_id'])+'_'+document['filename'])
+            body+='<li><a href="'+_escape(quote(link,safe='/'))+'">'+_escape(document['filename'])+'</a></li>'
+        body+='</ul>'
     if records.get('material_trace_records'):
         body+='<h3>Material heat and MTR register</h3>'
         for trace in records['material_trace']:
@@ -1275,6 +1309,8 @@ def _render_project(snapshot,sha256):
     body+='</ul>'
     body+='<h2>Declared physical project scope at issue</h2>'+_table(snapshot['scope'],['id','description','kind','parent_id','fabrication_finished','status'])
     body+='<h2>Controlled file register</h2>'+_table(snapshot['documents'],['id','scope_key','code','title','revision','filename','sha256'])
+    if snapshot.get('spool_documents'):
+        body+='<h3>Spool BOM and isometric reference files</h3>'+_table(snapshot['spool_documents'],['spool_id','kind','filename','revision','page_count','sha256'])
     body+='<h2>Actual physical handover — complete at transfer</h2><p>Record the completed transfer in FabTrace against this issued revision. Keep signed paper or the receipt reference with the project records. Leave fields blank until the event occurs.</p><div class="signatures">'
     for label in ('Dispatched by / date','Received by / date','Recipient and organization','Transfer / signed receipt reference'):
         body+='<div><p>'+label+'</p><div class="line"></div></div>'
@@ -1288,6 +1324,7 @@ def preview_item(item_id:str,user:Employee=Depends(auth),s:Session=Depends(db)):
     item,_=_item(s,item_id)
     packet=_packet(s,item,user);packet.pop('basis',None)
     snapshot={'packet':packet,'documents':_selected_documents(packet),'source_note':SOURCE_NOTE,'source_references':SOURCE_REFERENCES}
+    if packet['records'].get('spool_documents'):snapshot['spool_documents']=packet['records']['spool_documents']
     return HTMLResponse(_render_item(snapshot,True),headers={'Cache-Control':'private, no-store',
         'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"})
 
@@ -1348,6 +1385,7 @@ def download_issue(issue_id:int,user:Employee=Depends(auth),s:Session=Depends(db
             'snapshot_sha256':issue.sha256,'external_references':snapshot['external_references'],
             'documents':snapshot['documents'],'related_issues':[row_dict(r,('snapshot',)) for r in related],
             'note':'Exact retained revision. Only listed documents are embedded; references are not retrieved. Download is not dispatch or receipt.'}
+        if snapshot.get('spool_documents'):manifest['spool_documents']=snapshot['spool_documents']
         with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED,allowZip64=True) as archive:
             _zip_add(archive,'manifest.json',_canonical(manifest))
             _zip_add(archive,'snapshot.json',_canonical(snapshot))
@@ -1369,6 +1407,19 @@ def download_issue(issue_id:int,user:Employee=Depends(auth),s:Session=Depends(db
                     _error('Retained supporting file integrity verification failed; contact QA before use')
                 _zip_add(archive,'files/'+str(document['id'])+'_'+document['filename'],content)
                 s.expire(stored,['content'])
+            # Resolve immutable IDs frozen at issue, never the current upload.
+            # Preserve the matching paths in each included child's HTML too.
+            packet_scopes=[('',snapshot)]+[
+                ('items/'+str(r.id)+'-revision-'+str(r.revision)+'/',r.snapshot) for r in related]
+            from spool_documents import spool_document_retained_file
+            for prefix,retained_snapshot in packet_scopes:
+                for document in {d['document_id']:d for d in retained_snapshot.get('spool_documents',[])}.values():
+                    stored=spool_document_retained_file(s,document['document_id'])
+                    content=stored['content']
+                    if (hashlib.sha256(content).hexdigest()!=document['sha256'] or
+                            stored['filename']!=document['filename'] or stored['media_type']!=document['media_type']):
+                        _error('Retained spool document integrity verification failed; contact QA before use')
+                    _zip_add(archive,prefix+'spool-files/'+str(document['document_id'])+'_'+document['filename'],content)
         output.seek(0)
     except Exception:
         output.close()

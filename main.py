@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from pwdlib import PasswordHash
 from permissions import Role, role_catalog, role_label, user_permissions, has_capability, require_capability
+from upload_limits import SpoolDocumentUploadLimit
 
 DATABASE_URL=os.environ.get('DATABASE_URL','')
 # Render PostgreSQL supplies postgresql://, but SQLAlchemy must use the
@@ -38,7 +39,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.31-spool-bom.1'
+APP_VERSION='2026.10.31-spool-documents.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -105,6 +106,9 @@ class Audit(Base):
     at=Column(DateTime(timezone=True),default=utcnow,nullable=False)
 
 app=FastAPI(title='FabTrace Cloud',docs_url=None,redoc_url=None)
+# The later origin middleware stays outermost; this cap runs before multipart
+# parsing while preserving early origin checks and normal response headers.
+app.add_middleware(SpoolDocumentUploadLimit)
 app.mount('/static',StaticFiles(directory=os.path.join(os.path.dirname(__file__),'static')),name='static')
 failed={}
 
@@ -198,7 +202,10 @@ async def origin_check(request:Request,call_next):
             return Response('Forbidden origin',status_code=403)
     result=await call_next(request)
     result.headers['X-Content-Type-Options']='nosniff'
-    result.headers['X-Frame-Options']='DENY'
+    # Authenticated spool PDFs may be viewed inside FabTrace's document dialog.
+    # All other pages retain their existing frame protection.
+    result.headers['X-Frame-Options']=('SAMEORIGIN' if request.method=='GET' and
+        request.url.path.startswith('/api/spool-documents/files/') else 'DENY')
     result.headers['Referrer-Policy']='no-referrer'
     result.headers['Cache-Control']='no-store'
     return result
@@ -325,6 +332,8 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
     guard_registered_spool(s,r)
     from spool_boms import guard_spool_bom_identity
     guard_spool_bom_identity(s,r)
+    from spool_documents import guard_document_spool_identity
+    guard_document_spool_identity(s,r)
     from order_setup import guard_spool_requirement, requirements_by_gpn
     from orders import _key
     plan=s.get(SpoolPlan,r.id)
@@ -578,6 +587,9 @@ def health(s:Session=Depends(db)):
     s.execute(select(OrderSpoolRequirement.id).limit(1))
     s.execute(select(OrderSpoolWeldRequirement.requirement_id).limit(1))
     s.execute(select(OrderSpool.item_id).limit(1))
+    s.execute(select(SpoolDocumentSet.id).limit(1))
+    s.execute(select(SpoolDocument.id).limit(1))
+    s.execute(select(SpoolDocumentFile.document_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -632,6 +644,10 @@ app.include_router(order_labels_router)
 
 from spool_boms import router as spool_boms_router
 app.include_router(spool_boms_router)
+
+from spool_documents import (router as spool_documents_router, SpoolDocumentSet,
+                             SpoolDocument, SpoolDocumentFile)
+app.include_router(spool_documents_router)
 
 from production_progress import router as production_progress_router
 app.include_router(production_progress_router)
