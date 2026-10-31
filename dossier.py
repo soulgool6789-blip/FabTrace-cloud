@@ -319,6 +319,22 @@ def _documents(s, project_id):
     return [{**row_dict(r), 'current': latest[(r.scope_key, r.code)] == r.id} for r in rows]
 
 
+def _material_trace_scope(s, item, seen=None):
+    """Saved material facts for this spool or its active physical descendants.
+
+    Merely having an approved reference BOM adds no packet basis. A physical
+    trace record must have been saved; reads never create it. Registered child
+    spools without a weld plan can still retain supplier material facts.
+    """
+    from spool_boms import spool_bom_scope_basis
+    return spool_bom_scope_basis(s, item.id, seen) if item else []
+
+
+def _material_trace_rows(bases):
+    return [{'spool_id': basis['spool_id'], 'spool_number': basis['spool_number'], **piece}
+            for basis in bases for piece in basis['materials']]
+
+
 def _physical_structure(s,item,plan,seen=None):
     """Relevant child construction proof, without releases, logistics or coating."""
     seen=set(seen or ())
@@ -333,8 +349,10 @@ def _physical_structure(s,item,plan,seen=None):
         children.append({'item_id':child_plan.item_id,'physical_basis':_physical_structure(s,child,child_plan,seen)})
     from parts import parts_basis
     parts = parts_basis(s, item.id)
+    material_trace = _material_trace_scope(s, item)
     return _structural({'tracking':spool_dict(s,item),'component_links':[row_dict(x) for x in links],
         **({'parts': {'basis': parts}} if parts else {}),
+        **({'material_trace': material_trace} if material_trace else {}),
         'child_spools':children,'reworks':[row_dict(x) for x in s.scalars(select(Rework).where(Rework.item_id.in_(ids)).order_by(Rework.id))],
         'flow_events':[row_dict(x) for x in s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids)).order_by(FlowEvent.id))]})
 
@@ -378,8 +396,11 @@ def _actual_records(s, item, plan, user):
             'lines': [{**{key:value for key,value in line.items() if key != 'components'},
                        'components': [{key:value for key,value in component.items() if key != 'can_remove'}
                                       for component in line['components']]} for line in snapshot['lines']]}
+    material_trace = _material_trace_scope(s, item)
     return {'tracking': tracking, 'inspections': inspections, 'reworks': reworks,
         **({'parts': part_records} if part_records else {}),
+        **({'material_trace': material_trace,
+            'material_trace_records': _material_trace_rows(material_trace)} if material_trace else {}),
         'component_links': [row_dict(x) for x in components], 'child_spools': children,
         'flow': row_dict(fp) if fp else None, 'flow_events': flow_events,
         'flow_exceptions': exceptions, 'quality_records': quality}
@@ -394,6 +415,7 @@ def _structural(records):
         (e['action'] in ('fail','reopen') and (e['data'].get('return_step', e['step']) or 0) <= 19)]
     return {'item_id':tr['item']['id'], 'drawing':tr['item']['drawing'],
         **({'parts': records['parts']['basis']} if records.get('parts') else {}),
+        **({'material_trace': records['material_trace']} if records.get('material_trace') else {}),
         'plan':{k:tr['plan'][k] for k in ('project_id','subproject_id','assembly_id','planned_welds','drawing_revision','zero_weld_reason')},
         'welds':welds, 'components':records['component_links'],
         'children':[{'item_id':x['item_id'],'physical_basis':x.get('physical_basis')} for x in records['child_spools']],
@@ -461,6 +483,8 @@ def _entry_errors(cfg, item, spec, entry, basis, records):
     allowed_na=spec['allow_na'] and not (spec['code']=='customer_shipping' and cfg.customer_approval_required)
     if spec['code'] in ('weld_log','visual','procedures') and records['tracking']['welds']:
         allowed_na=False
+    if spec['code']=='materials' and records.get('material_trace_records'):
+        allowed_na=False
     if entry.applicability=='not_applicable':
         if not allowed_na: errors.append('This checklist item cannot be marked not applicable for the current scope')
         if len(entry.reference)<3 or len(entry.notes)<8:errors.append('Document the source/authorization reference and a meaningful non-applicability reason')
@@ -482,6 +506,12 @@ def _entry_errors(cfg, item, spec, entry, basis, records):
     if code=='drawings' and (not (item.drawing or '').strip() or not tr['plan']['drawing_revision'].strip()):
         errors.append('Record both the actual manufacturing drawing ID and its separate revision in the item/spool plan')
     if code=='materials':
+        for piece in records.get('material_trace_records', []):
+            label = f"{piece['spool_id']}, BOM item {piece['item']} piece {piece['piece_number']}"
+            if not str(piece.get('heat_number') or '').strip():
+                errors.append(label + ': material heat number is missing')
+            if not str(piece.get('mtr_reference') or '').strip():
+                errors.append(label + ': MTR reference is missing')
         for w in tr['welds']:
             if any(not w.get(k) for k in ('component_a','component_b','heat_a','heat_b','mtr_a','mtr_b')):errors.append(f"{w['number']}: both-side material/heat/MTR traceability is incomplete")
     if code in ('weld_log','visual'):
@@ -1194,7 +1224,15 @@ def _render_item(snapshot,draft=False):
             body+='</div>'
         body+='</section>'
     records=packet['records'];tr=records['tracking']
-    body+='<h2>Actual generated fabrication records</h2><h3>Weld register</h3>'+_table(tr['welds'],['number','component_a','heat_a','mtr_a','component_b','heat_b','mtr_b','wps','wps_revision','cycle','completed_by','completed_at','production_complete','qa_accepted'])
+    body+='<h2>Actual generated fabrication records</h2>'
+    if records.get('material_trace_records'):
+        body+='<h3>Material heat and MTR register</h3>'
+        for trace in records['material_trace']:
+            body+='<h4>Physical spool '+_escape(trace['spool_id'])+' · '+_escape(trace['spool_number'])+'</h4>'
+            body+=_table(trace['materials'], ['item','piece_number','tas_ln_number','description','material','length_display'])
+            body+=_table(trace['materials'], ['item','piece_number','supplier','supplier_piece_id','heat_number','mtr_reference','mtr_url','notes'])
+        body+='<p>Each row identifies one physical material piece on its own spool. MTR references and links identify supporting records; actual files are listed separately in the attachment register.</p>'
+    body+='<h3>Weld register</h3>'+_table(tr['welds'],['number','component_a','heat_a','mtr_a','component_b','heat_b','mtr_b','wps','wps_revision','cycle','completed_by','completed_at','production_complete','qa_accepted'])
     body+='<h3>Weld operations and individual requirements</h3>'
     body+=_table([{'weld':w['number'],**work} for w in tr['welds'] for work in w['work']],['weld','cycle','operation','actor','at','notes'])
     body+=_table([{'weld':w['number'],**r} for w in tr['welds'] for r in w['requirements']],['weld','code','label','cycle','status','satisfied','evidence','reviews'])

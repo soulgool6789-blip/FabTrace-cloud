@@ -23,6 +23,7 @@ from order_spools import (OrderSpool, effective_children_by_assembly,
 from permissions import has_capability
 from removals import gpn_not_removed, item_not_removed, project_not_removed
 from tracking import SpoolPlan, initialize_order_weld_scope, new_id
+from spool_boms import item_bom_summary
 
 
 router = APIRouter(prefix='/api/order-labels', tags=['purchase order QR labels'])
@@ -154,6 +155,7 @@ def list_labels(project_id: str,
                 'assembly_id': parent_id, 'weld_plan_exists': plan_id is not None,
                 'welds_per_spool': requirement['welds_per_spool'] if requirement else None,
                 'planned_welds': planned_welds,
+                'bom': item_bom_summary(item, snapshot),
                 'purchase_order': order.purchase_order, 'gpn_id': group.id, 'gpn': group.gpn,
                 'qr_url': phone_link('item', item.id) if ready else None})
         total = snapshot.scalar(_spool_query(func.count(Item.id)).where(OrderGpn.id.in_(ids))) if ids else 0

@@ -38,7 +38,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.30-spool-welds.1'
+APP_VERSION='2026.10.31-spool-bom.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -156,8 +156,10 @@ ITEM_KEYS='id description kind project google_part_number drawing location handl
 
 def item_dict(s,r,user=None):
     from removals import item_is_removed, removal_summary
+    from spool_boms import item_bom_summary
     active=not item_is_removed(s,r.id)
     d=asdict(r,ITEM_KEYS)
+    d['bom']=item_bom_summary(r,s) if active else None
     d['removal']=removal_summary(s,'item',r.id)
     d['can_mutate']=active
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
@@ -321,6 +323,8 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
     if not r.google_part_number:raise HTTPException(422,'Google part number cannot be blank')
     from order_spools import guard_registered_spool
     guard_registered_spool(s,r)
+    from spool_boms import guard_spool_bom_identity
+    guard_spool_bom_identity(s,r)
     from order_setup import guard_spool_requirement, requirements_by_gpn
     from orders import _key
     plan=s.get(SpoolPlan,r.id)
@@ -625,6 +629,9 @@ from order_spools import OrderSpool
 
 from order_labels import router as order_labels_router
 app.include_router(order_labels_router)
+
+from spool_boms import router as spool_boms_router
+app.include_router(spool_boms_router)
 
 from production_progress import router as production_progress_router
 app.include_router(production_progress_router)

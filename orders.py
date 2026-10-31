@@ -365,6 +365,7 @@ def _validate_assembly_scope(s, order, item, required_spools):
 
 def _assembly_detail(s, mapping, group, progress_rows):
     from removals import removal_summary
+    from spool_boms import item_bom_summary
     item = s.get(Item, mapping.item_id)
     item_removal = removal_summary(s, 'item', item.id)
     plan = s.get(SpoolPlan, item.id)
@@ -372,6 +373,7 @@ def _assembly_detail(s, mapping, group, progress_rows):
     spools = []
     blockers = []
     for child, child_plan in _linked(s, item.id, include_removed=bool(item_removal and item_removal['removed'])):
+        child_removal = removal_summary(s, 'item', child.id)
         child_flow = s.get(FlowPlan, child.id)
         row = progress_rows.get(child.id, {})
         errors = list(row.get('blockers', []))
@@ -386,7 +388,8 @@ def _assembly_detail(s, mapping, group, progress_rows):
         ready = bool(child.kind == 'Spool' and child_plan and child_flow and child_flow.route == 'spool'
                      and child_flow.status == 'completed' and row.get('fabrication_finished') and not errors)
         spools.append({'item_id': child.id, 'description': child.description, 'google_part_number': child.google_part_number,
-                       'removal': removal_summary(s, 'item', child.id),
+                       'bom': item_bom_summary(child, s) if not (child_removal and child_removal['removed']) else None,
+                       'removal': child_removal,
                        'project_id': child_project, 'subproject_id': child_plan.subproject_id if child_plan else None,
                        'planning_needed': child_plan is None, 'weld_plan_exists': child_plan is not None,
                        'flow_status': child_flow.status if child_flow else 'not_started',

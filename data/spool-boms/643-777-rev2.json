@@ -1,0 +1,32 @@
+{
+  "catalog_id": "643-777-rev2",
+  "drawing_number": "643-777",
+  "revision": "2",
+  "revision_date": "2025-02-24",
+  "source_document": "643-777.pdf",
+  "source_page_count": 3,
+  "quantity_basis": "one_spool",
+  "quantity_basis_label": "Quantities for one physical spool",
+  "source_workbook": {
+    "filename": "CLM_BOM_643-777_PCW-03-01_and_03-02_Rev2.xlsx",
+    "sha256": "e5bbba96703625a1fc4852abe3b5a119e2c7fba0ad6fb5b7c65df2fb511764b0"
+  },
+  "spools": [
+    {
+      "spool_number": "643-777-PCW-03-01",
+      "source_sheet": 2,
+      "lines": [
+        {"item": 2, "quantity": 1, "tas_ln_number": "102391", "description": "PIPE CARBON STEEL A53B ERW 4 IN SCH STD/40", "length_inches": 16.75, "length_display": "16 3/4 in", "material": "CARBON STEEL"},
+        {"item": 1, "quantity": 2, "tas_ln_number": "100708", "description": "FLANGE RAISED FACE WELDNECK BUTTWELD CARBON STEEL A105 B16.5 4 IN SCH 40/STD 150#", "length_inches": null, "length_display": "", "material": "A105"}
+      ]
+    },
+    {
+      "spool_number": "643-777-PCW-03-02",
+      "source_sheet": 3,
+      "lines": [
+        {"item": 2, "quantity": 1, "tas_ln_number": "102391", "description": "PIPE CARBON STEEL A53B ERW 4 IN SCH STD/40", "length_inches": 16.75, "length_display": "16 3/4 in", "material": "CARBON STEEL"},
+        {"item": 1, "quantity": 2, "tas_ln_number": "100708", "description": "FLANGE RAISED FACE WELDNECK BUTTWELD CARBON STEEL A105 B16.5 4 IN SCH 40/STD 150#", "length_inches": null, "length_display": "", "material": "A105"}
+      ]
+    }
+  ]
+}

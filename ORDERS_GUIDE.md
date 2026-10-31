@@ -175,3 +175,15 @@ Use the existing numbered Process flow. The assembly traveler takes its required
 Open **Production progress** for the P.O. hierarchy and current flow; its **Project detail** link retains the earlier WIP/finished/shipped/delivered views. Use **Job Packets** for the approved source applicability, expected packet scope, evidence reviews, issue and actual physical/digital handovers. Its configured PO must agree with the order PO. The order's spool count, registered-item progress and expected packet count are different measures; review all three against the approved job scope.
 
 See [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for the final packet sequence and [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for job-specific controls.
+
+## 8. Open a drawing BOM and record each piece's heat and MTR
+
+The saved P.O. spool table provides **Bill of materials** beside the weld count for approved spool numbers. The same link appears on each matching physical spool QR card, in its item details and among its production-record actions. Drawing **643-777 revision 2** is linked to **643-777-PCW-03-01** (sheet 2) and **643-777-PCW-03-02** (sheet 3). Each displays the two approved BOM lines and quantities for **one physical spool**. The original approved Excel workbook can also be downloaded from the BOM view.
+
+The P.O. requirement view shows the drawing reference. After generating the individual spool records, open the link on a unique spool to record **Material traceability**. Each spool has separate entries for its one pipe piece and its two flange pieces. This allows the flanges to carry different heat numbers and MTR references even though they share a TAS line number.
+
+Record the supplier, supplier piece/lot ID, heat number, MTR number/reference, optional HTTPS document link and notes. Enter a reason and select **Save material traceability**. Partial information can be saved as a draft; field completion requires a heat number and MTR reference for every piece. A document link is optional and does not upload or certify an MTR file. Actual controlled attachments remain in Job Packets.
+
+Material coordinators, supervisors, administrators and QA/QC can update the register. Other signed-in employees can read it. Each save belongs only to that unique physical spool, keeps the approved drawing definition, and retains a dated before/after history with the employee badge and reason. Concurrent changes require reloading the current register. Released spools or released parent assemblies must be returned to work before correction.
+
+These saved facts follow the spool's stable tracking ID through production and appear in its Job Packet material register, the parent assembly's register and the administrator's Excel backend export. Corrections make affected quality evidence and Job Packet review bases stale so they can be reviewed again. Recording these facts does not complete receiving, welding or inspection steps. Weld-side material assignments are still explicitly recorded for each joint; the system does not assume which flange belongs to a particular weld.

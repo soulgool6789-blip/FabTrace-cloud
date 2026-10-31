@@ -371,6 +371,8 @@ def _physical(s, item_id, weld_id, cache=None):
         holds = cache['holds'].get(item_id, [])
         reworks = cache['reworks'].get(item_id, [])
         requirements = cache['weld_requirements'].get(item_id, [])
+        trace_id = component_link.spool_id if component_link else item_id
+        material_trace = cache.get('material_trace', {}).get(trace_id, [])
     else:
         from flow import ComponentLink
         weld = s.get(Weld, weld_id) if weld_id else None
@@ -384,6 +386,9 @@ def _physical(s, item_id, weld_id, cache=None):
         holds = list(s.scalars(select(TrackingHold).where(TrackingHold.item_id == item_id, TrackingHold.closed_at.is_(None)).order_by(TrackingHold.id))) if item else []
         reworks = list(s.scalars(select(Rework).where(Rework.item_id == item_id, Rework.closed_at.is_(None)).order_by(Rework.id))) if item else []
         requirements = list(s.scalars(select(WeldRequirement).where(WeldRequirement.item_id == item_id).order_by(WeldRequirement.id))) if item else []
+        from spool_boms import spool_bom_scope_basis
+        trace_id = component_link.spool_id if component_link else item_id
+        material_trace = spool_bom_scope_basis(s, trace_id) if trace_id else []
     snapshot = {'item_id': item_id, 'weld_id': weld_id, 'project_id': plan.project_id if plan else None,
                 'component_spool_id': component_link.spool_id if component_link else None,
                 'drawing_revision': plan.drawing_revision if plan else None,
@@ -391,6 +396,8 @@ def _physical(s, item_id, weld_id, cache=None):
                 'weld': {key: _fmt(getattr(weld, key)) for key in ('id', 'item_id', 'version', 'cycle', 'completed_at')} if weld else None,
                 'open_holds': [h.id for h in holds], 'open_reworks': [r.id for r in reworks],
                 'weld_requirements': [{key: getattr(r, key) for key in ('id', 'weld_id', 'version', 'cycle', 'status')} for r in requirements]}
+    if material_trace:
+        snapshot['material_trace'] = material_trace
     return snapshot
 
 
@@ -416,6 +423,8 @@ def _context(s, workspace, as_of=None):
         physical['component_links'] = {r.component_id: r for r in s.scalars(select(ComponentLink).where(ComponentLink.component_id.in_(item_ids)))}
         plan_ids = item_ids | {r.spool_id for r in physical['component_links'].values()}
         physical['plans'] = {r.item_id: r for r in s.scalars(select(SpoolPlan).where(SpoolPlan.item_id.in_(plan_ids)))}
+        from spool_boms import spool_bom_scope_basis
+        physical['material_trace'] = {item_id: spool_bom_scope_basis(s, item_id) for item_id in plan_ids}
         for key, model, query in [('holds', TrackingHold, select(TrackingHold).where(TrackingHold.item_id.in_(item_ids), TrackingHold.closed_at.is_(None)).order_by(TrackingHold.id)),
                                   ('reworks', Rework, select(Rework).where(Rework.item_id.in_(item_ids), Rework.closed_at.is_(None)).order_by(Rework.id)),
                                   ('weld_requirements', WeldRequirement, select(WeldRequirement).where(WeldRequirement.item_id.in_(item_ids)).order_by(WeldRequirement.id))]:

@@ -110,6 +110,7 @@ class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
 
 def requirements_by_gpn(s, gpn_ids):
     """Load declared requirements once; callers select active/historical groups."""
+    from spool_boms import requirement_bom_summary
     ids = set(gpn_ids)
     if not ids:
         return {}
@@ -128,6 +129,7 @@ def requirements_by_gpn(s, gpn_ids):
         spools = [{'id': line.id, 'spool_number': line.spool_number,
                    'quantity_per_assembly': line.quantity_per_assembly,
                    'welds_per_spool': weld_counts[line.id],
+                   'bom': requirement_bom_summary(line),
                    'total_quantity': line.quantity_per_assembly * plan.assembly_quantity}
                   for line in lines[plan.gpn_id]]
         per_assembly = sum(line['quantity_per_assembly'] for line in spools)
