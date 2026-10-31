@@ -39,7 +39,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.31-simple-uploads.1'
+APP_VERSION='2026.10.31-spool-arrival.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -161,9 +161,12 @@ ITEM_KEYS='id description kind project google_part_number drawing location handl
 def item_dict(s,r,user=None):
     from removals import item_is_removed, removal_summary
     from spool_boms import item_bom_summary
+    from spool_receiving import receiving_errors, receiving_summary
     active=not item_is_removed(s,r.id)
     d=asdict(r,ITEM_KEYS)
     d['bom']=item_bom_summary(r,s) if active else None
+    d['receiving']=receiving_summary(s,r,user)
+    arrival_blockers=receiving_errors(s,r)
     d['removal']=removal_summary(s,'item',r.id)
     d['can_mutate']=active
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
@@ -181,13 +184,13 @@ def item_dict(s,r,user=None):
     d['release_control']=release_summary(s,r)
     if user is not None:
         d['permissions']={
-            'can_weld':has_capability(user,'weld_production') and not r.released and not d['tracking_enabled'],
+            'can_weld':has_capability(user,'weld_production') and not r.released and not d['tracking_enabled'] and not arrival_blockers,
             'can_inspect':has_capability(user,'inspect') and not r.released,
             'can_open_rework':has_capability(user,'open_rework') and not r.released,
-            'can_release':has_capability(user,'inspect') and not r.released,
+            'can_release':has_capability(user,'inspect') and not r.released and not arrival_blockers,
             'can_reopen':has_capability(user,'admin') and bool(r.released)}
         for row in d['reworks']:
-            row['can_close']=has_capability(user,'close_rework') and not r.released and row['closed_at'] is None
+            row['can_close']=has_capability(user,'close_rework') and not r.released and row['closed_at'] is None and not arrival_blockers
             if not active:row['can_close']=False
         d['permissions']={key:bool(value and active) for key,value in d['permissions'].items()}
         d['permissions']['can_mutate']=active
@@ -205,7 +208,7 @@ async def origin_check(request:Request,call_next):
     # Authenticated spool PDFs may be viewed inside FabTrace's document dialog.
     # All other pages retain their existing frame protection.
     result.headers['X-Frame-Options']=('SAMEORIGIN' if request.method=='GET' and
-        request.url.path.startswith('/api/spool-documents/files/') else 'DENY')
+        request.url.path.startswith(('/api/spool-documents/files/', '/api/spool-boms/mtr-files/')) else 'DENY')
     result.headers['Referrer-Policy']='no-referrer'
     result.headers['Cache-Control']='no-store'
     return result
@@ -428,6 +431,8 @@ def weld(item_id:str,data:WeldEvent,u:Employee=Depends(auth),s:Session=Depends(d
     require_capability(u,'weld_production');r=lock_item(s,item_id);require_unreleased(r)
     if is_tracked(s,r):
         raise HTTPException(409,'This spool uses individual weld tracking. Record work on the specific weld in Projects & welds.')
+    from spool_receiving import require_receiving_pass
+    require_receiving_pass(s,r)
     if r.welds_done+data.count>r.welds_required:raise HTTPException(409,'Exceeds required weld count; change controlled traveler first')
     r.welds_done+=data.count;r.last_work_at=utcnow();r.dimensional='Not started';r.weld='Not started';r.reinspection_due=True
     audit(s,r.id,u.badge,'WELDS_COMPLETED',data.model_dump());s.commit();return item_dict(s,r,u)
@@ -476,6 +481,8 @@ def close_rework(item_id:str,rework_id:int,data:CloseRework,u:Employee=Depends(a
     x=s.get(Rework,rework_id)
     if not x or x.item_id!=r.id:raise HTTPException(404,'Rework not found')
     if x.closed_at:raise HTTPException(409,'Rework already closed')
+    from spool_receiving import require_receiving_pass
+    require_receiving_pass(s,r)
     x.closed_at=utcnow();x.closed_by=u.badge;x.close_notes=data.notes
     r.last_work_at=x.closed_at;r.reinspection_due=True;r.dimensional='Not started';r.weld='Not started'
     if is_tracked(s,r):
@@ -500,6 +507,8 @@ def release_blockers(s,r,flow_step=None,for_update=False):
         if not r.dimension_at or not r.weld_at:reasons.append('Inspection timestamps missing')
         if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
         if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
+    from spool_receiving import receiving_errors
+    reasons.extend(receiving_errors(s,r))
     reasons.extend(flow_release_errors(s,r,approving_step=flow_step,for_update=for_update))
     return list(dict.fromkeys(reasons))
 
@@ -591,6 +600,9 @@ def health(s:Session=Depends(db)):
     s.execute(select(SpoolDocument.id).limit(1))
     s.execute(select(SpoolDocumentFile.document_id).limit(1))
     s.execute(select(SpoolDocumentFileLink.document_id).limit(1))
+    s.execute(select(SpoolArrivalInspection.id).limit(1))
+    s.execute(select(SpoolMtrDocument.id).limit(1))
+    s.execute(select(SpoolMtrFile.document_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -649,6 +661,10 @@ app.include_router(spool_boms_router)
 from spool_documents import (router as spool_documents_router, SpoolDocumentSet,
                              SpoolDocument, SpoolDocumentFile, SpoolDocumentFileLink)
 app.include_router(spool_documents_router)
+
+from spool_receiving import (router as spool_receiving_router, SpoolArrivalInspection,
+                             SpoolMtrDocument, SpoolMtrFile)
+app.include_router(spool_receiving_router)
 
 from production_progress import router as production_progress_router
 app.include_router(production_progress_router)

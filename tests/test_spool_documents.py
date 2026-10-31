@@ -455,7 +455,12 @@ def test_upload_does_not_rewrite_saved_heat_mtr_material_or_qa_records(api):
     path = ROOT + '/spools/' + child['id']
     result = ok(request_upload(api, path, files=[('User-BOM.csv', bom_csv(number=child['spool_number']), 'text/csv')]))
     assert result['active']['bom']['bom']['line_count'] == 2
-    assert trace_record(api, child) == trace
+    current = trace_record(api, child)
+    assert current['lines'] == trace['lines']
+    assert current['traceability']['materials'] == trace['traceability']['materials']
+    assert current['traceability']['history'] == trace['traceability']['history']
+    assert current['source_status']['changed'] and current['source_status']['can_adopt']
+    assert not current['traceability']['editable'], 'A new uploaded BOM requires explicit physical adoption'
     with api.session_factory() as s:
         assert {table.name: s.execute(select(table)).all() for table in tables} == before
 

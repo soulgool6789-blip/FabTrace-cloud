@@ -136,15 +136,20 @@ def _set_for(s, scope, identity):
 
 def guard_document_spool_identity(s, item, values=None):
     """Keep uploaded files attached to the physical identity selected at upload."""
+    from spool_receiving import (is_physical_spool, physical_spool_number,
+                                 guard_receiving_identity, retained_parent_matches)
+    from spool_boms import guard_spool_bom_identity
+    guard_spool_bom_identity(s, item, values)
+    guard_receiving_identity(s, item, values)
     doc_set = _set_for(s, 'spools', item.id)
     if doc_set is None:
         return
     saved = doc_set.scope_snapshot
     project_id = values.get('project_id') if values is not None else item.project
     assembly_id = values.get('assembly_id') if values is not None else effective_parent_id(s, item.id)
-    if (item.kind != 'Spool' or _key(item.google_part_number or '') != _key(saved['spool_number'] or '')
+    if (not is_physical_spool(s, item) or _key(physical_spool_number(s, item, values)) != _key(saved['spool_number'] or '')
             or (project_id or '') != (saved['project_id'] or '')
-            or (assembly_id or '') != (saved['assembly_id'] or '')):
+            or not retained_parent_matches(s, item, saved, assembly_id)):
         _fail('This physical spool has uploaded BOM or drawing documents. Retain its saved spool number, '
               'purchase order and assembly so those documents cannot move to a different production identity.', 409)
 
@@ -190,13 +195,14 @@ def _target(s, scope, identity):
         project_id, assembly_id, spool_number = group.project_id, None, requirement.spool_number
         item, registration = None, None
     else:
+        from spool_receiving import is_physical_spool, physical_spool_number
         item = s.get(Item, identity)
-        if item is None or item.kind != 'Spool':
+        if not is_physical_spool(s, item):
             _fail('Physical spool not found.', 404)
         require_active_item(s, item.id)
         guard_registered_spool(s, item)
         guard_document_spool_identity(s, item)
-        project_id, assembly_id, spool_number = item.project, effective_parent_id(s, item.id), item.google_part_number
+        project_id, assembly_id, spool_number = item.project, effective_parent_id(s, item.id), physical_spool_number(s, item)
         if project_id:
             require_active_project(s, project_id)
         registration = s.get(OrderSpool, item.id)
@@ -715,6 +721,8 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
         'scope_id': identity, 'project_id': context['project_id'],
         'spool_number': context['spool_number'], 'version': doc_set.version,
         'sha256': document.sha256, 'revision': revision, 'reason': reason})
+    from spool_receiving import source_changed
+    source_changed(s, scope, identity, user.badge, 'Spool document revision uploaded: ' + reason)
     try:
         s.commit()
     except IntegrityError:
@@ -724,16 +732,17 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
 
 
 def _physical_documents(s, item_id):
+    from spool_receiving import is_physical_spool
     item = s.get(Item, item_id)
     if item is None:
         return []
     if item.kind == 'Assembly':
         result = []
         for child, _ in effective_children(s, item.id, include_removed=False):
-            if child.kind == 'Spool':
+            if is_physical_spool(s, child):
                 result.extend(_physical_documents(s, child.id))
         return result
-    if item.kind != 'Spool':
+    if not is_physical_spool(s, item):
         return []
     registration = s.get(OrderSpool, item.id)
     requirement = s.get(OrderSpoolRequirement, registration.requirement_id) if registration else None

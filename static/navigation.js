@@ -34,7 +34,7 @@
   function canLeave(targetPage){
     if(!active)return true;
     const module=window[pages[active.page]?.[0]];
-    if(module?.canNavigateAway?.()===false||window.FabSpoolDocuments?.canNavigateAway?.()===false){
+    if(module?.canNavigateAway?.()===false||window.FabSpoolDocuments?.canNavigateAway?.()===false||window.FabSpoolBom?.canNavigateAway?.()===false){
       if(targetPage!==active.page)notify('Please wait for the current save to finish.');
       return false;
     }
@@ -48,6 +48,7 @@
     const module=window[pages[active.page]?.[0]];
     active.label=labelFor(active.page);active.moduleState=module?.navigationState?.()||null;
     active.documents=window.FabSpoolDocuments?.navigationState?.()||null;
+    active.materials=window.FabSpoolBom?.navigationState?.()||null;
     active.fields=fieldsFor(active.page);active.scroll=window.scrollY;
     active.details=[...(node(active.page)?.querySelectorAll('details')||[])].map((el,index)=>({id:el.id,index,open:el.open}));
     if(active.page==='itemsPage')active.itemOffset=typeof offset==='number'?offset:0;
@@ -190,6 +191,7 @@
         active={...copyFrame(frame),url:safeUrl(location.href)||frame.url,transition:false};
         restoreFields(frame);
         if(frame.documents&&window.FabSpoolDocuments?.restoreNavigation)await window.FabSpoolDocuments.restoreNavigation(frame.documents);
+        if(frame.materials&&window.FabSpoolBom?.restoreNavigation)await window.FabSpoolBom.restoreNavigation(frame.materials);
         capture();
       }
       prepared=null;return true;
@@ -203,7 +205,7 @@
       restoring++;
       const before=active.url,page=active.page;
       let handled;
-      try{handled=await window.FabSpoolDocuments?.back?.();if(!handled&&page==='orderSetupPage')handled=await window.FabOrderSetup?.back?.();}finally{restoring--;}
+      try{handled=await window.FabSpoolBom?.back?.();if(!handled)handled=await window.FabSpoolDocuments?.back?.();if(!handled&&page==='orderSetupPage')handled=await window.FabOrderSetup?.back?.();}finally{restoring--;}
       if(handled){
         if(active?.page===page&&active.url!==before)while(stack.at(-1)?.page===page)stack.pop();
         capture();return;

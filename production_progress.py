@@ -190,6 +190,7 @@ def _tree(s, selected_project_id=''):
             'current_step': row['current_step'], 'current_title': row['current_title'],
             'status': row['status'], 'fabrication_finished': row['fabrication_finished'],
             'on_hold': bool(reasons), 'hold_reasons': reasons, 'blockers': row['blockers'],
+            'receiving': row.get('receiving'),
             'administrative_release': row['administrative_release'],
             'route_started': flow is not None, 'flow_status': row['flow_status'],
             'step_entered_at': _stamp(flow.step_entered_at) if flow else None,

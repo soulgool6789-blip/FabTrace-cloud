@@ -474,7 +474,15 @@ def test_absent_bom_preserves_legacy_packet_fingerprints_and_issued_snapshot(api
     original_snapshot = ok(api.get(f"/api/dossier/issues/{issued['id']}"))
     with api.session_factory() as session:
         cfg = session.get(dossier.DossierProject, PROJECT)
-        assert dossier._structural(before["records"]) == _legacy_structure(before["records"])
+        # This newly issued fixture now carries mandatory physical receiving
+        # evidence. An absent optional parts plan must still add no parts basis,
+        # and unrelated parts planning must not alter its retained issue below.
+        expected_structure = {**_legacy_structure(before["records"]), **{
+            key: before["records"][key] for key in
+            ("material_trace", "spool_documents", "arrival_qa", "mtr_documents")
+            if before["records"].get(key)}}
+        assert "parts" not in expected_structure
+        assert dossier._structural(before["records"]) == expected_structure
         legacy_basis = {
             "template": dossier.VERSION, "config": dossier._source_basis(cfg), "advisements": cfg.advisements,
             "source_review": before["source_review"]["id"],
@@ -483,7 +491,7 @@ def test_absent_bom_preserves_legacy_packet_fingerprints_and_issued_snapshot(api
                        for section in before["sections"] for row in section["checks"]],
             "release": {"released": before["item"]["released"], "released_at": before["item"]["released_at"],
                         "released_by": before["item"]["released_by"]},
-            "release_errors": [], "structural": _legacy_structure(before["records"]), "child_packets": [],
+            "release_errors": [], "structural": expected_structure, "child_packets": [],
         }
     assert before["fingerprint"] == dossier._digest(legacy_basis)
     unrelated = spool(api, "PARTS-OTHER-BOM", project="PARTS-UNRELATED-PROJECT")

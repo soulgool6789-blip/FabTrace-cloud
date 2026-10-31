@@ -616,6 +616,9 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
                 'source_document': _metadata(source_document, doc_set),
                 'isometric_document': drawing})
         try:
+            from spool_receiving import source_changed
+            for plan in plans:
+                source_changed(s, scope, plan['target_id'], user.badge, 'Reviewed drawing/BOM package saved: ' + reason)
             s.commit()
         except IntegrityError:
             s.rollback()

@@ -7,6 +7,7 @@ each material piece and every correction belong to that exact spool ID.
 """
 from copy import deepcopy
 from datetime import timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import hashlib
 import json
@@ -102,6 +103,7 @@ class TraceabilityIn(Input):
     expected_version: int = Field(ge=0, le=2147483646, strict=True)
     reason: str = Field(min_length=4, max_length=3000)
     materials: list[MaterialIn] = Field(min_length=1, max_length=500)
+    expected_bom_sha256: str = Field(default='', max_length=64)
 
     @model_validator(mode='after')
     def unique_pieces(self):
@@ -120,6 +122,10 @@ def _definition(number):
     result.update(catalog_sha256=_CATALOG_HASH, line_count=len(row['lines']),
                   total_pieces=sum(line['quantity'] for line in row['lines']))
     result['source_workbook']['download_url'] = '/api/spool-boms/workbooks/643-777-rev2.xlsx'
+    result['_source'] = {'kind': 'catalog', 'document_id': None,
+        'sha256': result['source_workbook']['sha256'], 'catalog_sha256': _CATALOG_HASH,
+        'filename': result['source_workbook']['filename'], 'revision': result['revision'],
+        'download_url': result['source_workbook']['download_url'], 'structured': True}
     return result
 
 
@@ -136,29 +142,112 @@ def requirement_bom_summary(requirement):
 
 
 def item_bom_summary(item, s=None):
-    if item.kind != 'Spool':
+    from spool_receiving import is_physical_spool, physical_spool_number
+    if s is None or not is_physical_spool(s, item):
         return None
-    trace = s.get(SpoolBomTrace, item.id) if s is not None else None
-    definition = trace.definition if trace else _definition(item.google_part_number)
-    if trace and _key(item.google_part_number or '') != _key(trace.spool_number):
-        return None
-    return _descriptor(definition, 'spools', item.id)
-
-
-def guard_spool_bom_identity(s, item):
     trace = s.get(SpoolBomTrace, item.id)
-    if trace and (item.kind != 'Spool' or _key(item.google_part_number or '') != _key(trace.spool_number)):
+    return {'api_url': '/api/spool-boms/spools/' + quote(item.id, safe=''),
+        'item_id': item.id, 'spool_number': physical_spool_number(s, item),
+        'catalog_id': trace.catalog_id if trace else '',
+        'revision': trace.definition.get('revision', '') if trace else '',
+        'line_count': len(trace.definition.get('lines', [])) if trace else 0}
+
+
+def guard_spool_bom_identity(s, item, values=None):
+    from spool_receiving import is_physical_spool, physical_spool_number
+    trace = s.get(SpoolBomTrace, item.id)
+    if trace and (not is_physical_spool(s, item) or _key(physical_spool_number(s, item, values)) != _key(trace.spool_number)):
         raise HTTPException(409, 'This spool has recorded material traceability. Its saved BOM spool number must be retained.')
 
 
 def _piece_definitions(definition):
     result = []
+    if not definition or not definition.get('traceable', True):
+        return result
     for line in definition['lines']:
         for number in range(1, line['quantity'] + 1):
-            result.append({'piece_key': f'{line["item"]}-{number}', 'item': line['item'],
+            result.append({'piece_key': f'{line.get("piece_key_prefix", line["item"])}-{number}', 'item': line['item'],
                 'piece_number': number, 'pieces_on_line': line['quantity'],
-                **{key: line[key] for key in ('tas_ln_number', 'description', 'material', 'length_inches', 'length_display')}})
+                **{key: line.get(key, '') for key in ('tas_ln_number', 'description', 'material', 'length_inches', 'length_display')},
+                'part_number': line.get('part_number', line.get('tas_ln_number', '')),
+                'size': line.get('size', ''), 'unit': line.get('unit', 'EA')})
     return result
+
+
+def _source_hash(source):
+    stable = {key: source.get(key) for key in ('kind', 'document_id', 'sha256', 'catalog_sha256')} if source else None
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _uploaded_definition(document, context):
+    bom = document.bom or {}
+    if not bom.get('lines'):
+        return None
+    lines, blockers, total = [], [], 0
+    for index, source in enumerate(bom['lines'], 1):
+        quantity = source.get('quantity')
+        try:
+            value = Decimal(str(quantity))
+            whole = value.is_finite() and value > 0 and value == value.to_integral_value() and value <= 500
+        except (InvalidOperation, ValueError):
+            whole = False
+        unit = str(source.get('unit') or 'EA').strip()
+        if not whole or _key(unit) not in ('ea', 'each', 'pc', 'pcs', 'piece', 'pieces', 'no', 'nos'):
+            blockers.append(f'BOM line {index}: confirm a positive whole-piece quantity and piece unit before material traceability. The source quantity was retained unchanged.')
+        safe_quantity = int(value) if whole else quantity
+        if whole:
+            total += safe_quantity
+        prefix = 'L' + hashlib.sha256(f'{document.id}:{document.sha256}:{index}'.encode()).hexdigest()[:20]
+        lines.append({**deepcopy(source), 'quantity': safe_quantity, 'piece_key_prefix': prefix,
+            'tas_ln_number': str(source.get('part_number') or ''),
+            'length_display': str(source.get('length') or ''), 'length_inches': None,
+            'unit': unit, 'item': str(source.get('item') or index)})
+    if total > 500:
+        blockers.append('The BOM exceeds the 500-piece material-register limit. Review a smaller explicit physical-piece scope; quantities were not rounded or truncated.')
+    metadata = _document_source(document)
+    return {'catalog_id': 'uploaded:' + document.id, 'spool_number': context['spool_number'],
+        'revision': document.revision, 'lines': lines, 'line_count': len(lines),
+        'total_pieces': total if not blockers else None, 'traceable': not blockers,
+        'trace_blockers': blockers, '_source': metadata,
+        'source_workbook': {'filename': document.filename, 'sha256': document.sha256,
+                            'download_url': metadata['download_url']}}
+
+
+def _document_source(document):
+    return {'kind': 'uploaded', 'document_id': document.id, 'sha256': document.sha256,
+        'filename': document.filename, 'revision': document.revision,
+        'structured': bool((document.bom or {}).get('lines')),
+        'download_url': '/api/spool-documents/files/' + quote(document.id, safe='') + '?download=1'}
+
+
+def physical_bom_state(s, item_id):
+    """Current/pinned source and physical rows without receiving projection recursion."""
+    from spool_documents import _target, _effective
+    context, item, requirement = _target(s, 'spools', item_id)
+    trace = s.get(SpoolBomTrace, item.id)
+    _, _, _, documents, _, _ = _effective(s, 'spools', item.id, requirement)
+    document = documents.get('bom')
+    current_definition = _uploaded_definition(document, context) if document else _definition(context['spool_number'])
+    current = _document_source(document) if document else deepcopy((current_definition or {}).get('_source'))
+    definition = deepcopy(trace.definition) if trace else current_definition
+    pinned = deepcopy((definition or {}).get('_source')) if trace else None
+    if trace and not pinned:
+        # Existing 777 trace definitions predate this additive source metadata.
+        workbook = definition.get('source_workbook') or {}
+        pinned = {'kind': 'catalog', 'document_id': None, 'sha256': trace.source_sha256,
+            'catalog_sha256': definition.get('catalog_sha256', _CATALOG_HASH),
+            'filename': workbook.get('filename', ''), 'revision': definition.get('revision', ''),
+            'download_url': workbook.get('download_url', ''), 'structured': True}
+    changed = bool(trace and _source_hash(pinned) != _source_hash(current))
+    blockers = (current_definition or {}).get('trace_blockers', [])
+    adoptable = bool(current_definition and current_definition.get('traceable', True))
+    return {'item': item, 'trace': trace, 'definition': definition,
+        'current_definition': current_definition, 'context': context,
+        'materials': _materials(s, item.id, definition),
+        'source_status': {'current': current, 'pinned': pinned, 'changed': changed,
+            'adoptable': adoptable, 'can_adopt': False,
+            'blocked_reason': ' '.join(blockers) if blockers else '' if adoptable else 'Upload or extract a structured whole-piece BOM.',
+            'expected_bom_sha256': _source_hash(current)}}
 
 
 def _stamp(value):
@@ -204,7 +293,8 @@ def spool_bom_scope_basis(s, item_id, seen=None):
     item = s.get(Item, item_id)
     if item is None:
         return []
-    if item.kind == 'Spool':
+    from spool_receiving import is_physical_spool
+    if is_physical_spool(s, item):
         basis = spool_bom_basis(s, item.id)
         return [{'spool_id': item.id, **basis}] if basis else []
     if item.kind != 'Assembly':
@@ -230,40 +320,37 @@ def _locked_reason(s, item):
 
 
 def _spool(s, item_id):
-    item = s.get(Item, item_id)
-    if item is None or item.kind != 'Spool':
-        raise HTTPException(404, 'Spool not found')
-    require_active_item(s, item.id)
-    guard_registered_spool(s, item)
-    guard_spool_bom_identity(s, item)
-    trace = s.get(SpoolBomTrace, item.id)
-    definition = deepcopy(trace.definition) if trace else _definition(item.google_part_number)
-    if definition is None:
-        raise HTTPException(404, 'No approved bill of materials is linked to this spool number')
-    registration = s.get(OrderSpool, item.id)
-    parent_id = effective_parent_id(s, item.id)
-    mapping = s.get(OrderAssembly, parent_id) if parent_id else None
-    group = s.get(OrderGpn, mapping.gpn_id) if mapping else None
-    order = s.get(PurchaseOrder, item.project)
-    context = {'kind': 'spool', 'item_id': item.id,
-        'requirement_id': registration.requirement_id if registration else None,
-        'assembly_id': parent_id, 'assembly_number': group.gpn if group else None,
-        'project_id': item.project, 'purchase_order': order.purchase_order if order else None}
-    return item, trace, definition, context
+    state = physical_bom_state(s, item_id)
+    return state['item'], state['trace'], state['definition'], state['context']
 
 
 def _spool_detail(s, item_id, user):
-    item, trace, definition, context = _spool(s, item_id)
-    materials = _materials(s, item.id, definition)
+    from spool_receiving import _physical_summary, mtr_detail
+    state = physical_bom_state(s, item_id)
+    item, trace, definition, context = (state[key] for key in ('item', 'trace', 'definition', 'context'))
+    materials = state['materials']
     locked = _locked_reason(s, item)
     history = list(s.scalars(select(SpoolBomEvent).where(SpoolBomEvent.spool_id == item.id)
                   .order_by(SpoolBomEvent.version.desc()).limit(50)))
-    return {**definition, 'context': context, 'traceability': {
+    source_status = {**state['source_status'], 'can_adopt': bool(trace and state['source_status']['changed']
+        and state['source_status']['adoptable'] and _can_edit(user) and not locked)}
+    base = definition or {'spool_number': context['spool_number'], 'revision': '', 'lines': [],
+                           'line_count': 0, 'total_pieces': None, 'traceable': False}
+    return {**base, 'context': context, 'bom_available': definition is not None,
+        'source_status': source_status, 'arrival': _physical_summary(s, item, user, history=True),
+        'mtr_documents': mtr_detail(s, item, user), 'traceability': {
         'configured': trace is not None, 'version': trace.version if trace else 0,
-        'editable': _can_edit(user) and not locked, 'locked_reason': locked,
-        'complete': all(row['heat_number'] and row['mtr_reference'] for row in materials),
+        'editable': bool(_can_edit(user) and not locked and definition and definition.get('traceable', True)
+                         and not source_status['changed']),
+        'locked_reason': locked or ('Adopt the current BOM before editing its material register.' if source_status['changed'] else source_status['blocked_reason']),
+        'complete': bool(trace and materials and not source_status['changed']
+                         and all(row['heat_number'] and row['mtr_reference'] for row in materials)),
         'materials': materials, 'history': [{'version': event.version, 'actor': event.actor,
-            'at': _stamp(event.at), 'reason': event.reason, 'changes': event.changes} for event in history]}}
+            'at': _stamp(event.at), 'reason': event.reason,
+            'detail_url': f'/api/spool-boms/spools/{quote(item.id, safe="")}/history/{event.version}',
+            'changes': [{key: value for key, value in change.items()
+                         if key not in ('before_definition', 'before_materials', 'after_definition')}
+                        for change in event.changes]} for event in history]}}
 
 
 @router.get('/workbooks/643-777-rev2.xlsx')
@@ -313,13 +400,23 @@ def save_traceability(item_id: str, data: TraceabilityIn,
         raise HTTPException(403, 'Only material coordinators, supervisors, administrators and QA/QC can update material traceability.')
     lock_topology(s)
     lock_item(s, item_id)
-    item, trace, definition, _ = _spool(s, item_id)
+    state = physical_bom_state(s, item_id)
+    item, trace, definition = state['item'], state['trace'], state['definition']
     locked = _locked_reason(s, item)
     if locked:
         raise HTTPException(409, locked)
     version = trace.version if trace else 0
     if data.expected_version != version:
         raise HTTPException(409, 'Material traceability has changed. Reload the saved BOM before applying your changes.')
+    if not definition or not definition.get('traceable', True):
+        raise HTTPException(409, state['source_status']['blocked_reason'])
+    if state['source_status']['changed']:
+        raise HTTPException(409, 'The current BOM changed. Adopt its new revision before editing traceability.')
+    # Older catalog-only clients remain safe because that in-process source is
+    # immutable. Uploaded BOMs always require the exact reviewed source token.
+    if ((data.expected_bom_sha256 or state['source_status']['current']['kind'] == 'uploaded')
+            and data.expected_bom_sha256 != state['source_status']['expected_bom_sha256']):
+        raise HTTPException(409, 'The BOM source changed. Reload and review the current material rows.')
     pieces = _piece_definitions(definition)
     incoming = {row.piece_key: row.model_dump(exclude={'piece_key'}) for row in data.materials}
     if set(incoming) != {row['piece_key'] for row in pieces}:
@@ -359,5 +456,70 @@ def save_traceability(item_id: str, data: TraceabilityIn,
         at=now, reason=data.reason, changes=changes))
     audit(s, item.id, user.badge, 'SPOOL_BOM_TRACEABILITY_UPDATED', {
         'catalog_id': trace.catalog_id, 'version': trace.version, 'reason': data.reason, 'changes': changes})
+    from spool_receiving import source_changed
+    source_changed(s, 'spools', item.id, user.badge, 'Material traceability changed: ' + data.reason)
+    result = _spool_detail(s, item.id, user)
     _commit(s)
-    return _spool_detail(s, item.id, user)
+    return result
+
+
+class AdoptBomIn(Input):
+    expected_version: int = Field(ge=1, le=2147483646, strict=True)
+    expected_bom_sha256: str = Field(min_length=64, max_length=64)
+    reason: str = Field(min_length=4, max_length=3000)
+
+
+@router.post('/spools/{item_id}/adopt-bom')
+def adopt_bom(item_id: str, data: AdoptBomIn, user: Employee = Depends(auth), s: Session = Depends(db)):
+    if not _can_edit(user):
+        raise HTTPException(403, 'Your position cannot adopt a physical spool BOM.')
+    lock_topology(s)
+    lock_item(s, item_id)
+    state = physical_bom_state(s, item_id)
+    item, trace, definition = state['item'], state['trace'], state['current_definition']
+    if _locked_reason(s, item):
+        raise HTTPException(409, _locked_reason(s, item))
+    if not trace or trace.version != data.expected_version:
+        raise HTTPException(409, 'The physical BOM register changed. Reload before adopting a new revision.')
+    if data.expected_bom_sha256 != state['source_status']['expected_bom_sha256']:
+        raise HTTPException(409, 'The uploaded BOM source changed. Reload before adopting its revision.')
+    if not state['source_status']['changed'] or not state['source_status']['adoptable']:
+        raise HTTPException(409, state['source_status']['blocked_reason'] or 'There is no different valid BOM to adopt.')
+    before_definition, before_materials = deepcopy(trace.definition), deepcopy(state['materials'])
+    changes = [{'type': 'bom_adopted', 'before_source': state['source_status']['pinned'],
+        'after_source': state['source_status']['current'], 'before_definition': before_definition,
+        'before_materials': before_materials, 'after_definition': deepcopy(definition),
+        'previous_material_count': len(before_materials),
+        'new_material_count': len(_piece_definitions(definition)),
+        'traceability_reset': True}]
+    for row in s.scalars(select(SpoolBomMaterial).where(SpoolBomMaterial.spool_id == item.id)):
+        s.delete(row)
+    s.flush()
+    now = utcnow()
+    trace.catalog_id, trace.spool_number = definition['catalog_id'], definition['spool_number']
+    trace.source_sha256, trace.definition = definition['source_workbook']['sha256'], deepcopy(definition)
+    trace.version += 1
+    trace.updated_by, trace.updated_at = user.badge, now
+    for piece in _piece_definitions(definition):
+        s.add(SpoolBomMaterial(spool_id=item.id, piece_key=piece['piece_key'],
+            **{key: '' for key in MATERIAL_FIELDS}, updated_by=user.badge, updated_at=now))
+    s.add(SpoolBomEvent(spool_id=item.id, version=trace.version, actor=user.badge,
+        at=now, reason=data.reason, changes=changes))
+    audit(s, item.id, user.badge, 'SPOOL_BOM_ADOPTED', {'version': trace.version, 'reason': data.reason,
+        'before_source': state['source_status']['pinned'], 'after_source': state['source_status']['current'],
+        'material_traceability_reset': True})
+    from spool_receiving import source_changed
+    source_changed(s, 'spools', item.id, user.badge, 'New physical BOM adopted: ' + data.reason)
+    result = _spool_detail(s, item.id, user)
+    _commit(s)
+    return result
+
+
+@router.get('/spools/{item_id}/history/{version}')
+def trace_history(item_id: str, version: int, user: Employee = Depends(auth), s: Session = Depends(db)):
+    _spool(s, item_id)
+    event = s.get(SpoolBomEvent, (item_id, version))
+    if event is None:
+        raise HTTPException(404, 'Material history revision not found.')
+    return {'spool_id': item_id, 'version': event.version, 'actor': event.actor,
+        'at': _stamp(event.at), 'reason': event.reason, 'changes': event.changes}

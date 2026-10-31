@@ -5,6 +5,7 @@ spool requirements describe quantities per assembly. These additive planning
 records never create physical IDs, custody, travelers, work or QA acceptance.
 """
 from collections import defaultdict
+from itertools import groupby
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field, model_validator
@@ -108,6 +109,95 @@ class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
     reason: str = Field(min_length=4, max_length=3000)
 
 
+def _requirement_weld_progress(s, requirements, plans, weld_counts):
+    """Current-cycle weld completion for exact registered physical copies.
+
+    Required copies that have not been registered remain in the denominator.
+    A physical identity, aggregate counter or old repair cycle cannot create
+    completed individual welds. These are read-only counts, not QA acceptance.
+    """
+    from order_spools import OrderSpool
+    from tracking import SpoolPlan, Weld, WeldWork
+
+    by_id = {row.id: row for row in requirements}
+    quantities = {row.gpn_id: row.assembly_quantity for row in plans}
+    result = {}
+    for requirement in requirements:
+        count = weld_counts[requirement.id]
+        required = requirement.quantity_per_assembly * quantities.get(requirement.gpn_id, 0)
+        result[requirement.id] = {
+            'defined': count is not None, 'percent': 0 if count else None,
+            'completed': 0, 'total': count * required if count is not None else None,
+            'registered_spools': 0, 'required_spools': required, 'scope_warning': '',
+            'basis': 'Completed current-cycle individual welds across the required physical spools; arrival QA and final release are separate.'}
+    if not by_id:
+        return result
+
+    registered, warnings = {}, defaultdict(set)
+    records = s.execute(select(
+        OrderSpool.item_id, OrderSpool.requirement_id, OrderSpool.assembly_id,
+        Item.kind, Item.project, Item.google_part_number,
+        OrderAssembly.gpn_id, OrderGpn.project_id,
+        SpoolPlan.project_id.label('plan_project_id'),
+        SpoolPlan.assembly_id.label('plan_assembly_id'), SpoolPlan.planned_welds)
+        .join(Item, Item.id == OrderSpool.item_id)
+        .join(OrderAssembly, OrderAssembly.item_id == OrderSpool.assembly_id)
+        .join(OrderGpn, OrderGpn.id == OrderAssembly.gpn_id)
+        .outerjoin(SpoolPlan, SpoolPlan.item_id == Item.id)
+        .where(OrderSpool.requirement_id.in_(by_id), item_not_removed(Item.id),
+               item_not_removed(OrderSpool.assembly_id)))
+    for row in records:
+        requirement = by_id[row.requirement_id]
+        if (row.kind != 'Spool' or row.gpn_id != requirement.gpn_id
+                or row.project != row.project_id
+                or _key(row.google_part_number or '') != requirement.normalized_number):
+            warnings[row.requirement_id].add('A registered spool has inconsistent order or spool identity.')
+            continue
+        result[row.requirement_id]['registered_spools'] += 1
+        registered[row.item_id] = row
+        declared = weld_counts[row.requirement_id]
+        if declared is not None and (row.planned_welds != declared
+                or row.plan_project_id != row.project_id
+                or row.plan_assembly_id != row.assembly_id):
+            warnings[row.requirement_id].add('A physical spool needs its declared weld plan checked.')
+
+    defined = defaultdict(int)
+    if registered:
+        # Stream work grouped by weld. This avoids one query per weld and does
+        # not load full work history, material details or document bytes.
+        query = (select(Weld.id, Weld.item_id, Weld.completed_at,
+                        Weld.required_operations, WeldWork.operation)
+            .join(OrderSpool, OrderSpool.item_id == Weld.item_id)
+            .outerjoin(WeldWork, (WeldWork.weld_id == Weld.id) & (WeldWork.cycle == Weld.cycle))
+            .where(OrderSpool.requirement_id.in_(by_id),
+                   item_not_removed(Weld.item_id), item_not_removed(OrderSpool.assembly_id))
+            .order_by(Weld.item_id, Weld.id))
+        for _, group in groupby(s.execute(query).yield_per(1000), key=lambda row: row.id):
+            first = next(group)
+            row = registered.get(first.item_id)
+            if row is None:
+                continue
+            defined[first.item_id] += 1
+            operations = {first.operation, *(work.operation for work in group)}
+            required = set(first.required_operations or [])
+            if first.completed_at is not None and required and 'complete' in operations and required <= operations:
+                result[row.requirement_id]['completed'] += 1
+        for item_id, row in registered.items():
+            count = weld_counts[row.requirement_id]
+            if count is not None and defined[item_id] != count:
+                warnings[row.requirement_id].add('The individual weld records do not match the declared weld count.')
+
+    for identity, progress in result.items():
+        if progress['registered_spools'] > progress['required_spools']:
+            warnings[identity].add('Registered physical spools exceed the required quantity.')
+        progress['scope_warning'] = ' '.join(sorted(warnings[identity]))
+        if progress['scope_warning'] or not progress['total']:
+            progress['percent'] = None
+        else:
+            progress['percent'] = round(min(100, progress['completed'] / progress['total'] * 100), 1)
+    return result
+
+
 def requirements_by_gpn(s, gpn_ids):
     """Load declared requirements once; callers select active/historical groups."""
     from spool_boms import requirement_bom_summary
@@ -129,6 +219,8 @@ def requirements_by_gpn(s, gpn_ids):
     # reload without loading PDF bytes or every retained material table.
     documents = defaultdict(set)
     requirement_ids = [line.id for group in lines.values() for line in group]
+    weld_progress = _requirement_weld_progress(
+        s, [line for group in lines.values() for line in group], plans, weld_counts)
     if requirement_ids:
         for requirement_id, kind in s.execute(select(
                 SpoolDocumentSet.requirement_id, SpoolDocument.kind)
@@ -141,6 +233,7 @@ def requirements_by_gpn(s, gpn_ids):
                    'quantity_per_assembly': line.quantity_per_assembly,
                    'welds_per_spool': weld_counts[line.id],
                    'bom': requirement_bom_summary(line),
+                   'weld_progress': weld_progress[line.id],
                    'documents': {kind: kind in documents[line.id] for kind in ('bom', 'isometric')},
                    'total_quantity': line.quantity_per_assembly * plan.assembly_quantity}
                   for line in lines[plan.gpn_id]]

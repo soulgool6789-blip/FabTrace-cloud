@@ -161,3 +161,22 @@ def test_actual_multipart_parser_is_never_called_for_oversized_chunked_body(api,
         content=iter([b'--test-boundary\r\n', b'x' * 2048]))
     assert response.status_code == 413, response.text
     assert calls == []
+
+
+@pytest.mark.parametrize('suffix', ['mtr-preview', 'mtr-documents'])
+def test_mtr_uploads_are_bounded_before_auth_and_multipart_parsing(api, monkeypatch, suffix):
+    from starlette.formparsers import MultiPartParser
+
+    monkeypatch.setattr(upload_limits, 'MAX_REQUEST_BYTES', 1024)
+    calls = []
+
+    async def unexpected_parse(self):
+        calls.append(True)
+        raise AssertionError('Oversized MTR reached multipart parsing')
+
+    monkeypatch.setattr(MultiPartParser, 'parse', unexpected_parse)
+    response = api.request('POST', f'/api/spool-boms/spools/SYNTHETIC-SPOOL/{suffix}', role=None,
+        headers={'Content-Type': 'multipart/form-data; boundary=test-boundary'},
+        content=iter([b'--test-boundary\r\n', b'x' * 2048]))
+    assert response.status_code == 413, response.text
+    assert calls == []

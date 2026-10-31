@@ -7,7 +7,14 @@ import pytest
 from sqlalchemy import select
 
 from conftest import BADGES
-from tracking_helpers import add_weld, make_spool, ok, spool
+from tracking_helpers import add_weld, make_spool as pending_spool, ok, spool
+
+
+def make_spool(api, *args, **kwargs):
+    from receiving_helpers import accept_arrival
+    item_id = pending_spool(api, *args, **kwargs)
+    accept_arrival(api, item_id)
+    return item_id
 
 
 class Clock:

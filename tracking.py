@@ -465,6 +465,17 @@ def _snapshot(s, item_id):
     return value if value and value['item_id'] == item_id else None
 
 
+def _arrival_errors(s, item):
+    """Read arrival evidence once per scoped response, never across a write."""
+    from spool_receiving import receiving_errors
+    snapshot = _snapshot(s, item.id)
+    if snapshot is None:
+        return receiving_errors(s, item)
+    if 'receiving_errors' not in snapshot:
+        snapshot['receiving_errors'] = receiving_errors(s, item)
+    return list(snapshot['receiving_errors'])
+
+
 def _welds(s, item_id):
     snapshot = _snapshot(s, item_id)
     if snapshot:
@@ -710,7 +721,7 @@ def tracking_release_errors(s, item):
     plan = s.get(SpoolPlan, item.id)
     if not plan:
         return ['Item is not enrolled in weld tracking']
-    errors = []
+    errors = _arrival_errors(s, item)
     project = s.get(Project, plan.project_id)
     if not project:
         errors.append('Project assignment missing')
@@ -809,15 +820,16 @@ def requirement_dict(s, req, user=None):
 @_snapshot_response
 def weld_dict(s, weld, user=None):
     out = asdict(weld, WELD_KEYS)
+    arrival_blockers = _arrival_errors(s, s.get(Item, weld.item_id))
     if user is not None:
         from removals import item_is_removed, removal_summary
         active = not item_is_removed(s, weld.item_id)
-        out['allowed_operations'] = list(WELD_OPERATIONS.get(user.role, ())) if active else []
+        out['allowed_operations'] = list(WELD_OPERATIONS.get(user.role, ())) if active and not arrival_blockers else []
         out['removal'] = removal_summary(s, 'item', weld.item_id)
         out['can_mutate'] = active
     out['production_complete'] = _production_complete(s, weld)
     out['qa_accepted'] = _qa_accepted(s, weld)
-    out['blockers'] = _weld_blockers(s, weld)
+    out['blockers'] = list(dict.fromkeys(_weld_blockers(s, weld) + arrival_blockers))
     out['requirements'] = [requirement_dict(s, r, user) for r in _requirements(s, weld.item_id, weld.id)]
     snapshot = _snapshot(s, weld.item_id)
     out['work'] = [asdict(row, 'id weld_id cycle operation notes actor at'.split())
@@ -840,13 +852,14 @@ def spool_dict(s, item, user=None):
     from production import with_process_permissions
     from removals import item_is_removed, removal_summary
     from order_spools import registered_spool
+    from spool_receiving import receiving_summary
     registration = registered_spool(s, item.id)
     parts = parts_summary(s, item.id)
     return {
         **({'removal': removal_summary(s, 'item', item.id), 'can_mutate': not item_is_removed(s, item.id)} if user is not None else {}),
         **({'parts': parts} if parts else {}),
         'item': {**asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
-                 'release_control': release_summary(s, item)},
+                 'release_control': release_summary(s, item), 'receiving': receiving_summary(s, item, user)},
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
         'registered_assembly_id': registration.assembly_id if registration else None,
         'summary': tracking_summary(s, item),

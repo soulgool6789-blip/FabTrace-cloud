@@ -149,7 +149,9 @@ def project_rows(s, project_id=None):
         try:
             for item in items:
                 plan, flow = all_plans.get(item.id), flows.get(item.id)
-                errors = []
+                from spool_receiving import receiving_errors, receiving_summary
+                arrival = receiving_summary(s, item)
+                errors = receiving_errors(s, item)
                 release_control = release_summary(s, item)
                 if release_control['active_override']:
                     errors.append('Administrative release is recorded; ordinary QA release has not been verified')
@@ -195,6 +197,8 @@ def project_rows(s, project_id=None):
                     'released': bool(item.released), 'location': item.location, 'handler': item.handler,
                     'release_mode': release_control['mode'], 'release_label': release_control['label'],
                     'administrative_release': release_control['active_override'],
+                    'receiving': {key: arrival.get(key) for key in
+                                  ('required', 'status', 'can_proceed', 'version', 'blockers', 'latest')},
                     'updated_at': _stamp(item.updated_at)}
                 from parts import parts_summary
                 parts = parts_summary(s, item.id)

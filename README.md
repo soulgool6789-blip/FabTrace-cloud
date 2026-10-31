@@ -1,5 +1,15 @@
 # FabTrace Cloud
 
+## Individual spool materials and arrival QA/QC
+
+Release `2026.10.31-spool-arrival.1` replaces the BOM shortcut beneath **Welds per spool** with recorded weld progress. It counts completed current-cycle individual welds against all required physical copies. Unregistered copies stay in the denominator; undeclared or conflicting weld scope does not claim a percentage. **BOM & drawings** remains beside the spool identity.
+
+Open a physical spool's **Materials & QA/QC** to view its own BOM, enter each material piece's heat number and MTR reference, upload/view PDF or scanned MTR pages, and record its arrival inspection. The unique physical spool ID remains visible even when several spools share a drawing number. Setup BOMs may supply their common reference, while physical material entries and QA decisions remain independent. An individual BOM upload overrides only that physical spool.
+
+Every physical spool starts with **QA/QC required**. QA/QC or an administrator records **Pass** or **Fail**, a reference, notes and the five checks: identity, BOM, heat numbers, MTRs and condition. A current Pass requires a saved whole-piece material register with heat and MTR references for every piece. A Fail can record missing documents or incorrect material immediately. Until a current Pass exists, spool production, assembly readiness and release are blocked. An administrator's release override cannot bypass this arrival requirement.
+
+Changing the material register, BOM or source evidence makes an earlier Pass require reinspection; affected running timers pause. Adopting a replacement BOM explicitly starts its material entries blank and retains the previous definition, entries and history. MTR versions and arrival decisions are retained as immutable history. Existing work and release records remain unchanged; historical work does not imply an arrival Pass. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for the receiving workflow.
+
 ## Simple orders and automatic file recognition
 
 Release `2026.10.31-simple-uploads.1` reduces the main menu to everyday work: **Orders**, **Production progress**, **Scan & transfer**, **Process flow**, and **Guide**. Specialist screens, including Projects & welds, Spool parts, Job Packets and administrator Excel exports, are available in **More tools**. Each screen has contextual **Back** navigation; order setup preserves entered values when moving between steps or returning to an unfinished setup.

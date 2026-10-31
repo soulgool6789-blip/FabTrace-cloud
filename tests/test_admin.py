@@ -35,6 +35,8 @@ def disposition_body(api, item_id, **values):
 
 
 def release(api, item_id, **values):
+    from receiving_helpers import ensure_scope_arrival
+    ensure_scope_arrival(api, item_id)
     return ok(api.post(f"{ROOT}/items/{item_id}/release", disposition_body(api, item_id, **values)))
 
 
@@ -213,6 +215,8 @@ def test_admin_release_records_explicit_route_disposition_without_completed_work
 
 def test_admin_override_preserves_individual_weld_records_and_does_not_approve_qa_packet(api):
     item_id = create_item(api, "ADMIN-WELD-FACTS", kind="Spool", planned=1)
+    from receiving_helpers import accept_arrival
+    accept_arrival(api, item_id)
     add_weld(api, item_id)
     ok(api.post(f"/api/tracking/spools/{item_id}/holds", {"reason": "Synthetic open engineering disposition"}), 201)
     configure(api)

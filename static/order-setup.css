@@ -52,6 +52,13 @@
 #orderSetupPage th:first-child,#orderSetupPage td:first-child{width:37%;font-weight:700}
 #orderSetupPage th:not(:first-child),#orderSetupPage td:not(:first-child){text-align:right}
 #orderSetupPage .os-assembly-actions{margin-top:20px}
+#orderSetupPage .os-weld-progress{display:grid;gap:5px;margin-top:9px;text-align:left;min-width:0;font-size:11px;line-height:1.4;color:#466b83}
+#orderSetupPage .os-weld-progress>span{font-size:10px;font-weight:500}
+#orderSetupPage .os-weld-progress progress{display:block;width:100%;height:9px;accent-color:#1576a5}
+#orderSetupPage .os-weld-progress>strong{font-size:11px;font-weight:650}
+#orderSetupPage .os-weld-progress>small{font-size:10px;color:#6b8090}
+#orderSetupPage .os-weld-progress .os-weld-warning{color:#865d20}
+#orderSetupPage .os-weld-unknown{color:#7b8290}
 #orderSetupPage .os-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:0;list-style:none;gap:12px;margin:0 0 26px}
 #orderSetupPage .os-steps li{display:flex;align-items:center;gap:11px;padding:14px;border:1px solid #d4e0ea;border-radius:10px;background:#f0f4f8;color:#8291a0;min-width:0}
 #orderSetupPage .os-steps li>span{flex:0 0 31px;line-height:31px;text-align:center;font-size:14px;background:#e0e7ee;border-radius:50%;font-weight:750}

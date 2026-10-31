@@ -253,6 +253,8 @@ def with_process_permissions(s, item_id, snapshot, user):
     from flow import FlowPlan
     item = s.get(Item, item_id)
     flow = s.get(FlowPlan, item_id)
+    from spool_receiving import receiving_errors
+    arrival_blockers = receiving_errors(s, item) if item is not None else []
     keys = PROCESS_KEYS.get(user.role, ())
     choices = [dict(row) for row in PROCESS_CATALOG if row['key'] in keys]
     if 'custom' in keys:
@@ -260,18 +262,26 @@ def with_process_permissions(s, item_id, snapshot, user):
     current, actions = snapshot['current'], []
     if flow is not None:
         choices = []
-        if (flow.status == 'active' and current is not None and
-                can_control_process(user, current['process_key']) and
+        clock_key = current['process_key'] if current else f'clm_{flow.current_step:02d}' if flow.current_step else ''
+        if (flow.status == 'active' and can_control_process(user, clock_key) and
                 (not item.released or flow.current_step in (16, 23, 24))):
-            actions.append('pause' if snapshot['status'] == 'running' else 'resume')
+            if current is not None and snapshot['status'] == 'running':
+                actions.append('pause')
+            elif not arrival_blockers:
+                actions.append('resume')
     elif item is not None and not item.released:
-        if current is None and choices:
+        if current is None and choices and not arrival_blockers:
             actions.append('start')
         elif current is not None and can_control_process(user, current['process_key']):
-            if any(row['key'] == 'custom' or row['key'] != current['process_key'] for row in choices):
+            if not arrival_blockers and any(row['key'] == 'custom' or row['key'] != current['process_key'] for row in choices):
                 actions.append('move')
-            actions.extend(('pause' if snapshot['status'] == 'running' else 'resume', 'finish'))
-    return {**snapshot, 'permissions': {'allowed_actions': actions, 'allowed_processes': choices}}
+            if snapshot['status'] == 'running':
+                actions.append('pause')
+            elif not arrival_blockers:
+                actions.append('resume')
+            actions.append('finish')
+    return {**snapshot, 'receiving_blockers': arrival_blockers,
+            'permissions': {'allowed_actions': actions, 'allowed_processes': choices if not arrival_blockers else []}}
 
 
 def compact_process_summary(snapshot):
@@ -310,6 +320,24 @@ def finish_on_release(s, item, actor, at):
         'Process timing closed automatically by final release.', at, snapshot['version'])
 
 
+def pause_receiving_scope(s, item, actor, at, reason):
+    """Stop active work after arrival evidence changes; caller owns the transaction."""
+    from order_spools import effective_parent_id
+    from spool_receiving import receiving_errors
+    at, seen = _utc(at), set()
+    while item is not None and item.id not in seen:
+        seen.add(item.id)
+        if receiving_errors(s, item):
+            snapshot = process_snapshot(s, item.id, as_of=at)
+            current = snapshot['current']
+            if current is not None and snapshot['status'] == 'running':
+                _check_clock(snapshot, at)
+                _append_event(s, item, actor, 'pause', current['process_key'], current['process_name'],
+                              'Arrival QA blocks work: ' + reason, at, snapshot['version'])
+        parent_id = effective_parent_id(s, item.id)
+        item = s.get(Item, parent_id) if parent_id else None
+
+
 def sync_flow_process(s, item, actor, step, at, notes=''):
     """Use the existing process clock for each numbered traveler step.
 
@@ -326,6 +354,16 @@ def sync_flow_process(s, item, actor, step, at, notes=''):
         if current is not None:
             _append_event(s, item, actor, 'finish', current['process_key'], current['process_name'],
                           notes or 'Numbered process route completed.', at, snapshot['version'])
+        return
+    from spool_receiving import receiving_errors
+    if receiving_errors(s, item):
+        # Corrective routing and reopening remain available, but entering a
+        # correction must not record work while arrival acceptance is missing.
+        # A later explicit Resume starts the current step after QA passes it.
+        if current is not None:
+            _append_event(s, item, actor, 'finish', current['process_key'], current['process_name'],
+                          'Work timer stopped: current arrival QA Pass is required. ' + notes,
+                          at, snapshot['version'])
         return
     key = f"clm_{step['number']:02d}"
     name = f"{step['number']}. {step['title']}"
@@ -369,33 +407,43 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
             require_unreleased(item)
     else:
         require_unreleased(item)
+    if data.action in ('start', 'move', 'resume'):
+        from spool_receiving import require_receiving_pass
+        require_receiving_pass(s, item)
     at = _utc(utcnow())
     snapshot = process_snapshot(s, item_id, as_of=at)
     if data.expected_version != snapshot['version']:
         raise HTTPException(409, 'Process timing changed since you opened it; refresh and retry. No changes were saved.')
     _check_clock(snapshot, at)
     current = snapshot['current']
+    restart_flow = bool(flow is not None and data.action == 'resume' and current is None)
+    if restart_flow and not can_control_process(u, f'clm_{flow.current_step:02d}'):
+        raise HTTPException(403, 'Your assigned position cannot resume the current process step.')
     if current is not None and not can_control_process(u, current['process_key']):
         raise HTTPException(403, 'Your assigned position cannot control the current process timer.')
     if data.action in ('start', 'move') and not can_control_process(u, data.process_key):
         raise HTTPException(403, 'Your assigned position cannot start or move to that process.')
     if data.action == 'start' and current is not None:
         raise HTTPException(409, 'A process is already open; move it to the next process or finish it first')
-    if data.action != 'start' and current is None:
+    if data.action != 'start' and current is None and not restart_flow:
         raise HTTPException(409, 'No process is currently open; start a process first')
     if data.action == 'pause' and snapshot['status'] != 'running':
         raise HTTPException(409, 'The current process is already paused')
-    if data.action == 'resume' and snapshot['status'] != 'paused':
+    if data.action == 'resume' and snapshot['status'] != 'paused' and not restart_flow:
         raise HTTPException(409, 'The current process is not paused')
     if data.action in ('start', 'move'):
         key = data.process_key
         name = data.process_name if key == 'custom' else PROCESS_NAMES[key]
         if current and _process_identity(key, name) == _process_identity(current['process_key'], current['process_name']):
             raise HTTPException(409, 'This spool is already in that process; finish the current visit before starting another visit to the same process')
+    elif restart_flow:
+        from flow import STEP_BY_NUMBER
+        key, name = f'clm_{flow.current_step:02d}', f"{flow.current_step}. {STEP_BY_NUMBER[flow.current_step]['title']}"
     else:
         key, name = current['process_key'], current['process_name']
     try:
-        _append_event(s, item, u.badge, data.action, key, name, data.notes, at, snapshot['version'])
+        _append_event(s, item, u.badge, 'start' if restart_flow else data.action,
+                      key, name, data.notes, at, snapshot['version'])
         s.commit()
     except IntegrityError:
         s.rollback()

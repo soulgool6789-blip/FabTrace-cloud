@@ -164,6 +164,8 @@ def record_drawing_revision(api, item_id, *, project_id=PROJECT):
 
 
 def physical_release(api, item_id):
+    from receiving_helpers import ensure_scope_arrival
+    ensure_scope_arrival(api, item_id)
     inspect_dimensions(api, item_id)
     return ok(api.post(f"/api/items/{item_id}/release", {"reference": "TEST-DOSSIER-PHYSICAL-QA"}, role="inspector"))
 
@@ -171,6 +173,8 @@ def physical_release(api, item_id):
 def complete_packet(api, item_id, *, project_id=PROJECT, source=True, customer_shipping=False,
                     required_values=None, skip_checks=()):
     """Prepare explicit fixture evidence; this helper never issues a packet."""
+    from receiving_helpers import ensure_scope_arrival
+    ensure_scope_arrival(api, item_id)
     if source:
         signed(sign_source(api, project_id))
     required_values = required_values or {}
@@ -497,6 +501,8 @@ def test_material_change_invalidates_signed_pressure_but_routine_custody_does_no
 
 def test_new_physical_weld_work_stales_pressure_and_visual_cannot_waive_real_welds(api):
     item_id = make_project(api, planned=1)
+    from receiving_helpers import accept_arrival
+    accept_arrival(api, item_id)
     weld = add_weld(api, item_id)
     signed(sign_source(api))
     file = document(api, section="06")

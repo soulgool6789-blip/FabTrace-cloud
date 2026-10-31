@@ -176,11 +176,16 @@ def test_similar_numbers_do_not_receive_an_unrelated_bom(api, number):
     assert requirement.get('bom') is None
     generate(api, saved['order']['project_id'])
     row = labels(api, saved['order']['project_id'])['items'][0]
-    assert row.get('bom') is None
+    # Every physical spool can now open receiving, including a spool with no
+    # source BOM. Similar numbers still never acquire the 777 reference.
+    assert row['bom']['item_id'] == row['id']
     before = database_state(api)
     assert api.get(f'{ROOT}/requirements/{requirement["id"]}').status_code == 404
-    assert api.get(f'{ROOT}/spools/{row["id"]}').status_code == 404
-    assert ok(api.get('/api/items/' + row['id'])).get('bom') is None
+    physical = ok(api.get(f'{ROOT}/spools/{row["id"]}'))
+    assert not physical['bom_available'] and physical['lines'] == []
+    assert physical['spool_number'] == number
+    assert physical['arrival']['status'] == 'pending'
+    assert ok(api.get('/api/items/' + row['id']))['bom'] == row['bom']
     assert database_state(api) == before
 
 
@@ -375,10 +380,13 @@ def test_two_flange_heats_and_mtrs_persist_only_on_their_unique_physical_spool(a
     assert trace['history'][0]['version'] == 1 and trace['history'][0]['actor'] == BADGES['handler']
     assert trace['history'][0]['reason'] == body['reason'] and trace['history'][0]['at']
     current_tracking = ok(api.get('/api/tracking/spools/' + first['id']))
-    for key in ('plan', 'welds', 'requirements', 'holds'):
+    for key in ('plan', 'requirements', 'holds'):
         assert current_tracking[key] == original_tracking[key], key
-    assert {key: value for key, value in current_tracking['production_process'].items() if key != 'as_of'} == {
-        key: value for key, value in original_tracking['production_process'].items() if key != 'as_of'}
+    assert [{key: value for key, value in weld.items() if key != 'blockers'} for weld in current_tracking['welds']] == [
+        {key: value for key, value in weld.items() if key != 'blockers'} for weld in original_tracking['welds']]
+    assert {key: value for key, value in current_tracking['production_process'].items() if key not in ('as_of', 'receiving_blockers')} == {
+        key: value for key, value in original_tracking['production_process'].items() if key not in ('as_of', 'receiving_blockers')}
+    assert not saved['arrival']['can_proceed'], 'Saved heats/MTRs never imply QA acceptance'
     assert all(weld['work'] == [] for weld in current_tracking['welds'])
     before = database_state(api)
     assert trace_record(api, first) == saved, 'A fresh request must load the persisted values'
@@ -485,10 +493,12 @@ def test_trace_drafts_allow_missing_receiving_values_without_claiming_acceptance
 @pytest.mark.parametrize('target', ['spool', 'parent'])
 def test_released_scope_keeps_receiving_history_readable_but_blocks_corrections(api, target):
     from test_admin import release
+    from receiving_helpers import ensure_scope_arrival
     _, rows = physical_copies(api)
     row = rows[0]
     ok(api.put(row['bom']['api_url'] + '/traceability', trace_body(trace_record(api, row)), role='handler'))
     saved = trace_record(api, row)
+    ensure_scope_arrival(api, row['id'] if target == 'spool' else row['assembly_id'])
     release(api, row['id'] if target == 'spool' else row['assembly_id'])
     current = trace_record(api, row)
     assert not current['traceability']['editable'] and current['traceability']['locked_reason']
@@ -500,12 +510,15 @@ def test_released_scope_keeps_receiving_history_readable_but_blocks_corrections(
 
 
 def test_receiving_records_follow_the_same_spool_into_production(api):
+    from receiving_helpers import record_arrival
     _, rows = physical_copies(api)
     row = rows[0]
     ok(api.put(row['bom']['api_url'] + '/traceability', trace_body(trace_record(api, row)), role='handler'))
     saved = trace_record(api, row)
     # Establish an actual traveler through the existing API; BOM recording
     # itself must not invent an arrival, production event or approval.
+    assert not saved['arrival']['can_proceed']
+    ok(record_arrival(api, row['id']), 201)
     ok(api.post(f'/api/flow/items/{row["id"]}/start', {
         'route': 'spool', 'expected_children': 0,
         'material_reference': 'Synthetic approved material kit basis'}, role='supervisor'), 201)
@@ -579,7 +592,11 @@ def test_receiving_register_retains_its_approved_basis_when_the_reference_catalo
     monkeypatch.setattr(module, '_CATALOG_HASH', 'f' * 64)
 
     before = database_state(api)
-    assert trace_record(api, first) == saved
+    retained = trace_record(api, first)
+    assert_reference(retained, SPOOL_A)
+    assert retained['traceability']['materials'] == saved['traceability']['materials']
+    assert retained['traceability']['history'] == saved['traceability']['history']
+    assert retained['source_status']['changed'] and not retained['traceability']['editable']
     assert ok(api.get('/api/items/' + first['id']))['bom']['revision'] == '2'
     newer = trace_record(api, other)
     assert newer['revision'] == 'SYNTHETIC-NEXT' and newer['total_pieces'] == 4
@@ -587,9 +604,14 @@ def test_receiving_register_retains_its_approved_basis_when_the_reference_catalo
     assert database_state(api) == before
 
     correction = trace_body(saved, 'CORRECTED')
-    ok(api.put(first['bom']['api_url'] + '/traceability', correction, role='inspector'))
-    corrected = trace_record(api, first)
-    assert_reference(corrected, SPOOL_A)
-    assert corrected['catalog_sha256'] == saved['catalog_sha256']
-    assert corrected['traceability']['version'] == 2
-    assert trace_values(corrected) == {piece['piece_key']: piece for piece in correction['materials']}
+    assert api.put(first['bom']['api_url'] + '/traceability', correction, role='inspector').status_code == 409
+    assert database_state(api) == before
+    adopted = ok(api.post(first['bom']['api_url'] + '/adopt-bom', {
+        'expected_version': retained['traceability']['version'],
+        'expected_bom_sha256': retained['source_status']['expected_bom_sha256'],
+        'reason': 'Review and explicitly adopt the synthetic next catalog revision'}, role='inspector'))
+    assert adopted['revision'] == 'SYNTHETIC-NEXT' and adopted['total_pieces'] == 4
+    assert adopted['traceability']['version'] == 2
+    assert all(not piece['heat_number'] and not piece['mtr_reference'] for piece in adopted['traceability']['materials'])
+    event = ok(api.get(adopted['traceability']['history'][0]['detail_url']))
+    assert event['changes'][0]['before_materials'] == saved['traceability']['materials']

@@ -1,0 +1,508 @@
+"""Immutable physical-spool arrival decisions and retained MTR revisions.
+
+An uploaded file or material reference never supplies QA acceptance. A current
+Pass is a signed inspection of one exact spool and its then-current evidence.
+"""
+from datetime import timezone
+import hashlib
+import json
+import re
+from urllib.parse import quote
+import uuid
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import Field
+from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
+                        JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
+from sqlalchemy.orm import Session, deferred
+
+from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
+from orders import Input, _commit, _key, read_snapshot
+from permissions import has_capability
+
+
+router = APIRouter(prefix='/api/spool-boms', tags=['spool arrival and MTRs'])
+CHECKS = [
+    {'key': 'identity', 'label': 'The arriving physical spool and assembly identity match this record'},
+    {'key': 'bom', 'label': 'The delivered materials match the current spool BOM'},
+    {'key': 'heat_numbers', 'label': 'The recorded heat numbers match the material markings'},
+    {'key': 'mtrs', 'label': 'The MTRs have been checked against the materials and heat numbers'},
+    {'key': 'condition', 'label': 'The arriving materials are in acceptable condition'},
+]
+
+
+class SpoolArrivalInspection(Base):
+    __tablename__ = 'spool_arrival_inspections'
+    __table_args__ = (
+        UniqueConstraint('spool_id', 'version', name='uq_spool_arrival_version'),
+        CheckConstraint("result IN ('Pass', 'Fail')", name='ck_spool_arrival_result'),
+    )
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    spool_id = Column(String(60), ForeignKey('items.id'), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    result = Column(String(10), nullable=False)
+    actor = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    reference = Column(String(300), nullable=False)
+    notes = Column(Text, nullable=False)
+    checks = Column(JSON, nullable=False)
+    basis_sha256 = Column(String(64), nullable=False)
+    basis = deferred(Column(JSON, nullable=False))
+
+
+class SpoolMtrDocument(Base):
+    __tablename__ = 'spool_mtr_documents'
+    __table_args__ = (UniqueConstraint('spool_id', 'reference_key', 'version', name='uq_spool_mtr_revision'),)
+    id = Column(String(60), primary_key=True)
+    spool_id = Column(String(60), ForeignKey('items.id'), nullable=False, index=True)
+    reference = Column(String(300), nullable=False)
+    reference_key = Column(String(300), nullable=False)
+    version = Column(Integer, nullable=False)
+    revision = Column(String(80), nullable=False, default='')
+    filename = Column(String(200), nullable=False)
+    media_type = Column(String(160), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    selection_sha256 = Column(String(64), nullable=False)
+    page_count = Column(Integer, nullable=False)
+    source_files = Column(JSON, nullable=False)
+    scope_snapshot = Column(JSON, nullable=False)
+    uploaded_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    reason = Column(Text, nullable=False)
+
+
+class SpoolMtrFile(Base):
+    __tablename__ = 'spool_mtr_files'
+    document_id = Column(String(60), ForeignKey('spool_mtr_documents.id'), primary_key=True)
+    content = deferred(Column(LargeBinary, nullable=False))
+
+
+class ArrivalChecks(Input):
+    identity: bool = Field(default=False, strict=True)
+    bom: bool = Field(default=False, strict=True)
+    heat_numbers: bool = Field(default=False, strict=True)
+    mtrs: bool = Field(default=False, strict=True)
+    condition: bool = Field(default=False, strict=True)
+
+
+class ArrivalIn(Input):
+    expected_version: int = Field(ge=0, le=2147483646, strict=True)
+    basis_sha256: str = Field(min_length=64, max_length=64)
+    result: str = Field(pattern='^(Pass|Fail)$')
+    reference: str = Field(min_length=2, max_length=300)
+    notes: str = Field(min_length=4, max_length=3000)
+    checks: ArrivalChecks
+
+
+def _stamp(value):
+    if value is not None and value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat() if value is not None else None
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+
+def is_physical_spool(s, item):
+    if item is None or item.kind == 'Assembly':
+        return False
+    if item.kind == 'Spool':
+        return True
+    from tracking import SpoolPlan
+    from order_spools import OrderSpool
+    return bool(s.get(SpoolPlan, item.id) or s.get(OrderSpool, item.id))
+
+
+def physical_spool_number(s, item, values=None):
+    # Legacy tracked Parts may have no declared spool number. Their Item ID is
+    # still the exact physical identity; do not invent a drawing/part number.
+    return item.google_part_number or ''
+
+
+def retained_parent_matches(s, item, saved, current_parent):
+    """Permit only the existing audited collection of an unparented spool.
+
+    Receipt and local documents may precede assembly collection. The immutable
+    assembly_link event proves that the released physical spool was collected
+    through that controlled route; ordinary plan edits cannot create it.
+    """
+    previous = saved.get('assembly_id') or None
+    current_parent = current_parent or None
+    if previous == current_parent:
+        return True
+    if previous or not current_parent:
+        return False
+    from flow import FlowEvent
+    from order_spools import OrderSpool
+    from tracking import SpoolPlan
+    if s.get(OrderSpool, item.id) is not None:
+        return False
+    child_plan, parent_plan = s.get(SpoolPlan, item.id), s.get(SpoolPlan, current_parent)
+    if (child_plan is None or parent_plan is None or child_plan.assembly_id != current_parent
+            or not saved.get('project_id') or item.project != saved['project_id']
+            or child_plan.project_id != saved['project_id'] or parent_plan.project_id != saved['project_id']):
+        return False
+    events = list(s.scalars(select(FlowEvent).where(FlowEvent.item_id == item.id,
+        FlowEvent.action == 'assembly_link').order_by(FlowEvent.sequence).limit(2)))
+    return bool(len(events) == 1 and events[0].data.get('assembly_id') == current_parent
+                and events[0].data.get('quality_release_preserved') is True)
+
+
+def guard_receiving_identity(s, item, values=None):
+    """An MTR or arrival decision cannot move to another physical identity."""
+    from order_spools import effective_parent_id
+    record = s.scalar(select(SpoolMtrDocument).where(SpoolMtrDocument.spool_id == item.id)
+        .order_by(SpoolMtrDocument.uploaded_at, SpoolMtrDocument.id).limit(1))
+    saved = record.scope_snapshot if record else None
+    if saved is None:
+        inspection = _latest(s, item.id)
+        saved = inspection.basis.get('context') if inspection else None
+    if saved is None:
+        return
+    project = values.get('project_id') if values is not None else item.project
+    parent = values.get('assembly_id') if values is not None else effective_parent_id(s, item.id)
+    if (not is_physical_spool(s, item) or _key(physical_spool_number(s, item, values)) != _key(saved.get('spool_number') or '')
+            or (project or '') != (saved.get('project_id') or '') or not retained_parent_matches(s, item, saved, parent)):
+        raise HTTPException(409, 'This physical spool has MTR or arrival inspection history. Retain its spool number, purchase order and assembly identity.')
+
+
+def _scope_items(s, item, include_children=True, seen=None):
+    from order_spools import effective_children
+    seen = set() if seen is None else seen
+    if item is None or item.id in seen:
+        return []
+    seen.add(item.id)
+    if is_physical_spool(s, item):
+        return [item]
+    if item.kind != 'Assembly' or not include_children:
+        return []
+    result = []
+    for child, _ in effective_children(s, item.id, include_removed=False):
+        result.extend(_scope_items(s, child, True, seen))
+    return sorted(result, key=lambda value: value.id)
+
+
+def _can_edit(user):
+    return has_capability(user, 'allocate_parts') or has_capability(user, 'inspect')
+
+
+def _context(s, item_id):
+    from spool_documents import _target
+    return _target(s, 'spools', item_id)
+
+
+def _locked_reason(s, item):
+    from spool_boms import _locked_reason as material_locked
+    return material_locked(s, item)
+
+
+def _latest(s, item_id):
+    return s.scalar(select(SpoolArrivalInspection).where(SpoolArrivalInspection.spool_id == item_id)
+        .order_by(SpoolArrivalInspection.version.desc()).limit(1))
+
+
+def _inspection_view(row):
+    if row is None:
+        return None
+    return {key: getattr(row, key) for key in ('id', 'spool_id', 'version', 'result', 'actor',
+            'reference', 'notes', 'checks', 'basis_sha256')} | {'at': _stamp(row.at)}
+
+
+def _mtr_view(row, urls=True):
+    value = {key: getattr(row, key) for key in ('id', 'spool_id', 'reference', 'version', 'revision',
+        'filename', 'media_type', 'size_bytes', 'sha256', 'page_count', 'uploaded_by', 'reason')}
+    value.update(document_id=row.id, uploaded_at=_stamp(row.uploaded_at))
+    if urls:
+        value.update(view_url='/api/spool-boms/mtr-files/' + quote(row.id, safe=''),
+                     download_url='/api/spool-boms/mtr-files/' + quote(row.id, safe='') + '?download=1')
+    return value
+
+
+def _current_mtrs(s, item_id):
+    latest = select(SpoolMtrDocument.reference_key,
+        func.max(SpoolMtrDocument.version).label('version')).where(SpoolMtrDocument.spool_id == item_id)
+    latest = latest.group_by(SpoolMtrDocument.reference_key).subquery()
+    return list(s.scalars(select(SpoolMtrDocument).join(latest,
+        (SpoolMtrDocument.reference_key == latest.c.reference_key) &
+        (SpoolMtrDocument.version == latest.c.version)).where(SpoolMtrDocument.spool_id == item_id)
+        .order_by(SpoolMtrDocument.reference_key)))
+
+
+def mtr_detail(s, item, user=None):
+    from spool_documents import MAX_FILE_BYTES, MAX_TOTAL_BYTES, MAX_FILES, MAX_PAGES
+    history = s.scalars(select(SpoolMtrDocument).where(SpoolMtrDocument.spool_id == item.id)
+        .order_by(SpoolMtrDocument.uploaded_at.desc(), SpoolMtrDocument.id.desc()).limit(50))
+    return {'current': [_mtr_view(row) for row in _current_mtrs(s, item.id)],
+            'history': [_mtr_view(row) for row in history],
+            'can_upload': _can_edit(user) and not _locked_reason(s, item),
+            'limits': {'max_file_bytes': MAX_FILE_BYTES, 'max_total_bytes': MAX_TOTAL_BYTES,
+                       'max_files': MAX_FILES, 'max_pages': MAX_PAGES}}
+
+
+def _basis(s, item):
+    from spool_boms import physical_bom_state, spool_bom_basis
+    from spool_documents import spool_document_scope_basis
+    state = physical_bom_state(s, item.id)
+    materials = state['materials']
+    source = state['source_status']
+    blockers = []
+    if not state['definition']:
+        blockers.append('Upload or extract a structured BOM for this physical spool.')
+    elif not state['definition'].get('traceable', True):
+        blockers.extend(state['definition'].get('trace_blockers', ['The physical material-piece basis needs review.']))
+    if not state['trace']:
+        blockers.append('Save the material register for this individual spool.')
+    if source['changed']:
+        blockers.append('The effective BOM has changed. Adopt and review its current revision for this spool.')
+    missing = [row['piece_key'] for row in materials if not row['heat_number'].strip() or not row['mtr_reference'].strip()]
+    if missing:
+        blockers.append('Heat number and MTR reference are required for every material piece: ' + ', '.join(missing[:20]) + ('.' if len(missing) <= 20 else ' …'))
+    if not materials:
+        blockers.append('A complete physical material-piece register is required for arrival approval.')
+    context = dict(state['context'])
+    prior = _latest(s, item.id)
+    prior_context = (prior.basis or {}).get('context') if prior else None
+    if (prior_context and not prior_context.get('assembly_id') and context.get('assembly_id')
+            and retained_parent_matches(s, item, prior_context, context['assembly_id'])):
+        # Collection changes ancestry, not the received spool/material identity.
+        # Keep its original receipt context without rewriting the old snapshot.
+        for key in ('assembly_id', 'assembly_number', 'gpn_id'):
+            context[key] = prior_context.get(key)
+    evidence = {'spool_id': item.id, 'context': context,
+        'material_trace': spool_bom_basis(s, item.id),
+        'current_bom_source': source['current'], 'pinned_bom_source': source['pinned'],
+        'documents': spool_document_scope_basis(s, item.id),
+        'mtr_documents': [_mtr_view(row, urls=False) for row in _current_mtrs(s, item.id)]}
+    # Keep display-only URLs out of signed acceptance fingerprints.
+    for key in ('current_bom_source', 'pinned_bom_source'):
+        if evidence[key]:
+            evidence[key] = {field: value for field, value in evidence[key].items()
+                             if field not in ('download_url', 'view_url')}
+    return evidence, list(dict.fromkeys(blockers))
+
+
+def _physical_summary(s, item, user=None, history=False):
+    from removals import require_active_item
+    try:
+        require_active_item(s, item.id)
+    except HTTPException as error:
+        if error.status_code != 409:
+            raise
+        # Removed records remain inspectable by history/list/packet readers.
+        # Do not resolve an active document scope or imply an operational Pass.
+        latest = _latest(s, item.id)
+        return {'required': True, 'spool_id': item.id, 'version': latest.version if latest else 0,
+            'status': 'removed', 'can_proceed': False, 'basis_sha256': '',
+            'blockers': [str(error.detail)], 'latest': _inspection_view(latest),
+            'history': ([_inspection_view(row) for row in s.scalars(select(SpoolArrivalInspection)
+                .where(SpoolArrivalInspection.spool_id == item.id)
+                .order_by(SpoolArrivalInspection.version.desc()).limit(50))] if history else []),
+            'permissions': {'can_inspect': False}, 'checks_catalog': CHECKS}
+    evidence, blockers = _basis(s, item)
+    digest = _digest(evidence)
+    latest = _latest(s, item.id)
+    current = bool(latest and latest.result == 'Pass' and latest.basis_sha256 == digest and not blockers)
+    if latest is None:
+        status, message = 'pending', 'QA/QC arrival inspection has not been recorded.'
+    elif latest.result == 'Fail':
+        status, message = 'failed', 'The arrival inspection failed. QA/QC must record a new passing inspection after correction.'
+    elif not current:
+        status, message = 'needs_reinspection', 'The BOM, heat/MTR register or source evidence changed after the arrival Pass. QA/QC reinspection is required.'
+    else:
+        status, message = 'passed', ''
+    if message:
+        blockers.insert(0, message)
+    result = {'required': True, 'spool_id': item.id, 'version': latest.version if latest else 0,
+        'status': status, 'can_proceed': current, 'basis_sha256': digest,
+        'blockers': list(dict.fromkeys(blockers)), 'latest': _inspection_view(latest),
+        'history': [], 'permissions': {'can_inspect': has_capability(user, 'quality_review') and not _locked_reason(s, item)},
+        'checks_catalog': CHECKS}
+    if history:
+        result['history'] = [_inspection_view(row) for row in s.scalars(select(SpoolArrivalInspection)
+            .where(SpoolArrivalInspection.spool_id == item.id).order_by(SpoolArrivalInspection.version.desc()).limit(50))]
+    return result
+
+
+def receiving_summary(s, item, user=None):
+    if is_physical_spool(s, item):
+        return _physical_summary(s, item, user)
+    children = _scope_items(s, item)
+    summaries = [_physical_summary(s, child, user) for child in children]
+    return {'required': bool(summaries), 'version': 0,
+        'status': ('passed' if all(row['can_proceed'] for row in summaries) else 'pending') if summaries else 'not_applicable',
+        'can_proceed': all(row['can_proceed'] for row in summaries),
+        'blockers': [f"{row['spool_id']}: {message}" for row in summaries for message in row['blockers']],
+        'children': summaries, 'latest': None, 'history': [], 'permissions': {'can_inspect': False}}
+
+
+def receiving_errors(s, item, include_children=True):
+    result = []
+    for child in _scope_items(s, item, include_children):
+        result.extend(f'{child.id}: {message}' for message in _physical_summary(s, child)['blockers'])
+    return list(dict.fromkeys(result))
+
+
+def require_receiving_pass(s, item):
+    errors = receiving_errors(s, item)
+    if errors:
+        raise HTTPException(409, {'receiving_blockers': errors})
+
+
+def receiving_scope_basis(s, item_id):
+    result = []
+    for item in _scope_items(s, s.get(Item, item_id)):
+        summary = _physical_summary(s, item)
+        result.append({'spool_id': item.id, 'basis_sha256': summary['basis_sha256'],
+            'current_pass': summary['can_proceed'], 'inspection': summary['latest'],
+            'mtr_documents': [_mtr_view(row, urls=False) for row in _current_mtrs(s, item.id)]})
+    return result
+
+
+def spool_mtr_scope_metadata(s, item_id):
+    return [_mtr_view(row) for item in _scope_items(s, s.get(Item, item_id)) for row in _current_mtrs(s, item.id)]
+
+
+def spool_mtr_retained_file(s, document_id):
+    row = s.get(SpoolMtrDocument, document_id)
+    file = s.get(SpoolMtrFile, document_id) if row else None
+    if file is None or len(file.content) != row.size_bytes or hashlib.sha256(file.content).hexdigest() != row.sha256:
+        raise HTTPException(503, 'The retained MTR could not be verified. Contact an administrator.')
+    return {**_mtr_view(row, urls=False), 'content': file.content}
+
+
+def spool_mtr_packet_files(s, item_id):
+    return [spool_mtr_retained_file(s, metadata['document_id']) for metadata in spool_mtr_scope_metadata(s, item_id)]
+
+
+def source_changed(s, scope, identity, actor, reason):
+    """Stop running work on exactly the affected physical scope, never siblings by number."""
+    from order_spools import OrderSpool
+    from production import pause_receiving_scope
+    from removals import item_not_removed
+    identities = [identity] if scope == 'spools' else list(s.scalars(
+        select(OrderSpool.item_id).join(Item, Item.id == OrderSpool.item_id)
+        .where(OrderSpool.requirement_id == identity, item_not_removed(Item.id))))
+    s.flush()
+    for item_id in sorted(set(identities)):
+        item = s.get(Item, item_id)
+        if item is not None:
+            pause_receiving_scope(s, item, actor, utcnow(), reason)
+
+
+@router.post('/spools/{item_id}/arrival-inspections', status_code=201)
+def inspect_arrival(item_id: str, data: ArrivalIn, user: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    from spool_boms import _spool_detail
+    if not has_capability(user, 'quality_review'):
+        raise HTTPException(403, 'Only QA/QC or an administrator can record an arrival inspection.')
+    lock_topology(s)
+    item = lock_item(s, item_id)
+    _context(s, item_id)
+    locked = _locked_reason(s, item)
+    if locked:
+        raise HTTPException(409, locked)
+    latest = _latest(s, item.id)
+    if data.expected_version != (latest.version if latest else 0):
+        raise HTTPException(409, 'The arrival inspection changed. Reload this spool before recording a new decision.')
+    evidence, blockers = _basis(s, item)
+    if data.basis_sha256 != _digest(evidence):
+        raise HTTPException(409, 'The spool BOM, materials or MTRs changed. Reload and inspect the current evidence.')
+    checks = data.checks.model_dump()
+    if data.result == 'Pass' and (blockers or not all(checks.values())):
+        errors = blockers + ([] if all(checks.values()) else ['Confirm every arrival inspection check before recording Pass.'])
+        raise HTTPException(409, {'receiving_blockers': errors})
+    row = SpoolArrivalInspection(spool_id=item.id, version=data.expected_version + 1,
+        result=data.result, actor=user.badge, reference=data.reference, notes=data.notes,
+        checks=checks, basis_sha256=data.basis_sha256, basis=evidence)
+    s.add(row)
+    s.flush()
+    audit(s, item.id, user.badge, 'SPOOL_ARRIVAL_INSPECTED', _inspection_view(row))
+    source_changed(s, 'spools', item.id, user.badge, 'Arrival inspection recorded: ' + data.result)
+    result = _spool_detail(s, item.id, user)
+    _commit(s)
+    return result
+
+
+def _prepare_mtr(files, context):
+    from spool_documents import _prepare
+    if not files or any(not (file.filename or '').lower().endswith(('.pdf', '.jpg', '.jpeg', '.png')) for file in files):
+        raise HTTPException(415, 'MTR files must be PDF, PNG or JPEG pages.')
+    return _prepare(files, 'isometric', '', context)
+
+
+@router.post('/spools/{item_id}/mtr-preview')
+def preview_mtr(item_id: str, files: list[UploadFile] = File(...), user: Employee = Depends(auth), s: Session = Depends(db)):
+    if not _can_edit(user):
+        raise HTTPException(403, 'Your position can view MTRs but cannot upload them.')
+    context, item, _ = _context(s, item_id)
+    prepared = _prepare_mtr(files, context)
+    return {key: prepared[key] for key in ('selection_sha256', 'filename', 'page_count', 'size_bytes', 'sha256', 'media_type', 'source_files')}
+
+
+@router.post('/spools/{item_id}/mtr-documents', status_code=201)
+def upload_mtr(item_id: str, files: list[UploadFile] = File(...), reference: str = Form(...),
+               expected_version: int = Form(...), expected_sha256: str = Form(...),
+               revision: str = Form(''), reason: str = Form(...),
+               user: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    from spool_boms import _spool_detail
+    from spool_documents import MAX_SCOPE_BYTES, _safe_filename
+    if not _can_edit(user):
+        raise HTTPException(403, 'Your position can view MTRs but cannot upload them.')
+    reference, revision, reason = reference.strip(), revision.strip(), reason.strip()
+    if (not 2 <= len(reference) <= 300 or not 4 <= len(reason) <= 3000 or len(revision) > 80
+            or expected_version < 0 or any(ord(char) < 32 for char in reference + revision)):
+        raise HTTPException(422, 'Enter an MTR reference, a valid revision, and a 4–3,000-character upload reason.')
+    initial, _, _ = _context(s, item_id)
+    prepared = _prepare_mtr(files, initial)
+    if prepared['selection_sha256'] != expected_sha256:
+        raise HTTPException(409, 'The MTR file selection changed. Preview it again before saving.')
+    lock_topology(s)
+    s.expire_all()
+    item = lock_item(s, item_id)
+    context, _, _ = _context(s, item_id)
+    if context != initial:
+        raise HTTPException(409, 'The spool identity changed while the MTR was prepared. Reload this spool.')
+    if not _can_edit(user):
+        raise HTTPException(403, 'Your position cannot upload MTRs.')
+    locked = _locked_reason(s, item)
+    if locked:
+        raise HTTPException(409, locked)
+    latest = s.scalar(select(func.max(SpoolMtrDocument.version)).where(
+        SpoolMtrDocument.spool_id == item.id, SpoolMtrDocument.reference_key == _key(reference))) or 0
+    if expected_version != latest:
+        raise HTTPException(409, 'This MTR reference has a newer saved revision. Reload before uploading.')
+    used = s.scalar(select(func.sum(SpoolMtrDocument.size_bytes)).where(SpoolMtrDocument.spool_id == item.id)) or 0
+    if used + prepared['size_bytes'] > MAX_SCOPE_BYTES:
+        raise HTTPException(413, 'This spool MTR history exceeds the 256 MiB limit. Contact an administrator.')
+    filename = prepared['filename'] if len(files) == 1 and (files[0].filename or '').lower().endswith('.pdf') else _safe_filename(reference + '-MTR.pdf')
+    row = SpoolMtrDocument(id='mtr_' + uuid.uuid4().hex, spool_id=item.id,
+        reference=reference, reference_key=_key(reference), version=latest + 1, revision=revision,
+        filename=filename, media_type='application/pdf', size_bytes=prepared['size_bytes'],
+        sha256=prepared['sha256'], selection_sha256=prepared['selection_sha256'], page_count=prepared['page_count'],
+        source_files=prepared['source_files'], scope_snapshot=context, uploaded_by=user.badge, reason=reason)
+    s.add(row)
+    s.flush()
+    s.add(SpoolMtrFile(document_id=row.id, content=prepared['content']))
+    audit(s, item.id, user.badge, 'SPOOL_MTR_UPLOADED', _mtr_view(row, urls=False))
+    source_changed(s, 'spools', item.id, user.badge, 'MTR revision uploaded: ' + reference)
+    result = _spool_detail(s, item.id, user)
+    _commit(s)
+    return result
+
+
+@router.get('/mtr-files/{document_id}')
+def mtr_file(document_id: str, download: bool = False, user: Employee = Depends(auth), s: Session = Depends(db)):
+    row = s.get(SpoolMtrDocument, document_id)
+    if row is None:
+        raise HTTPException(404, 'MTR document not found.')
+    _context(s, row.spool_id)
+    retained = spool_mtr_retained_file(s, row.id)
+    fallback = re.sub(r'[^a-zA-Z0-9._ -]', '_', row.filename)
+    return Response(retained['content'], media_type='application/pdf', headers={
+        'Content-Disposition': ('attachment' if download else 'inline') + f'; filename="{fallback}"; filename*=UTF-8\'\'{quote(row.filename)}',
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "frame-ancestors 'self'"})

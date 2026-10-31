@@ -105,6 +105,8 @@ def approve(api, item_id, req_id, reference="LOCAL-EVIDENCE"):
 
 
 def ready_to_weld(api, item_id, weld_id):
+    from receiving_helpers import ensure_scope_arrival
+    ensure_scope_arrival(api, item_id)
     response = api.post(
         f"/api/tracking/welds/{weld_id}/work",
         {"operation": "fitup", "notes": "Test fit-up"},

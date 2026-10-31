@@ -44,6 +44,8 @@ def create_item(api, item_id, kind="Part", planned=0, project=PROJECT):
 
 
 def enroll(api, item_id, route, *, start_step=None, expected_children=0, **values):
+    from receiving_helpers import ensure_scope_arrival
+    ensure_scope_arrival(api, item_id)
     body = {"route": route, "expected_children": expected_children, **values}
     if route == "spool" and expected_children == 0:
         body.setdefault("material_reference", "TEST-EXISTING-MATERIAL-REGISTER")

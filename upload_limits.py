@@ -18,7 +18,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 MAX_REQUEST_BYTES = 42 * 1024 * 1024
 MEMORY_SPOOL_BYTES = 1024 * 1024
 REPLAY_CHUNK_BYTES = 64 * 1024
-_UPLOAD_PATH = re.compile(r'^/api/spool-documents/[^/]+/[^/]+/(?:preview|upload|isometric-preview|isometric-import)/?$')
+_UPLOAD_PATH = re.compile(
+    r'^/api/(?:spool-documents/[^/]+/[^/]+/(?:preview|upload|isometric-preview|isometric-import)'
+    r'|spool-boms/spools/[^/]+/(?:mtr-preview|mtr-documents))/?$')
 
 
 class SpoolDocumentUploadLimit:

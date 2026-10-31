@@ -412,7 +412,8 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     if not plan or plan.status != 'active' or plan.current_step is None:
         return []
     step = plan.current_step
-    errors = []
+    from spool_receiving import receiving_errors
+    errors = receiving_errors(s, item)
     if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 23, 24):
         errors.extend(_physical_hold_errors(s, item))
     if plan.route == 'spool':
@@ -517,6 +518,8 @@ def on_item_reopened(s, item, actor, at):
 
 
 def guard_weld_operation(s, item, operation):
+    from spool_receiving import require_receiving_pass
+    require_receiving_pass(s, item)
     plan = s.get(FlowPlan, item.id)
     if not plan:
         return
@@ -567,6 +570,8 @@ def detail(s, item, user):
     from parts import parts_summary
     from transfers import transfer_snapshot
     from orders import order_scope
+    from spool_receiving import receiving_errors, receiving_summary
+    arrival_blockers = receiving_errors(s, item)
     parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
     process = process_snapshot(s, item.id, user=user)
@@ -579,12 +584,13 @@ def detail(s, item, user):
     parent_item = s.get(Item, parent_id) if parent_id else None
     parent_plan = s.get(FlowPlan, parent_id) if parent_id else None
     actions = []
-    if not plan and user.role in MANAGE:
+    if not plan and user.role in MANAGE and not arrival_blockers:
         actions.append('start')
     if plan and plan.status == 'active':
         step = STEP_BY_NUMBER[plan.current_step]
         if user.role in step['roles']:
-            actions.append('advance')
+            if not arrival_blockers:
+                actions.append('advance')
             if step['qa']:
                 actions.append('fail')
         if plan.route == 'component' and (plan.current_step <= 5 or not link) and user.role in HANDOFF:
@@ -602,6 +608,7 @@ def detail(s, item, user):
         actions = []
     return {
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
+        'receiving': receiving_summary(s, item, user),
         **({'parts': parts} if parts else {}),
         'order_scope': order_scope(s, item.id),
         'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
@@ -692,6 +699,8 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
     existing_children = _component_ids(s, item.id) if data.route == 'spool' else _spool_ids(s, item.id) if data.route == 'assembly' else []
     if len(existing_children) > data.expected_children:
         raise HTTPException(409, 'Existing child links exceed the declared scope')
+    from spool_receiving import require_receiving_pass
+    require_receiving_pass(s, item)
     now = _utc(utcnow())
     plan = FlowPlan(item_id=item.id, route=data.route, current_step=step, status='active', version=1,
         expected_children=data.expected_children, baseline_step=step, baseline_reference=data.baseline_reference,

@@ -43,6 +43,7 @@ from orders import PurchaseOrder, OrderGpn, OrderAssembly
 from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
 from order_spools import OrderSpool
 from spool_boms import SpoolBomTrace, SpoolBomMaterial, SpoolBomEvent
+from spool_receiving import SpoolArrivalInspection, SpoolMtrDocument
 from spool_documents import SpoolDocumentSet, SpoolDocument, SpoolDocumentFileLink
 from removals import RecordRemoval
 
@@ -102,6 +103,8 @@ TABLE_SPECS = (
     _spec(SpoolBomTrace, 'Spool BOM trace configs', 'spool_id catalog_id spool_number source_sha256 definition version created_by created_at updated_by updated_at', 'spool_id'),
     _spec(SpoolBomMaterial, 'Spool BOM material pieces', 'spool_id piece_key supplier supplier_piece_id heat_number mtr_reference mtr_url notes updated_by updated_at', 'spool_id piece_key'),
     _spec(SpoolBomEvent, 'Spool BOM trace events', 'spool_id version actor at reason changes', 'spool_id version'),
+    _spec(SpoolArrivalInspection, 'Spool arrival inspections', 'id spool_id version result actor at reference notes checks basis_sha256 basis'),
+    _spec(SpoolMtrDocument, 'Spool MTR documents', 'id spool_id reference reference_key version revision filename media_type size_bytes sha256 selection_sha256 page_count source_files scope_snapshot uploaded_by uploaded_at reason'),
     _spec(SpoolDocumentSet, 'Spool document scopes', 'id requirement_id spool_id scope_snapshot version created_by created_at'),
     _spec(SpoolDocument, 'Spool uploaded documents', 'id set_id kind version filename media_type size_bytes sha256 selection_sha256 page_count revision uploaded_by uploaded_at reason source_files bom'),
     _spec(SpoolDocumentFileLink, 'Spool shared drawing links', 'document_id source_document_id', 'document_id'),
@@ -152,6 +155,8 @@ PART_PROGRESS_COLUMNS = (
     'total_steps', 'not_recorded_steps', 'planned_welds', 'completed_welds', 'qa_accepted',
     'flow_status', 'current_step', 'current_title', 'released', 'release_mode', 'release_label',
     'administrative_release', 'location', 'handler',
+    'arrival_qa_required', 'arrival_qa_status', 'arrival_qa_current_pass',
+    'arrival_qa_version', 'arrival_qa_inspector', 'arrival_qa_at',
     'updated_at', 'as_of',
 )
 SPOOL_PARTS_PROGRESS_COLUMNS = (
@@ -749,6 +754,14 @@ def _write_delivery_reports(connection, writer, created_at, exporter):
                 counts[0] += 1
                 for part in parts:
                     part.update(item_id=part['id'], as_of=as_of)
+                    arrival = part.get('receiving') or {}
+                    inspection = arrival.get('latest') or {}
+                    part.update(arrival_qa_required=bool(arrival.get('required')),
+                        arrival_qa_status=arrival.get('status', 'not_applicable'),
+                        arrival_qa_current_pass=bool(arrival.get('required') and arrival.get('can_proceed')),
+                        arrival_qa_version=arrival.get('version', 0),
+                        arrival_qa_inspector=inspection.get('actor', ''),
+                        arrival_qa_at=inspection.get('at', ''))
                     part['blockers'] = '\n'.join(part['blockers'])
                     parts_file.write((json.dumps([part[k] for k in PART_PROGRESS_COLUMNS], ensure_ascii=True) + '\n').encode())
                     counts[1] += 1

@@ -165,6 +165,8 @@ def test_postweld_evidence_recorded_before_work_cannot_certify_later_work(api):
 
 def test_fitup_work_requires_fresh_review_of_premature_fitup_approval(api):
     item_id = make_spool(api)
+    from receiving_helpers import accept_arrival
+    accept_arrival(api, item_id)
     record = add_weld(api, item_id)
     req = find_requirement(api, item_id, record["id"], code="FIT_UP")
     previous = approve(api, item_id, req["id"], reference="PREMATURE-FIT-UP")

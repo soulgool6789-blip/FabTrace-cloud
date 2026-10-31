@@ -42,6 +42,8 @@ TABLES = {
     "Spool BOM trace configs": ("spool_boms", "SpoolBomTrace"),
     "Spool BOM material pieces": ("spool_boms", "SpoolBomMaterial"),
     "Spool BOM trace events": ("spool_boms", "SpoolBomEvent"),
+    "Spool arrival inspections": ("spool_receiving", "SpoolArrivalInspection"),
+    "Spool MTR documents": ("spool_receiving", "SpoolMtrDocument"),
     "Spool document scopes": ("spool_documents", "SpoolDocumentSet"),
     "Spool uploaded documents": ("spool_documents", "SpoolDocument"),
     "Spool shared drawing links": ("spool_documents", "SpoolDocumentFileLink"),
@@ -396,6 +398,8 @@ def test_admin_release_and_account_changes_export_without_fabricated_qa_or_secre
     from tracking_helpers import ok
 
     item_id = create_item(api, "EXPORT-ADMIN-RELEASE", kind="Spool")
+    from receiving_helpers import accept_arrival
+    accept_arrival(api, item_id)
     released = release(api, item_id)
     assert released["release"]["mode"] == "admin_override"
     row = employee(api, BADGES["welder"])
@@ -425,6 +429,34 @@ def test_admin_release_and_account_changes_export_without_fabricated_qa_or_secre
     with api.session_factory() as session:
         for current in session.scalars(select(api.application.Employee)):
             assert current.pin_hash.encode() not in workbook.xml
+    assert snapshot(api) == before
+
+
+def test_spool_arrival_and_mtr_export_retains_metadata_and_current_status_without_binary(api):
+    from receiving_helpers import accept_arrival
+    from test_flow import create_item
+    from test_spool_receiving import upload_mtr
+    from tracking_helpers import ok
+
+    item_id = create_item(api, 'EXPORT-ARRIVAL-001', kind='Spool')
+    mtr = ok(upload_mtr(api, item_id), 201)['mtr_documents']['current'][0]
+    accepted = accept_arrival(api, item_id)
+    before = snapshot(api)
+    _, workbook = download(api)
+    arrival = workbook.records('Spool arrival inspections')[0]
+    assert arrival['spool_id'].value == item_id
+    assert arrival['result'].value == 'Pass' and arrival['actor'].value == BADGES['inspector']
+    basis = json.loads(workbook.full_text(arrival, 'basis'))
+    assert basis['spool_id'] == item_id and basis['mtr_documents'][0]['id'] == mtr['id']
+    document = workbook.records('Spool MTR documents')[0]
+    assert document['id'].value == mtr['id'] and document['sha256'].value == mtr['sha256']
+    assert 'content' not in workbook.headers('Spool MTR documents')
+    assert 'spool_mtr_files' not in workbook.xml.decode()
+    part = next(row for row in workbook.records('Part progress') if row['item_id'].value == item_id)
+    assert part['arrival_qa_required'].value and part['arrival_qa_current_pass'].value
+    assert part['arrival_qa_status'].value == 'passed'
+    assert part['arrival_qa_version'].value == accepted['arrival']['version']
+    assert part['arrival_qa_inspector'].value == BADGES['inspector']
     assert snapshot(api) == before
 
 
@@ -588,6 +620,8 @@ def test_process_export_retains_events_and_reports_repeated_visits_and_pauses(ap
     production = importlib.import_module("production")
     exporter = importlib.import_module("exports")
     item_id = make_spool(api, item_id="000042")
+    from receiving_helpers import accept_arrival
+    accept_arrival(api, item_id)
     make_spool(api, item_id="UNSTARTED-SPOOL")
     start = dt.datetime(2024, 2, 1, 8, tzinfo=dt.timezone.utc)
     actions = [
