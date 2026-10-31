@@ -457,7 +457,8 @@ def test_upload_does_not_rewrite_saved_heat_mtr_material_or_qa_records(api):
     assert result['active']['bom']['bom']['line_count'] == 2
     current = trace_record(api, child)
     assert current['lines'] == trace['lines']
-    assert current['traceability']['materials'] == trace['traceability']['materials']
+    assert [{k: v for k, v in row.items() if k != 'qa001'} for row in current['traceability']['materials']] == [
+        {k: v for k, v in row.items() if k != 'qa001'} for row in trace['traceability']['materials']]
     assert current['traceability']['history'] == trace['traceability']['history']
     assert current['source_status']['changed'] and current['source_status']['can_adopt']
     assert not current['traceability']['editable'], 'A new uploaded BOM requires explicit physical adoption'

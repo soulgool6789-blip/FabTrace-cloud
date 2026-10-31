@@ -22,7 +22,7 @@ from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
-VERSION = 'CLM-24-v1'
+VERSION = 'CLM-24-v2'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
@@ -32,12 +32,14 @@ ROUTES = (
     {'id': 'assembly', 'label': 'Final assembly through shipment', 'first_step': 17, 'last_step': 24},
 )
 ROUTE_BY_ID = {row['id']: row for row in ROUTES}
+QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 19: 'QA-004', 22: 'QA-005'}
 
 
 def _step(number, title, section, checks):
     route = 'component' if number <= 8 else 'spool' if number <= 16 else 'assembly'
     return {
-        'number': number, 'title': title, 'route': route, 'section': section,
+        'number': number, 'title': (QA_CODES[number] + '-' + title if number in QA_CODES else title),
+        'qa_code': QA_CODES.get(number), 'route': route, 'section': section,
         'roles': list(flow_step_roles(number)),
         'checks': [{'id': f's{number}_{index}', 'label': label} for index, label in enumerate(checks, 1)],
         'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 20, 23, 24),
@@ -60,18 +62,18 @@ STEPS = (
     _step(8, 'Return to Production', 'Component preparation', ['Material coordinator receives prepared components', 'Scan the components back into production']),
     _step(9, 'Release to Fit-Up Welder', 'Spool fabrication', ['Issue the required prepared components', 'Record the scanned handoff']),
     _step(10, 'Fit-Up & Tack Weld', 'Spool fabrication', ['Assemble the spool to its isometric', 'Record fit-up / tack work for each configured weld']),
-    _step(11, 'QA/QC – Check Dimensions', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions']),
+    _step(11, 'Check Dimensions', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions']),
     _step(12, 'Return to Production', 'Spool fabrication', ['Material coordinator receives the tacked spool', 'Record the scan update']),
     _step(13, 'Release to Process Welder', 'Spool fabrication', ['Issue the tacked spool to the process welder', 'Record the scanned handoff']),
     _step(14, 'Complete Welds', 'Spool fabrication', ['Complete all individual weld operations to the approved WPS']),
-    _step(15, 'QA/QC – Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
+    _step(15, 'Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
     _step(16, 'Scan Completed Spool', 'Spool fabrication', ['Material coordinator scans the completed spool back into production']),
     _step(17, 'Collect Spools for Assembly', 'Final assembly', ['Collect every required released spool', 'Scan each child spool barcode']),
     _step(18, 'Create Assembly ID', 'Final assembly', ['Verify the assembly ID and barcode / QR', 'Link all child spools to the parent assembly in the system']),
-    _step(19, 'QA/QC – Assembly Inspection', 'Final assembly', ['Verify overall assembly dimensions against the isometric']),
+    _step(19, 'Assembly Inspection', 'Final assembly', ['Verify overall assembly dimensions against the isometric']),
     _step(20, 'Release to Sandblast & Paint', 'Sandblast & paint', ['Material coordinator issues the assembly', 'Record the scanned handoff']),
     _step(21, 'Sandblast & Paint', 'Sandblast & paint', ['Complete surface preparation and sandblasting', 'Apply paint to the approved specification']),
-    _step(22, 'QA/QC – Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks']),
+    _step(22, 'Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks']),
     _step(23, 'Release to Ready to Ship', 'Shipment', ['Material coordinator verifies ready-to-ship status', 'Scan and move the assembly to the shipping area', 'Generate and verify shipping documents']),
     _step(24, 'Ship to Customer', 'Shipment', ['Scan the assembly at shipping', 'Record shipment and its destination', 'Complete production records / close the work order']),
 )

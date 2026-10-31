@@ -71,7 +71,8 @@ def test_spool_generation_creates_missing_parents_and_exact_child_quantity_witho
             assert not row['weld_plan_exists'] and not item.released
             assert item.welds_done == item.welds_required == 0
             assert item.dimensional == item.weld == 'Not started'
-            assert row['qr_url'] == PUBLIC_URL + '/?item=' + item.id
+            assert row['qr_url'] == api.application.phone_link('spool', row['qr_alias'])
+            assert row['display_code'] == row['qr_alias']
             by_parent[parent.item_id][row['spool_number']] += 1
         assert len(by_parent) == 5
         assert Counter(tuple(sorted(numbers.items())) for numbers in by_parent.values()) == {
@@ -109,7 +110,13 @@ def test_selected_spool_generation_reuses_parent_records_and_keeps_other_gpn_unr
     assert result['created_count'] == 2 and result['remaining_quantity'] == 0
     assert not parent_ids & set(result['created_ids'])
     for parent in parent_ids:
-        assert ok(api.get('/api/items/' + parent)) == originals[parent]
+        current = ok(api.get('/api/items/' + parent))
+        # Adding the first children changes aggregate arrival readiness, while
+        # the retained physical assembly and its history remain unchanged.
+        assert {key: value for key, value in current.items() if key not in ('receiving', 'permissions')} == {
+            key: value for key, value in originals[parent].items() if key not in ('receiving', 'permissions')}
+        assert current['receiving']['required'] and current['receiving']['status'] == 'pending'
+        assert not current['permissions']['can_weld'] and not current['permissions']['can_release']
         assert originals[parent]['qr_url'] is None
     assert [row['registered_quantity'] for row in overview(api, project)['groups']] == [0, 2]
     assert {row['assembly_id'] for row in labels(api, project)['items']} == parent_ids

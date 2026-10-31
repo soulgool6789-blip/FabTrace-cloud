@@ -34,6 +34,9 @@
 #orderLabelsPage .ol-qr img{width:90px;height:90px;image-rendering:pixelated}
 #orderLabelsPage .ol-label-copy{display:grid;gap:7px;min-width:0;flex:1;overflow-wrap:anywhere}
 #orderLabelsPage .ol-label-copy>strong{font-size:17px}
+#orderLabelsPage .ol-code{font-variant-numeric:tabular-nums;line-height:1.4}
+#orderLabelsPage .ol-technical{font-size:11px;color:var(--ol-muted)}
+#orderLabelsPage .ol-technical summary{cursor:pointer;margin-bottom:4px}
 #orderLabelsPage .ol-label-copy>span:not(.ol-eyebrow){font-size:12px;color:var(--ol-muted)}
 #orderLabelsPage .ol-label-copy code{font-size:11px;overflow-wrap:anywhere}
 #orderLabelsPage .ol-label-copy .actions{margin-top:3px;gap:8px;align-items:center}

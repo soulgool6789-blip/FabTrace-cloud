@@ -10,7 +10,7 @@ from sqlalchemy import select
 from conftest import BADGES
 from test_order_labels import public_qr_url
 from tracking_helpers import ok, make_spool
-from receiving_helpers import (CHECKS, accept_arrival, receiving_detail, record_arrival,
+from receiving_helpers import (CHECKS, accept_arrival, adopt_current_bom, approve_materials, receiving_detail, record_arrival,
                                save_receiving_materials, upload_receiving_bom)
 from test_progress import database_state
 
@@ -77,6 +77,7 @@ def test_each_physical_copy_has_independent_material_rows_mtrs_and_qa(api):
     assert len(saved['traceability']['materials']) == 2
     assert all(row['heat_number'] == 'HEAT-FIRST' for row in saved['traceability']['materials'])
     assert all(not row['heat_number'] for row in receiving_detail(api, second)['traceability']['materials'])
+    approve_materials(api, first)
     accepted = ok(record_arrival(api, first), 201)
     assert accepted['arrival']['can_proceed']
     assert not receiving_detail(api, second)['arrival']['can_proceed']
@@ -95,6 +96,7 @@ def test_heat_edit_stales_pass_fail_remains_until_new_qa_pass_and_all_history_su
     assert failed['arrival']['status'] == 'failed'
     corrected = save_receiving_materials(api, item_id, heat='HEAT-VERIFIED')
     assert corrected['arrival']['status'] == 'failed'
+    approve_materials(api, item_id)
     passed = ok(record_arrival(api, item_id, notes='Supplier evidence checked and material marking verified'), 201)
     assert passed['arrival']['can_proceed']
     assert [row['result'] for row in passed['arrival']['history']] == ['Pass', 'Fail', 'Pass']
@@ -111,6 +113,7 @@ def test_arrival_version_basis_and_explicit_checks_are_authoritative(api):
     assert api.post(f'/api/spool-boms/spools/{item_id}/arrival-inspections', missing_check, role='inspector').status_code == 409
     save_receiving_materials(api, item_id, heat='NEW-HEAT')
     assert api.post(f'/api/spool-boms/spools/{item_id}/arrival-inspections', payload, role='inspector').status_code == 409
+    approve_materials(api, item_id)
     accepted = ok(record_arrival(api, item_id), 201)
     payload['basis_sha256'] = accepted['arrival']['basis_sha256']
     assert api.post(f'/api/spool-boms/spools/{item_id}/arrival-inspections', payload, role='inspector').status_code == 409
@@ -205,7 +208,7 @@ def test_mtr_or_arrival_history_alone_preserves_physical_identity(api):
     ok(record_arrival(api, second, result='Fail'), 201)
     for item_id in (first, second):
         response = api.patch('/api/items/' + item_id + '/part-number', {'google_part_number': 'DIFFERENT'})
-        assert response.status_code == 409 and 'history' in response.text
+        assert response.status_code == 409 and ('history' in response.text or 'permanent QR identity' in response.text)
         assert receiving_detail(api, item_id)['spool_number'] == 'SOURCE-01'
 
 
@@ -276,7 +279,8 @@ def test_unstructured_bom_cannot_be_adopted_or_approved_and_old_materials_surviv
         files=[('viewable-only.pdf', pdf(), 'application/pdf')]))
     current = receiving_detail(api, item_id)
     assert current['source_status']['changed'] and not current['source_status']['adoptable']
-    assert current['traceability']['materials'] == accepted['traceability']['materials']
+    assert [{k: v for k, v in row.items() if k != 'qa001'} for row in current['traceability']['materials']] == [
+        {k: v for k, v in row.items() if k != 'qa001'} for row in accepted['traceability']['materials']]
     before = database_state(api)
     response = api.post(f'/api/spool-boms/spools/{item_id}/adopt-bom', {
         'expected_version': current['traceability']['version'],
@@ -321,6 +325,7 @@ def test_shared_bom_receiving_uses_exact_po_and_retains_a_physical_override(api)
     assert accepted['source_status']['pinned']['document_id'] == shared['id']
     assert not receiving_detail(api, other['id'])['bom_available']
     upload_receiving_bom(api, local['id'], part='LOCAL-ONLY')
+    adopt_current_bom(api, local['id'])
     local_accepted = accept_arrival(api, local['id'])
     local_source = local_accepted['source_status']['current']['document_id']
     ok(request_upload(api, requirement_path(first_order), version=1,
@@ -352,7 +357,10 @@ def test_removed_physical_history_reads_and_shared_source_updates_do_not_reactiv
     assert retained['latest']['id'] == accepted['arrival']['latest']['id']
     assert not retained['permissions']['can_inspect']
     ok(request_upload(api, path, version=1, files=[('changed.csv', bom_csv(quantity=3), 'text/csv')]))
-    assert receiving_detail(api, active['id'])['lines'][0]['quantity'] == 3
+    active_detail = receiving_detail(api, active['id'])
+    assert active_detail['lines'][0]['quantity'] == 2, 'The existing physical pin is retained until adoption'
+    assert active_detail['source_status']['changed']
+    assert ok(api.get(path))['active']['bom']['bom']['lines'][0]['quantity'] == 3
     from spool_receiving import spool_mtr_retained_file
     with api.session_factory() as s:
         assert spool_mtr_retained_file(s, certificate['id'])['sha256'] == certificate['sha256']

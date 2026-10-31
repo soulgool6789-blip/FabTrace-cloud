@@ -4,7 +4,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const BASE=process.env.ORDERS_TEST_BASE||'http://127.0.0.1:8782';
 assert.ok(['127.0.0.1','localhost'].includes(new URL(BASE).hostname),'Synthetic loopback server only.');
-const OUT=process.env.NAVIGATION_TEST_OUT||'/tmp/fabtrace-navigation-review';fs.mkdirSync(OUT,{recursive:true});
+const OUT=process.env.NAVIGATION_TEST_OUT||'/tmp/fabtrace-navigation-review';fs.mkdirSync(OUT,{recursive:true});fs.rmSync(path.join(OUT,'report.json'),{force:true});fs.rmSync(path.join(OUT,'failure.json'),{force:true});
 const PIN='only-for-local-tests-12345',run=Date.now().toString(36),errors=[],checks=[];
 let browser,page,stage='initialization';
 (async()=>{
@@ -19,7 +19,7 @@ let browser,page,stage='initialization';
   const action=value=>page.locator('[data-os-action="'+value+'"]');
   const noOverflow=async()=>assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'No horizontal document overflow');
   await api('post','/api/login',{badge:'TEST-ADMIN',pin:PIN});
-  const setup=await api('post','/api/order-setup',{expected_version:0,purchase_order:'NAV-PO-'+run,assemblies:[{gpn:'000-NAV-GPN',assembly_quantity:1,spools:[{spool_number:'000-NAV-SPOOL',quantity_per_assembly:1,welds_per_spool:2}]}]});
+  const setup=await api('post','/api/order-setup',{expected_version:0,purchase_order:'NAV-PO-'+run,assemblies:[{gpn:'000-NAV-GPN',assembly_quantity:1,spools:[{spool_number:'000-NAV-SPOOL',quantity_per_assembly:2,welds_per_spool:2}]}]});
   const project=setup.order.project_id,gpn=setup.assemblies[0].gpn_id;
   await api('post','/api/order-labels/'+project+'/generate',{expected_version:setup.order.version,kind:'Spool',location:'Receiving',handler:'TEST-HANDLER'});
   const labels=await api('get','/api/order-labels/'+project+'/labels'),spool=labels.items[0].id,assembly=labels.items[0].assembly_id;
@@ -69,6 +69,14 @@ let browser,page,stage='initialization';
   await page.evaluate(id=>window.openItem(id),spool);await visible('itemPage');await back('flowPage');assert.equal(new URL(page.url()).searchParams.get('item'),spool);await back('ordersPage');
   checks.push('Orders → spool BOM/flow → item → Back restores the exact PO, GPN, assembly and unique spool');
 
+  stage='readable spool QR and materials return';
+  const alias=labels.items[0].qr_alias;assert.ok(alias&&alias!==spool);
+  await page.goto(BASE+'/?spool='+encodeURIComponent(alias));await visible('itemPage');assert.equal(await page.evaluate(()=>current.id),spool);assert.ok((await page.locator('#itemTitle').innerText()).includes(alias));
+  await page.locator('#itemPage [data-spool-bom-url]').click();await page.locator('#spoolBomDialog[open]').waitFor();await page.locator('#spoolBomContent[aria-busy="false"]').waitFor();assert.ok((await page.locator('#spoolBomSubtitle').innerText()).includes(alias));await page.locator('#spoolBomClose').click();
+  await page.locator('#navGuide').click();await visible('guidePage');await back('itemPage');assert.equal(await page.evaluate(()=>current.id),spool);assert.ok((await page.locator('#itemTitle').innerText()).includes(alias));assert.equal(await page.locator('#spoolBomDialog').evaluate(el=>el.open),false);
+  const otherSpool=labels.items[1];await page.evaluate(id=>window.openItem(id),otherSpool.id);await visible('itemPage');assert.equal(await page.evaluate(()=>current.id),otherSpool.id);assert.equal(await page.locator('#itemTitle').innerText(),otherSpool.display_code);await back('itemPage');assert.equal(await page.evaluate(()=>current.id),spool);assert.equal(await page.locator('#itemTitle').innerText(),alias);
+  checks.push('Readable spool QR resolves to its stable record; Materials and cross-screen Back retain it, and item A → item B → Back restores A');
+
   stage='same-workspace tabs';
   const quality=await api('post','/api/quality/workspaces',{name:'NAV audit '+run,customer:'Synthetic navigation fixture',project_id:project,purchase_order:'NAV-PO-'+run,owner_badge:'TEST-QA',template:'kelvion'});
   const workspace=quality.workspace.id;
@@ -82,6 +90,7 @@ let browser,page,stage='initialization';
   stage='deep links, legacy project fallback and safe root';
   await page.goto(BASE+'/?parts=1&project='+project+'&spool='+spool);await visible('partsPage');await back('partsPage');assert.equal(new URL(page.url()).searchParams.get('spool'),null);assert.equal(new URL(page.url()).searchParams.get('project'),project);await back('partsPage');assert.equal(new URL(page.url()).searchParams.get('project'),null);await back('orderSetupPage');
   await page.goto(BASE+'/?item='+spool);await visible('itemPage');await back('orderSetupPage');
+  await page.goto(BASE+'/?spool='+encodeURIComponent(alias));await visible('itemPage');await back('orderSetupPage');
   for(let i=0;i<3;i++){await back('orderSetupPage');assert.equal(new URL(page.url()).origin,new URL(BASE).origin);assert.equal(new URL(page.url()).searchParams.get('order-setup'),'1');}
   assert.equal(await page.evaluate(()=>window.FabNavigation.state().depth),0);
   checks.push('Direct spool/item links get safe same-app parents; project roots never assume a legacy project is a PO; repeated root Back never leaves FabTrace or creates a loop');
@@ -95,5 +104,5 @@ let browser,page,stage='initialization';
   assert.equal(await action('new').count(),0);await page.locator('#navItems').click();await visible('itemsPage');await back('orderSetupPage');
   await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:path.join(OUT,'navigation-desktop.png'),fullPage:true});
   checks.push('Compact menu fits 390px and keyboard Escape closes it; floor roles land on read-only Orders and retain existing access restrictions');
-  assert.deepEqual(errors,[]);fs.writeFileSync(path.join(OUT,'report.json'),JSON.stringify({status:'passed',checks,page_errors:errors,project,spool},null,2));console.log(JSON.stringify({status:'passed',checks,artifacts:OUT},null,2));await browser.close();
+  assert.deepEqual(errors,[]);fs.writeFileSync(path.join(OUT,'report.json'),JSON.stringify({status:'passed',checks,page_errors:errors,project,spool},null,2));fs.rmSync(path.join(OUT,'failure.json'),{force:true});console.log(JSON.stringify({status:'passed',checks,artifacts:OUT},null,2));await browser.close();
 })().catch(async error=>{console.error('FAILED',stage,error.stack||error);if(page)await page.screenshot({path:path.join(OUT,'failure.png'),fullPage:true}).catch(()=>{});fs.writeFileSync(path.join(OUT,'failure.json'),JSON.stringify({stage,error:error.message,page_errors:errors},null,2));if(browser)await browser.close();process.exitCode=1;});

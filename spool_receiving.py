@@ -51,6 +51,29 @@ class SpoolArrivalInspection(Base):
     basis = deferred(Column(JSON, nullable=False))
 
 
+class SpoolMaterialInspection(Base):
+    __tablename__ = 'spool_material_inspections'
+    __table_args__ = (
+        UniqueConstraint('spool_id', 'piece_key', 'version', name='uq_spool_material_inspection_version'),
+        CheckConstraint("result IN ('Pass', 'Fail')", name='ck_spool_material_inspection_result'),
+        CheckConstraint("check_code = 'QA-001'", name='ck_spool_material_inspection_code'),
+    )
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    spool_id = Column(String(60), ForeignKey('items.id'), nullable=False, index=True)
+    # The physical row may be archived on explicit BOM adoption. Its QA events
+    # retain their own source snapshot and never cascade with current rows.
+    piece_key = Column(String(32), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    check_code = Column(String(20), nullable=False, default='QA-001')
+    result = Column(String(10), nullable=False)
+    actor = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    reference = Column(String(300), nullable=False)
+    notes = Column(Text, nullable=False)
+    basis_sha256 = Column(String(64), nullable=False)
+    basis = deferred(Column(JSON, nullable=False))
+
+
 class SpoolMtrDocument(Base):
     __tablename__ = 'spool_mtr_documents'
     __table_args__ = (UniqueConstraint('spool_id', 'reference_key', 'version', name='uq_spool_mtr_revision'),)
@@ -94,6 +117,14 @@ class ArrivalIn(Input):
     reference: str = Field(min_length=2, max_length=300)
     notes: str = Field(min_length=4, max_length=3000)
     checks: ArrivalChecks
+
+
+class MaterialInspectionIn(Input):
+    expected_version: int = Field(ge=0, le=2147483646, strict=True)
+    basis_sha256: str = Field(min_length=64, max_length=64)
+    result: str = Field(pattern='^(Pass|Fail)$')
+    reference: str = Field(min_length=2, max_length=300)
+    notes: str = Field(min_length=4, max_length=3000)
 
 
 def _stamp(value):
@@ -160,6 +191,10 @@ def guard_receiving_identity(s, item, values=None):
     if saved is None:
         inspection = _latest(s, item.id)
         saved = inspection.basis.get('context') if inspection else None
+    if saved is None:
+        piece_inspection = s.scalar(select(SpoolMaterialInspection).where(
+            SpoolMaterialInspection.spool_id == item.id).order_by(SpoolMaterialInspection.id.desc()).limit(1))
+        saved = piece_inspection.basis.get('context') if piece_inspection else None
     if saved is None:
         return
     project = values.get('project_id') if values is not None else item.project
@@ -242,6 +277,82 @@ def mtr_detail(s, item, user=None):
                        'max_files': MAX_FILES, 'max_pages': MAX_PAGES}}
 
 
+def _receipt_context(s, state):
+    context = dict(state['context'])
+    prior = _latest(s, state['item'].id)
+    prior_context = (prior.basis or {}).get('context') if prior else None
+    if (prior_context and not prior_context.get('assembly_id') and context.get('assembly_id')
+            and retained_parent_matches(s, state['item'], prior_context, context['assembly_id'])):
+        for key in ('assembly_id', 'assembly_number', 'gpn_id'):
+            context[key] = prior_context.get(key)
+    return context
+
+
+def _material_inspection_view(row):
+    if row is None:
+        return None
+    return {key: getattr(row, key) for key in ('id', 'spool_id', 'piece_key', 'version',
+        'check_code', 'result', 'actor', 'reference', 'notes', 'basis_sha256')} | {'at': _stamp(row.at)}
+
+
+def _current_material_inspections(s, item_id):
+    latest = select(SpoolMaterialInspection.piece_key,
+        func.max(SpoolMaterialInspection.version).label('version')).where(
+        SpoolMaterialInspection.spool_id == item_id).group_by(SpoolMaterialInspection.piece_key).subquery()
+    return {row.piece_key: row for row in s.scalars(select(SpoolMaterialInspection).join(latest,
+        (SpoolMaterialInspection.piece_key == latest.c.piece_key) &
+        (SpoolMaterialInspection.version == latest.c.version)).where(SpoolMaterialInspection.spool_id == item_id))}
+
+
+def _material_qa_bases(s, state):
+    from spool_documents import spool_document_scope_basis
+    source = state['source_status']
+    stable_source = lambda value: ({key: value.get(key) for key in
+        ('kind', 'document_id', 'sha256', 'catalog_sha256', 'structured')} if value else None)
+    shared = {'check_code': 'QA-001', 'basis_version': 1, 'spool_id': state['item'].id,
+        'context': _receipt_context(s, state),
+        'current_bom_source': stable_source(source['current']),
+        'pinned_bom_source': stable_source(source['pinned']),
+        'documents': spool_document_scope_basis(s, state['item'].id)}
+    mtrs = {row.reference_key: _mtr_view(row, urls=False) for row in _current_mtrs(s, state['item'].id)}
+    return {row['piece_key']: {**shared, 'piece_key': row['piece_key'], 'material': dict(row),
+        'mtr_document': mtrs.get(_key(row['mtr_reference']))} for row in state['materials']}
+
+
+def material_qa_states(s, state, user=None, *, bases=None):
+    """Per-piece decisions: sibling edits never change this piece's basis."""
+    bases = _material_qa_bases(s, state) if bases is None else bases
+    latest = _current_material_inspections(s, state['item'].id)
+    permitted = has_capability(user, 'quality_review') and not _locked_reason(s, state['item'])
+    result = {}
+    for material in state['materials']:
+        key = material['piece_key']
+        blockers = []
+        if not material['persisted']:
+            blockers.append('Save this physical material record before recording QA-001.')
+        if state['source_status']['changed']:
+            blockers.append('Adopt and review the current BOM before approving this piece.')
+        if not material['heat_number'].strip() or not material['mtr_reference'].strip():
+            blockers.append('Record this piece\'s heat number and MTR reference before Pass.')
+        digest = _digest(bases[key])
+        decision = latest.get(key)
+        current = bool(decision and decision.result == 'Pass' and decision.basis_sha256 == digest and not blockers)
+        status = ('pending' if decision is None else 'failed' if decision.result == 'Fail'
+                  else 'passed' if current else 'needs_reinspection')
+        if status == 'pending':
+            blockers.insert(0, 'QA-001 has not been recorded for this physical piece.')
+        elif status == 'failed':
+            blockers.insert(0, 'QA-001 failed. Correct the findings and record a new inspection.')
+        elif status == 'needs_reinspection':
+            blockers.insert(0, 'This piece or its source/MTR evidence changed after QA-001 Pass. Reinspection is required.')
+        result[key] = {'code': 'QA-001', 'version': decision.version if decision else 0,
+            'status': status, 'can_proceed': current, 'basis_sha256': digest,
+            'latest': _material_inspection_view(decision), 'blockers': blockers,
+            'history_url': f'/api/spool-boms/spools/{quote(state["item"].id, safe="")}/materials/{quote(key, safe="")}/qa-001',
+            'permissions': {'can_inspect': bool(permitted and material['persisted'])}}
+    return result
+
+
 def _basis(s, item):
     from spool_boms import physical_bom_state, spool_bom_basis
     from spool_documents import spool_document_scope_basis
@@ -262,20 +373,21 @@ def _basis(s, item):
         blockers.append('Heat number and MTR reference are required for every material piece: ' + ', '.join(missing[:20]) + ('.' if len(missing) <= 20 else ' …'))
     if not materials:
         blockers.append('A complete physical material-piece register is required for arrival approval.')
-    context = dict(state['context'])
-    prior = _latest(s, item.id)
-    prior_context = (prior.basis or {}).get('context') if prior else None
-    if (prior_context and not prior_context.get('assembly_id') and context.get('assembly_id')
-            and retained_parent_matches(s, item, prior_context, context['assembly_id'])):
-        # Collection changes ancestry, not the received spool/material identity.
-        # Keep its original receipt context without rewriting the old snapshot.
-        for key in ('assembly_id', 'assembly_number', 'gpn_id'):
-            context[key] = prior_context.get(key)
-    evidence = {'spool_id': item.id, 'context': context,
+    qa = material_qa_states(s, state)
+    incomplete_qa = [row['piece_identifier'] for row in materials if not qa[row['piece_key']]['can_proceed']]
+    if incomplete_qa:
+        blockers.append('A current QA-001 Pass is required for every physical material piece: '
+            + ', '.join(incomplete_qa[:20]) + ('.' if len(incomplete_qa) <= 20 else ' …'))
+    evidence = {'spool_id': item.id, 'context': _receipt_context(s, state),
         'material_trace': spool_bom_basis(s, item.id),
         'current_bom_source': source['current'], 'pinned_bom_source': source['pinned'],
         'documents': spool_document_scope_basis(s, item.id),
-        'mtr_documents': [_mtr_view(row, urls=False) for row in _current_mtrs(s, item.id)]}
+        'mtr_documents': [_mtr_view(row, urls=False) for row in _current_mtrs(s, item.id)],
+        'piece_inspections': [{'piece_key': row['piece_key'], 'piece_identifier': row['piece_identifier'],
+            'version': qa[row['piece_key']]['version'], 'status': qa[row['piece_key']]['status'],
+            'current_pass': qa[row['piece_key']]['can_proceed'],
+            'basis_sha256': qa[row['piece_key']]['basis_sha256'],
+            'inspection': qa[row['piece_key']]['latest']} for row in materials]}
     # Keep display-only URLs out of signed acceptance fingerprints.
     for key in ('current_bom_source', 'pinned_bom_source'):
         if evidence[key]:
@@ -382,6 +494,7 @@ def source_changed(s, scope, identity, actor, reason):
     from order_spools import OrderSpool
     from production import pause_receiving_scope
     from removals import item_not_removed
+    from spool_boms import ensure_material_piece_records
     identities = [identity] if scope == 'spools' else list(s.scalars(
         select(OrderSpool.item_id).join(Item, Item.id == OrderSpool.item_id)
         .where(OrderSpool.requirement_id == identity, item_not_removed(Item.id))))
@@ -389,7 +502,57 @@ def source_changed(s, scope, identity, actor, reason):
     for item_id in sorted(set(identities)):
         item = s.get(Item, item_id)
         if item is not None:
+            ensure_material_piece_records(s, item, actor, reason)
             pause_receiving_scope(s, item, actor, utcnow(), reason)
+
+
+@router.post('/spools/{item_id}/materials/{piece_key}/qa-001', status_code=201)
+def inspect_material(item_id: str, piece_key: str, data: MaterialInspectionIn,
+                     user: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    from spool_boms import physical_bom_state, _spool_detail
+    if not has_capability(user, 'quality_review'):
+        raise HTTPException(403, 'Only QA/QC or an administrator can record QA-001.')
+    lock_topology(s)
+    item = lock_item(s, item_id)
+    state = physical_bom_state(s, item.id)
+    if _locked_reason(s, item):
+        raise HTTPException(409, _locked_reason(s, item))
+    bases = _material_qa_bases(s, state)
+    qa = material_qa_states(s, state, user, bases=bases).get(piece_key)
+    if qa is None:
+        raise HTTPException(404, 'This physical material piece is not in the current pinned BOM.')
+    if not qa['permissions']['can_inspect']:
+        raise HTTPException(409, 'Save this physical material record before recording QA-001.')
+    if data.expected_version != qa['version']:
+        raise HTTPException(409, 'QA-001 changed for this piece. Reload before recording a new decision.')
+    if data.basis_sha256 != qa['basis_sha256']:
+        raise HTTPException(409, 'This material piece, BOM or MTR changed. Reload and inspect the current evidence.')
+    basis = bases[piece_key]
+    material = basis['material']
+    if data.result == 'Pass' and (state['source_status']['changed']
+            or not material['heat_number'].strip() or not material['mtr_reference'].strip()):
+        raise HTTPException(409, 'QA-001 Pass requires this piece\'s current BOM, heat number and MTR reference.')
+    row = SpoolMaterialInspection(spool_id=item.id, piece_key=piece_key,
+        version=data.expected_version + 1, check_code='QA-001', result=data.result,
+        actor=user.badge, reference=data.reference, notes=data.notes,
+        basis_sha256=data.basis_sha256, basis=basis)
+    s.add(row)
+    s.flush()
+    audit(s, item.id, user.badge, 'SPOOL_MATERIAL_QA001_INSPECTED', _material_inspection_view(row))
+    source_changed(s, 'spools', item.id, user.badge, f'QA-001 {data.result} recorded for {material["piece_identifier"]}')
+    result = _spool_detail(s, item.id, user)
+    _commit(s)
+    return result
+
+
+@router.get('/spools/{item_id}/materials/{piece_key}/qa-001')
+def material_inspection_history(item_id: str, piece_key: str, user: Employee = Depends(auth), s: Session = Depends(db)):
+    _context(s, item_id)
+    rows = list(s.scalars(select(SpoolMaterialInspection).where(SpoolMaterialInspection.spool_id == item_id,
+        SpoolMaterialInspection.piece_key == piece_key).order_by(SpoolMaterialInspection.version.desc()).limit(50)))
+    return {'spool_id': item_id, 'piece_key': piece_key, 'code': 'QA-001',
+            'history': [_material_inspection_view(row) for row in rows]}
 
 
 @router.post('/spools/{item_id}/arrival-inspections', status_code=201)

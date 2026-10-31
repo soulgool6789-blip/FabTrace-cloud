@@ -16,7 +16,9 @@ HISTORY_TABLES = (
     'flow_events',
     'spool_parts_events',
     'spool_bom_events',
+    'spool_qr_identities',
     'spool_arrival_inspections',
+    'spool_material_inspections',
     'spool_mtr_documents',
     'spool_mtr_files',
     'spool_documents',
@@ -51,6 +53,11 @@ def initialize():
         if c.dialect.name == 'postgresql':
             c.execute(text("SET LOCAL lock_timeout = '30s'"))
             c.execute(text('SELECT pg_advisory_xact_lock(647334246)'))
+            # Runtime spool writers acquire topology before touching history.
+            # Keep the same lock order before installing history triggers and
+            # allocating permanent identities/material pieces during migration.
+            from flow import TOPOLOGY_LOCK
+            c.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': TOPOLOGY_LOCK})
         Base.metadata.create_all(c)
         if c.dialect.name == 'postgresql':
             c.execute(text('''CREATE OR REPLACE FUNCTION fabtrace_no_audit_mutation()
@@ -71,6 +78,13 @@ def initialize():
                 print('Created bootstrap administrator')
             else:
                 print('Employee accounts already exist; bootstrap skipped')
+            from order_spools import backfill_spool_qr_identities
+            assigned=backfill_spool_qr_identities(s)
+            from spool_boms import backfill_material_piece_records
+            material_records=backfill_material_piece_records(s)
+            s.flush()
+            print(f"Spool QR labels ready: {assigned['created']} permanent labels added; {assigned['missing_spool_number']} records still need a spool number")
+            print(f'Individual material records ready: {material_records}')
     print('Schema ready: legacy records preserved; purchase orders, administration, weld, timing, process flow, transfers, audit readiness and Job Packet tables available')
 if __name__=='__main__':initialize()
 

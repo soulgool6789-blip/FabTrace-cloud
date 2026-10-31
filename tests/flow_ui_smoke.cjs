@@ -25,8 +25,8 @@ class Element {
   showModal(){this.open=true}close(){this.open=false}focus(){}setSelectionRange(){}scrollIntoView(){}
 }
 for(const id of ['flowContent','flowDialog','flowDialogTitle','flowDialogFields','flowDialogForm','flowDialogSubmit','flowDialogError','flowDialogClose','flowDialogCancel','navFlow','itemFlowBtn'])elements.set(id,new Element(id));
-const titles=['Receive Shipment','Check Dimensions','Capture Location','Material in Inventory','Select Components for Spool','Release to Fabrication Prep Technician','Prep Components','Return to Production','Release to Fit-Up Welder','Fit-Up & Tack Weld','QA/QC – Check Dimensions','Return to Production','Release to Process Welder','Complete Welds','QA/QC – Inspect Welds','Scan Completed Spool','Collect Spools for Assembly','Create Assembly ID','QA/QC – Assembly Inspection','Release to Sandblast & Paint','Sandblast & Paint','QA/QC – Final Inspection','Release to Ready to Ship','Ship to Customer'];
-const catalog={version:'CLM-24-v1',routes:[{id:'component',label:'Component',first_step:1,last_step:8},{id:'spool',label:'Spool',first_step:9,last_step:16},{id:'assembly',label:'Assembly',first_step:17,last_step:24}],steps:titles.map((title,index)=>{const n=index+1,qa=[2,11,15,19,22].includes(n);return {number:n,title,route:n<9?'component':n<17?'spool':'assembly',section:'Fixture section',checks:[{id:'s'+n+'_1',label:'Verify physical item & records'}],roles:qa?['admin','inspector']:['admin','supervisor','handler'],requires_scan:[1,3,5,6,8,9,12,13,16,17,18,20,23,24].includes(n),requires_handoff:[6,8,9,12,13,16,20,23].includes(n),requires_location:[3,6,8,9,12,13,16,20,23].includes(n),requires_reference:[1,2,5,11,15,19,22].includes(n),qa,return_steps:({2:[2],11:[10],15:[14],19:[17,18],22:[17,18,19,20,21]})[n]||[]}})};
+const titles=['Receive Shipment','QA-001-Check Dimensions','Capture Location','Material in Inventory','Select Components for Spool','Release to Fabrication Prep Technician','Prep Components','Return to Production','Release to Fit-Up Welder','Fit-Up & Tack Weld','QA-002-Check Dimensions','Return to Production','Release to Process Welder','Complete Welds','QA-003-Inspect Welds','Scan Completed Spool','Collect Spools for Assembly','Create Assembly ID','QA-004-Assembly Inspection','Release to Sandblast & Paint','Sandblast & Paint','QA-005-Final Inspection','Release to Ready to Ship','Ship to Customer'];
+const catalog={version:'CLM-24-v2',routes:[{id:'component',label:'Component',first_step:1,last_step:8},{id:'spool',label:'Spool',first_step:9,last_step:16},{id:'assembly',label:'Assembly',first_step:17,last_step:24}],steps:titles.map((title,index)=>{const n=index+1,qa=[2,11,15,19,22].includes(n);return {number:n,title,qa_code:({2:'QA-001',11:'QA-002',15:'QA-003',19:'QA-004',22:'QA-005'})[n]||null,route:n<9?'component':n<17?'spool':'assembly',section:'Fixture section',checks:[{id:'s'+n+'_1',label:'Verify physical item & records'}],roles:qa?['admin','inspector']:['admin','supervisor','handler'],requires_scan:[1,3,5,6,8,9,12,13,16,17,18,20,23,24].includes(n),requires_handoff:[6,8,9,12,13,16,20,23].includes(n),requires_location:[3,6,8,9,12,13,16,20,23].includes(n),requires_reference:[1,2,5,11,15,19,22].includes(n),qa,return_steps:({2:[2],11:[10],15:[14],19:[17,18],22:[17,18,19,20,21]})[n]||[]}})};
 const handoffOptions={locations:[{id:'welding',label:'Weld Bay 2',kind:'builtin',active:true,version:1},{id:'custom_rack',label:'Rack A',kind:'custom',active:true,version:1}],statuses:[{id:'queued',label:'Queued'},{id:'in_progress',label:'In progress'}],keep_current_location_id:'current',can_manage_locations:true};
 const baseProcess=()=>({item_id:'ITM-001',version:11,as_of:'2026-10-28T12:05:00Z',status:'running',current:{id:1,process_name:'Fixture step',started_at:'2026-10-28T12:00:00Z',elapsed_seconds:300,active_seconds:240,paused_seconds:60},totals:{elapsed_seconds:300,active_seconds:240,paused_seconds:60,visits:1},by_process:[{process_name:'Fixture step',visits:1,elapsed_seconds:300,active_seconds:240,paused_seconds:60}],events:[]});
 function detailAt(number,extra={}){
@@ -46,20 +46,22 @@ function allowed(){
   if(record.flow.route==='component')actions.push('assign-component');if(record.flow.route==='assembly'&&record.flow.current_step<=18)actions.push('link-spool');return actions;
 }
 function detail(){return {...structuredClone(record),allowed_actions:[...allowed()]}}
-const context={document:{getElementById:id=>elements.get(id)||null},me:{role:'admin',badge:'ADMIN'},current:null,URL,URLSearchParams,Date,console,esc,
+let aliasHold=null;
+const context={location:{origin:'https://fabtrace-cloud.onrender.com'},qrStatus:{public_base_url:'https://fabtrace-cloud.onrender.com'},document:{getElementById:id=>elements.get(id)||null},me:{role:'admin',badge:'ADMIN'},current:null,URL,URLSearchParams,Date,console,esc,
   performance:{now:()=>now},setInterval:fn=>{timers.set(++timerId,fn);return timerId},clearInterval:id=>timers.delete(id),
   history:{replaceState(_a,_b,url){context.url=url}},show(page){context.page=page},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(id){context.openedItem=id},FabTracking:{async open(value){context.openedWelds=value}},FabParts:{async open(value){context.openedParts=value}},FabAdmin:{async open(value){context.openedAdmin=value}},
   qrId(value,kind){const text=String(value||'').trim();if(kind==='badge')return text.startsWith('FABTRACE:EMP:')?text.slice(13):text;try{return new URL(text).searchParams.get('item')||''}catch(_){}return text.startsWith('FABTRACE:ITEM:')?text.slice(14):/^[A-Za-z0-9_-]{3,60}$/.test(text)?text:''},
   FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
   api:async(url,options={})=>{
     calls.push({url,...options});if(options.method){if(hold)await hold;if(fail)throw fail;return detail()}
+    if(url.startsWith('/api/spool-qr/resolve?')){if(aliasHold)await aliasHold;const alias=new URL(url,context.location.origin).searchParams.get('code');const item_id=({'643-777-PCW-03-01-[001]':'ITM-001','643-777-PCW-03-01-[002]':'SPL-002','643-777-PCW-03-01-[003]':'SPL-003'})[alias];if(!item_id)throw Error('Unknown spool label');return {item_id,qr_alias:alias}}
     if(url==='/api/transfers/options')return structuredClone(handoffOptions);
     if(url==='/api/employees/directory')return [{badge:'SHOP1',name:'Sender One',role:'welder',active:true},{badge:'SHOP2',name:'Receiver Two',role:'handler',active:true},{badge:'OLD1',name:'Former worker',role:'handler',active:false}];
     if(url==='/api/flow/catalog')return structuredClone(catalog);
     if(url==='/api/flow/items')return {items:[{item_id:'ITM-001',description:'Test item',route:record.flow?.route||'component',status:record.flow?.status||'active',current_step:record.flow?.current_step||6,current_title:record.flow?.current?.title||'Prep',project_id:'P1',subproject_id:'SUB1',open_exceptions:record.exceptions?.filter(x=>!x.closed_at).length||0,blockers:[],production_process:baseProcess()},{item_id:'OTHER-002',description:'Other project item',route:'assembly',status:'delivered',current_step:null,current_title:'',project_id:'P2',subproject_id:null,open_exceptions:0,blockers:[],production_process:null}]};
     if(url.startsWith('/api/flow/items/'))return detail();throw Error('Unexpected endpoint '+url);
   },
-};context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/handoff.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow.js'),'utf8'),context);
+};context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/spool-qr.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/handoff.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow.js'),'utf8'),context);
 const html=()=>elements.get('flowContent').innerHTML,posts=()=>calls.filter(row=>row.method==='POST');
 const click=(name,id='')=>elements.get('flowContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{flowAction:name,flowId:id}})}});
 const submitStep=async values=>{const form=elements.get('flowStepForm');assert.ok(form,'current-step form exists');form.values=values;await form.onsubmit({preventDefault(){},target:form})};
@@ -164,6 +166,25 @@ const check=number=>({['check_s'+number+'_1']:'on'});
   assert.equal(elements.get('flowDialogSubmit').disabled,true);assert.match(elements.get('flowDialogError').textContent,/Close this dialog/);assert.equal(messages.length,notifications);
   fail=null;elements.get('flowDialog').close();await click('pause');assert.equal(elements.get('flowDialogSubmit').disabled,false);
   record=detailAt(9,{parts:{configured:true,totals:{required_qty:6,prepared_qty:2,assigned_qty:4,received_qty:3,short_qty:2}}});await context.FabFlow.open({item:'ITM-001',project:'P1'});assert.match(html(),/2 of 6 required pieces prepared/);await click('spool-parts','ITM-001');assert.equal(context.openedParts.spool,'ITM-001');assert.equal(context.openedParts.project,'P1');
+  record=detailAt(17);await context.FabFlow.open({item:'ITM-001'});
+  await submitStep({...check(17),scanned_item_id:'643-777-PCW-03-01-[001]',scanned_child_ids:'643-777-PCW-03-01-[002]\nhttps://fabtrace-cloud.onrender.com/?spool=643-777-PCW-03-01-%5B003%5D'});
+  assert.deepEqual(JSON.parse(posts().at(-1).body).scanned_child_ids,['SPL-002','SPL-003']);
+  assert.equal(JSON.parse(posts().at(-1).body).scanned_item_id,'ITM-001');
+  await click('link-spool');await submitDialog({spool_id:'643-777-PCW-03-01-[002]',reference:'ISO-A',notes:''});
+  assert.equal(JSON.parse(posts().at(-1).body).spool_id,'SPL-002','link actions save the immutable ID behind the printed label');
+  record=detailAt(5);await context.FabFlow.open({item:'ITM-001'});
+  await submitStep({...check(5),scanned_item_id:'ITM-001',target_spool_id:'643-777-PCW-03-01-[003]',reference:'BOM-A'});
+  assert.equal(JSON.parse(posts().at(-1).body).target_spool_id,'SPL-003');
+  record=detailAt(1);await context.FabFlow.open({item:'ITM-001'});
+  let releaseAlias;aliasHold=new Promise(resolve=>{releaseAlias=resolve});const beforeLate=posts().length;
+  const lateSubmit=submitStep({...check(1),scanned_item_id:'643-777-PCW-03-01-[001]',reference:'PO-A'});
+  context.FabFlow.cancelPending();releaseAlias();await lateSubmit;aliasHold=null;
+  assert.equal(posts().length,beforeLate,'navigation during alias resolution cannot submit a stale step');
+  await context.FabFlow.open({item:'ITM-001'});
+  aliasHold=new Promise(resolve=>{releaseAlias=resolve});elements.get('flowLookup').value='643-777-PCW-03-01-[001]';
+  const lateLookup=elements.get('flowLookupForm').onsubmit({preventDefault(){}});context.FabFlow.cancelPending();
+  const beforeLateRead=calls.length;releaseAlias();await lateLookup;aliasHold=null;
+  assert.equal(calls.length,beforeLateRead,'a late resolved lookup cannot reopen a departed flow screen');
   context.FabFlow.cancelPending();assert.equal(timers.size,0);
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
   assert.match(index,/params\.has\('flow'\)[\s\S]*FabFlow\.open/);assert.match(index,/id="itemFlowBtn"/);assert.match(index,/id="navFlow"/);assert.match(index,/FabFlow\.cancelPending/);

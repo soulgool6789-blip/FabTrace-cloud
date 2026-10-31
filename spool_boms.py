@@ -1,8 +1,8 @@
-"""Approved spool drawing BOMs and per-physical-piece material traceability.
+"""Spool drawing BOMs and per-physical-piece material traceability.
 
 Catalog entries are reference quantities for one spool. Recording a supplier,
 heat or MTR never creates receipt, inventory allocation, weld work or QA
-acceptance. A saved physical register pins its original approved definition;
+acceptance. A saved physical register pins its original source definition;
 each material piece and every correction belong to that exact spool ID.
 """
 from copy import deepcopy
@@ -11,12 +11,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import hashlib
 import json
+import secrets
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import Field, field_validator, model_validator
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, select
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, or_, select
 from sqlalchemy.orm import Session
 
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
@@ -145,9 +146,12 @@ def item_bom_summary(item, s=None):
     from spool_receiving import is_physical_spool, physical_spool_number
     if s is None or not is_physical_spool(s, item):
         return None
+    from order_spools import spool_qr_identity
+    qr = spool_qr_identity(s, item.id)
     trace = s.get(SpoolBomTrace, item.id)
     return {'api_url': '/api/spool-boms/spools/' + quote(item.id, safe=''),
         'item_id': item.id, 'spool_number': physical_spool_number(s, item),
+        'qr_alias': qr.display_code if qr else None, 'display_code': qr.display_code if qr else item.id,
         'catalog_id': trace.catalog_id if trace else '',
         'revision': trace.definition.get('revision', '') if trace else '',
         'line_count': len(trace.definition.get('lines', [])) if trace else 0}
@@ -164,10 +168,11 @@ def _piece_definitions(definition):
     result = []
     if not definition or not definition.get('traceable', True):
         return result
-    for line in definition['lines']:
+    for line_number, line in enumerate(definition['lines'], 1):
         for number in range(1, line['quantity'] + 1):
             result.append({'piece_key': f'{line.get("piece_key_prefix", line["item"])}-{number}', 'item': line['item'],
-                'piece_number': number, 'pieces_on_line': line['quantity'],
+                'line_number': line_number, 'piece_number': number, 'pieces_on_line': line['quantity'],
+                'piece_label': f'Item {line["item"]} · Piece {number:03d} of {line["quantity"]:03d}',
                 **{key: line.get(key, '') for key in ('tas_ln_number', 'description', 'material', 'length_inches', 'length_display')},
                 'part_number': line.get('part_number', line.get('tas_ln_number', '')),
                 'size': line.get('size', ''), 'unit': line.get('unit', 'EA')})
@@ -260,11 +265,106 @@ def _materials(s, spool_id, definition):
     saved = {row.piece_key: row for row in s.scalars(
         select(SpoolBomMaterial).where(SpoolBomMaterial.spool_id == spool_id))}
     result = []
+    source = (definition or {}).get('_source') or {
+        'kind': 'catalog', 'sha256': ((definition or {}).get('source_workbook') or {}).get('sha256'),
+        'catalog_sha256': (definition or {}).get('catalog_sha256')}
+    source_stamp = _source_hash(source)[:8].upper()
     for piece in _piece_definitions(definition):
         row = saved.get(piece['piece_key'])
         result.append({**piece, **{key: getattr(row, key) if row else '' for key in MATERIAL_FIELDS},
+                       'piece_identifier': f'{spool_id}/MAT-{source_stamp}-{piece["line_number"]:03d}-{piece["piece_number"]:03d}',
+                       'persisted': row is not None,
                        'updated_by': row.updated_by if row else None,
                        'updated_at': _stamp(row.updated_at) if row else None})
+    return result
+
+
+BACKFILL_ACTOR = 'system:material-piece-backfill'
+
+
+def ensure_system_backfill_actor(s):
+    """Attribute automatic blank-record creation without changing human accounts."""
+    actor = s.get(Employee, BACKFILL_ACTOR)
+    if actor is None:
+        from main import password_hash
+        actor = Employee(badge=BACKFILL_ACTOR, name='Automatic material record setup',
+            role='misc', active=False, pin_hash=password_hash.hash(secrets.token_urlsafe(48)))
+        s.add(actor)
+        s.flush()
+    elif actor.active or actor.role != 'misc':
+        raise RuntimeError('The material backfill system identity must be disabled and have the misc role.')
+    return actor.badge
+
+
+def ensure_material_piece_records(s, item_or_id, actor, reason, *, uploaded_only=True):
+    """Persist blank physical pieces once; caller holds topology and owns commit.
+
+    An existing pin is never replaced or filled from another source. Revisions
+    continue through the explicit adoption workflow, which keeps old history.
+    """
+    from spool_receiving import is_physical_spool
+    item = s.get(Item, item_or_id) if isinstance(item_or_id, str) else item_or_id
+    if not is_physical_spool(s, item) or s.get(SpoolBomTrace, item.id) is not None:
+        return 0
+    state = physical_bom_state(s, item.id)
+    definition, source = state['current_definition'], state['source_status']['current']
+    if (not definition or not definition.get('traceable', True)
+            or uploaded_only and (not source or source['kind'] != 'uploaded')):
+        return 0
+    pieces = _piece_definitions(definition)
+    if not pieces:
+        return 0
+    if actor == BACKFILL_ACTOR:
+        actor = ensure_system_backfill_actor(s)
+    now = utcnow()
+    trace = SpoolBomTrace(spool_id=item.id, catalog_id=definition['catalog_id'],
+        spool_number=definition['spool_number'], source_sha256=definition['source_workbook']['sha256'],
+        definition=deepcopy(definition), version=1, created_by=actor, updated_by=actor,
+        created_at=now, updated_at=now)
+    s.add(trace)
+    s.flush()
+    for piece in pieces:
+        s.add(SpoolBomMaterial(spool_id=item.id, piece_key=piece['piece_key'],
+            **{key: '' for key in MATERIAL_FIELDS}, updated_by=actor, updated_at=now))
+    changes = [{'type': 'pieces_initialized', 'source': source, 'piece_count': len(pieces),
+                'after_definition': deepcopy(definition), 'material_values_blank': True}]
+    s.add(SpoolBomEvent(spool_id=item.id, version=1, actor=actor, at=now, reason=reason, changes=changes))
+    audit(s, item.id, actor, 'SPOOL_MATERIAL_PIECES_INITIALIZED', {
+        'source': source, 'piece_count': len(pieces), 'reason': reason, 'material_values_blank': True})
+    s.flush()
+    return len(pieces)
+
+
+def backfill_material_piece_records(s, actor=BACKFILL_ACTOR, *, batch_size=100):
+    """Bound memory while initializing existing uploaded BOMs; no acceptance."""
+    from tracking import SpoolPlan
+    from removals import item_not_removed, require_active_item
+    if not 1 <= batch_size <= 500:
+        raise ValueError('Material backfill batch_size must be between 1 and 500.')
+    last_id = ''
+    result = {'created_spools': 0, 'created_pieces': 0, 'skipped': 0, 'unavailable': 0}
+    while True:
+        ids = list(s.scalars(select(Item.id).where(Item.id > last_id, Item.kind != 'Assembly',
+            or_(Item.kind == 'Spool', select(SpoolPlan.item_id).where(SpoolPlan.item_id == Item.id).exists(),
+                select(OrderSpool.item_id).where(OrderSpool.item_id == Item.id).exists()),
+            ~select(SpoolBomTrace.spool_id).where(SpoolBomTrace.spool_id == Item.id).exists(),
+            item_not_removed(Item.id)).order_by(Item.id).limit(batch_size)))
+        if not ids:
+            break
+        for item_id in ids:
+            try:
+                require_active_item(s, item_id)
+                count = ensure_material_piece_records(s, item_id, actor,
+                    'Initialize distinct blank pieces from the already uploaded physical BOM.')
+            except HTTPException as error:
+                if error.status_code not in (404, 409):
+                    raise
+                result['unavailable'] += 1
+                continue
+            result['created_spools'] += bool(count)
+            result['created_pieces'] += count
+            result['skipped'] += not bool(count)
+        last_id = ids[-1]
     return result
 
 
@@ -325,10 +425,15 @@ def _spool(s, item_id):
 
 
 def _spool_detail(s, item_id, user):
-    from spool_receiving import _physical_summary, mtr_detail
+    from spool_receiving import _physical_summary, mtr_detail, material_qa_states
     state = physical_bom_state(s, item_id)
     item, trace, definition, context = (state[key] for key in ('item', 'trace', 'definition', 'context'))
-    materials = state['materials']
+    qa = material_qa_states(s, state, user)
+    materials = [{**row, 'qa001': qa[row['piece_key']]} for row in state['materials']]
+    from order_spools import spool_qr_identity
+    qr = spool_qr_identity(s, item.id)
+    display_context = {**context, 'qr_alias': qr.display_code if qr else None,
+                       'display_code': qr.display_code if qr else item.id}
     locked = _locked_reason(s, item)
     history = list(s.scalars(select(SpoolBomEvent).where(SpoolBomEvent.spool_id == item.id)
                   .order_by(SpoolBomEvent.version.desc()).limit(50)))
@@ -336,7 +441,7 @@ def _spool_detail(s, item_id, user):
         and state['source_status']['adoptable'] and _can_edit(user) and not locked)}
     base = definition or {'spool_number': context['spool_number'], 'revision': '', 'lines': [],
                            'line_count': 0, 'total_pieces': None, 'traceable': False}
-    return {**base, 'context': context, 'bom_available': definition is not None,
+    return {**base, 'context': display_context, 'bom_available': definition is not None,
         'source_status': source_status, 'arrival': _physical_summary(s, item, user, history=True),
         'mtr_documents': mtr_detail(s, item, user), 'traceability': {
         'configured': trace is not None, 'version': trace.version if trace else 0,

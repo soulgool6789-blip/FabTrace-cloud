@@ -8,9 +8,10 @@ Legacy children retain their identity and existing plans and work.
 from collections import defaultdict
 
 from fastapi import HTTPException
-from sqlalchemy import Column, DateTime, ForeignKey, String, or_, select
+from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
+                        String, UniqueConstraint, and_, exists, func, or_, select, text)
 
-from main import Base, Item, utcnow
+from main import Base, Item, audit, utcnow
 from tracking import SpoolPlan
 
 
@@ -25,6 +26,136 @@ class OrderSpool(Base):
     requirement_id = Column(String(60), ForeignKey('order_spool_requirements.id'), nullable=False, index=True)
     created_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SpoolQrIdentity(Base):
+    """Permanent human-readable label; Item.id remains the traceability key.
+
+    Numbering is global per normalized spool number, including removed items.
+    These rows are append-only history and must never be recycled or reranked.
+    """
+    __tablename__ = 'spool_qr_identities'
+    __table_args__ = (
+        UniqueConstraint('normalized_number', 'sequence', name='uq_spool_qr_number_sequence'),
+        CheckConstraint('sequence > 0', name='ck_spool_qr_sequence_positive'),
+    )
+    item_id = Column(String(60), ForeignKey('items.id'), primary_key=True)
+    spool_number = Column(String(160), nullable=False)
+    normalized_number = Column(String(480), nullable=False, index=True)
+    sequence = Column(Integer, nullable=False)
+    display_code = Column(String(180), nullable=False, unique=True)
+    normalized_code = Column(String(540), nullable=False, unique=True)
+    # Like Audit.actor, migration provenance does not fabricate an employee.
+    created_by = Column(String(80), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    source = Column(String(80), nullable=False)
+
+
+def _qr_number(value):
+    return ' '.join((value or '').split())
+
+
+def _qr_key(value):
+    return _qr_number(value).casefold()
+
+
+def _lock_qr_allocation(s):
+    """Use the same transaction lock and ordering as every physical writer."""
+    transaction = s.get_transaction()
+    if transaction is not None and s.info.get('spool_qr_lock_transaction') is transaction:
+        return
+    if s.get_bind().dialect.name == 'postgresql':
+        from flow import TOPOLOGY_LOCK
+        with s.no_autoflush:
+            s.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': TOPOLOGY_LOCK})
+    # This is a lock marker only, not a cache of mutable identity/receipt data.
+    s.info['spool_qr_lock_transaction'] = s.get_transaction()
+
+
+def spool_qr_identity(s, item_id):
+    """Read a stored identity without allocating or changing inventory."""
+    return s.get(SpoolQrIdentity, item_id)
+
+
+def resolve_spool_qr_identity(s, code):
+    """Resolve a complete alias; do not guess a spool from its base number."""
+    normalized = _qr_key(code)
+    if not normalized or len(normalized) > 540:
+        return None
+    return s.scalar(select(SpoolQrIdentity).where(
+        SpoolQrIdentity.normalized_code == normalized))
+
+
+def guard_spool_qr_number(s, item):
+    identity = spool_qr_identity(s, item.id)
+    if identity and _qr_key(item.google_part_number) != identity.normalized_number:
+        raise HTTPException(409, 'This physical spool has a permanent QR identity. '
+            'Its spool number cannot be changed after the label is assigned.')
+
+
+def ensure_spool_qr_identity(s, item, actor, source='item_create'):
+    """Allocate once in the caller's transaction; never commit or rename Item.
+
+    An actual spool number is required. Legacy blank numbers keep their old
+    ID/QR until a real number is entered; components and assemblies stay as-is.
+    """
+    _lock_qr_allocation(s)
+    prior = spool_qr_identity(s, item.id)
+    if prior is not None:
+        return prior
+    if item.kind == 'Assembly':
+        return None
+    if item.kind != 'Spool' and not (s.get(SpoolPlan, item.id) or s.get(OrderSpool, item.id)):
+        return None
+    number = _qr_number(item.google_part_number)
+    if not number:
+        return None
+    normalized = _qr_key(number)
+    last = s.scalar(select(func.max(SpoolQrIdentity.sequence)).where(
+        SpoolQrIdentity.normalized_number == normalized)) or 0
+    sequence = last + 1
+    if sequence > 2147483647:
+        raise HTTPException(409, 'The spool QR sequence is exhausted; no identity was created.')
+    code = f'{number}-[{sequence:03d}]'
+    identity = SpoolQrIdentity(item_id=item.id, spool_number=number,
+        normalized_number=normalized, sequence=sequence, display_code=code,
+        normalized_code=_qr_key(code), created_by=actor, source=source)
+    s.add(identity)
+    audit(s, item.id, actor, 'SPOOL_QR_IDENTITY_ASSIGNED', {
+        'item_id': item.id, 'spool_number': number, 'sequence': sequence,
+        'display_code': code, 'source': source, 'legacy_item_id': item.id})
+    s.flush()
+    return identity
+
+
+def backfill_spool_qr_identities(s, actor='system:spool-qr-backfill'):
+    """Deterministically append aliases to legacy physical records, in batches.
+
+    Include removed identities so their sequence numbers remain reserved.
+    Re-running initialization never alters existing rows, labels or item data.
+    """
+    _lock_qr_allocation(s)
+    physical = or_(Item.kind == 'Spool', and_(Item.kind != 'Assembly', or_(
+        exists().where(SpoolPlan.item_id == Item.id),
+        exists().where(OrderSpool.item_id == Item.id))))
+    missing = ~exists().where(SpoolQrIdentity.item_id == Item.id)
+    created, missing_number, cursor = 0, 0, None
+    while True:
+        query = select(Item).where(physical, missing)
+        if cursor is not None:
+            at, item_id = cursor
+            query = query.where(or_(Item.created_at > at,
+                and_(Item.created_at == at, Item.id > item_id)))
+        rows = s.scalars(query.order_by(Item.created_at, Item.id).limit(500)).all()
+        if not rows:
+            break
+        for item in rows:
+            if ensure_spool_qr_identity(s, item, actor, source='startup_backfill') is None:
+                missing_number += 1
+            else:
+                created += 1
+        cursor = (rows[-1].created_at, rows[-1].id)
+    return {'created': created, 'missing_spool_number': missing_number}
 
 
 def registered_spool(s, item_id):

@@ -38,11 +38,13 @@ TABLES = {
     "Order assemblies": ("orders", "OrderAssembly"),
     "Assembly quantity plans": ("order_setup", "OrderAssemblyRequirement"),
     "Registered order spools": ("order_spools", "OrderSpool"),
+    "Spool QR labels": ("order_spools", "SpoolQrIdentity"),
     "Spool quantity plans": ("order_setup", "OrderSpoolRequirement"),
     "Spool BOM trace configs": ("spool_boms", "SpoolBomTrace"),
     "Spool BOM material pieces": ("spool_boms", "SpoolBomMaterial"),
     "Spool BOM trace events": ("spool_boms", "SpoolBomEvent"),
     "Spool arrival inspections": ("spool_receiving", "SpoolArrivalInspection"),
+    "Material QA-001 inspections": ("spool_receiving", "SpoolMaterialInspection"),
     "Spool MTR documents": ("spool_receiving", "SpoolMtrDocument"),
     "Spool document scopes": ("spool_documents", "SpoolDocumentSet"),
     "Spool uploaded documents": ("spool_documents", "SpoolDocument"),
@@ -439,6 +441,7 @@ def test_spool_arrival_and_mtr_export_retains_metadata_and_current_status_withou
     from tracking_helpers import ok
 
     item_id = create_item(api, 'EXPORT-ARRIVAL-001', kind='Spool')
+    ok(api.patch('/api/items/' + item_id + '/part-number', {'google_part_number': '643-EXPORT-PCW-03-01'}))
     mtr = ok(upload_mtr(api, item_id), 201)['mtr_documents']['current'][0]
     accepted = accept_arrival(api, item_id)
     before = snapshot(api)
@@ -448,6 +451,14 @@ def test_spool_arrival_and_mtr_export_retains_metadata_and_current_status_withou
     assert arrival['result'].value == 'Pass' and arrival['actor'].value == BADGES['inspector']
     basis = json.loads(workbook.full_text(arrival, 'basis'))
     assert basis['spool_id'] == item_id and basis['mtr_documents'][0]['id'] == mtr['id']
+    piece_qa = workbook.records('Material QA-001 inspections')[0]
+    assert piece_qa['spool_id'].value == item_id
+    assert piece_qa['check_code'].value == 'QA-001' and piece_qa['result'].value == 'Pass'
+    assert piece_qa['actor'].value == BADGES['inspector']
+    assert json.loads(workbook.full_text(piece_qa, 'basis'))['piece_key'] == piece_qa['piece_key'].value
+    label = workbook.records('Spool QR labels')[0]
+    assert label['item_id'].value == item_id and label['display_code'].value == '643-EXPORT-PCW-03-01-[001]'
+    assert label['sequence'].value == 1
     document = workbook.records('Spool MTR documents')[0]
     assert document['id'].value == mtr['id'] and document['sha256'].value == mtr['sha256']
     assert 'content' not in workbook.headers('Spool MTR documents')
@@ -714,7 +725,7 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     receipt = next(row for row in events if row["action"].value == "advance")
     data = json.loads(receipt["data"].value)
     assert data["confirmations"] == [row["id"] for row in current["current"]["checks"]]
-    assert data["definition_version"] == "CLM-24-v1"
+    assert data["definition_version"] == "CLM-24-v2"
     assert data["step_definition"]["number"] == 1
     assert receipt["notes"].value == "Receipt α < & >"
     exception = workbook.records("Flow exceptions")[0]
@@ -728,6 +739,9 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     assert all(row["item_id"].value == component_id and row["project_id"].value == "TEST-PROJECT" for row in visits)
     assert [row["process_key"].value for row in visits] == ["clm_01", "clm_02", "clm_02"]
     assert len(workbook.records("Flow steps")) == 24
+    qa_steps = [row for row in workbook.records("Flow steps") if row["qa"].value]
+    assert [row["qa_code"].value for row in qa_steps] == ["QA-001", "QA-002", "QA-003", "QA-004", "QA-005"]
+    assert qa_steps[0]["title"].value == "QA-001-Check Dimensions"
     shipping = workbook.records("Flow steps")[22]
     assert shipping["number"].value == 23 and shipping["requires_reference"].value is True
 

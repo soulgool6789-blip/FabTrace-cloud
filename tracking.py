@@ -926,6 +926,7 @@ def initialize_order_weld_scope(s, item, project_id, assembly_id, weld_count, ac
     inferred, and each weld receives the normal pending quality requirements.
     """
     from orders import _flush
+    from order_spools import ensure_spool_qr_identity
     if not validate_order_weld_scope(s, item, project_id, assembly_id, weld_count):
         return 0
     values = {'project_id': project_id, 'assembly_id': assembly_id,
@@ -937,6 +938,10 @@ def initialize_order_weld_scope(s, item, project_id, assembly_id, weld_count, ac
              for number in range(1, weld_count + 1)]
     s.add_all(welds)
     _flush(s)
+    ensure_spool_qr_identity(s, item, actor, source='purchase_order_weld_count')
+    from spool_boms import ensure_material_piece_records
+    ensure_material_piece_records(s, item, actor,
+        'Initialize physical material pieces while declaring the saved spool weld count.')
     definitions = _default_definitions()
     for weld in welds:
         for definition in definitions:
@@ -1093,6 +1098,11 @@ def save_plan(item_id: str, data: PlanIn, u: Employee = Depends(auth), s: Sessio
         s.flush()
         _invalidate_spool(item, physical=True)
     item.project = data.project_id
+    from order_spools import ensure_spool_qr_identity
+    ensure_spool_qr_identity(s, item, u.badge, source='tracking_plan')
+    from spool_boms import ensure_material_piece_records
+    ensure_material_piece_records(s, item, u.badge,
+        'Initialize physical material pieces from the uploaded spool BOM after weld-plan setup.')
     _sync_legacy_counts(s, item)
     audit(s, item.id, u.badge, 'TRACKING_PLAN_SAVED', {'before': before, 'after': values})
     _commit(s)

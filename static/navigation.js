@@ -26,9 +26,9 @@
     // Route selectors precede item/spool IDs, which are also used inside several workspaces.
     for(const [page,entry] of Object.entries(pages)){if(page!=='itemPage'&&q.has(entry[2]))return page;}
     if(q.has('badge'))return 'handoffPage';
-    return q.get('item')?'itemPage':'itemsPage';
+    return q.get('item')||q.get('spool')?'itemPage':'itemsPage';
   }
-  function defaultUrl(page){return page==='itemPage'&&typeof current!=='undefined'&&current?.id?'/?item='+encodeURIComponent(current.id):'/?'+pages[page][2]+'=1';}
+  function defaultUrl(page){return page==='itemPage'&&typeof current!=='undefined'&&current?.id?'/?'+(current.qr_alias?'spool='+encodeURIComponent(current.qr_alias):'item='+encodeURIComponent(current.id)):'/?'+pages[page][2]+'=1';}
   function copyFrame(frame){return frame?{...frame,fields:frame.fields?.map(value=>({...value})),details:frame.details?.map(value=>({...value}))}:null;}
   function labelFor(page){const title=node(page)?.querySelector('h1');return title?.textContent?.trim().replace(/\s+/g,' ').slice(0,90)||pages[page]?.[1]||'Orders';}
   function canLeave(targetPage){
@@ -69,7 +69,10 @@
     if(active?.page===page){prepare();return true;}
     if(active&&!restoring){prepare();push(prepared);}
     const existing=safeUrl(location.href),url=pageFor(existing)===page&&!(page==='itemsPage'&&existing==='/')?existing:defaultUrl(page);
-    active={page,url,label:pages[page][1],transition:!!pages[page][0]};prepared=null;
+    // The first item render canonicalizes legacy ?item= links to its saved
+    // ?spool= label. This completes the same navigation, not a second visit.
+    // Same-page item changes return above and still push their prior frame.
+    active={page,url,label:pages[page][1],transition:!!pages[page][0]||page==='itemPage'};prepared=null;
     // Legacy item, employee, activity and bulk screens did not previously write a route.
     originalReplace(null,'',url);return true;
   }
@@ -161,7 +164,7 @@
       case 'dossierPage':return window.FabDossier.open({project:v('project'),item:v('item'),tab:v('tab')||'items'});
       case 'adminPage':if(me?.role!=='admin')return window.FabOrderSetup.open();return window.FabAdmin.open({item:v('item'),tab:v('tab')||'items',badge:v('employee'),includeRemoved:v('removed')==='1'});
       case 'removalsPage':if(me?.role!=='admin')return window.FabOrderSetup.open();return window.FabRemovals.openList();
-      case 'itemPage':return v('item')?openItem(v('item')):window.FabOrderSetup.open();
+      case 'itemPage':return v('item')?openItem(v('item')):v('spool')?openItem(await window.resolveItemQr(new URL(frame.url,location.origin).href)):window.FabOrderSetup.open();
       case 'itemsPage':offset=frame.itemOffset||0;if(node('search'))node('search').value=frame.fields?.find(field=>field.id==='search')?.value||'';return listItems();
       case 'bulkPage':if(!jobCan('manage_production'))return window.FabOrderSetup.open();return node('navBulk').onclick();
       case 'staffPage':if(me?.role!=='admin')return window.FabOrderSetup.open();return node('navStaff').onclick();

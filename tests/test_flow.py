@@ -131,18 +131,50 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     steps = definition["steps"]
     assert [row["number"] for row in steps] == list(range(1, 25))
     assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 19, 22}
+    assert definition['version'] == 'CLM-24-v2'
+    assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
+        (2, 'QA-001', 'QA-001-Check Dimensions'),
+        (11, 'QA-002', 'QA-002-Check Dimensions'),
+        (15, 'QA-003', 'QA-003-Inspect Welds'),
+        (19, 'QA-004', 'QA-004-Assembly Inspection'),
+        (22, 'QA-005', 'QA-005-Final Inspection'),
+    ]
+    assert all(row['qa_code'] is None for row in steps if not row['qa'])
     assert [(row["id"], row["first_step"], row["last_step"]) for row in definition["routes"]] == [
         ("component", 1, 8), ("spool", 9, 16), ("assembly", 17, 24),
     ]
     for row in steps:
         assert row["title"] and row["roles"] and row["checks"]
         assert len({check["id"] for check in row["checks"]}) == len(row["checks"])
-    for number in (11, 15, 19, 22):
+    for number in (2, 11, 15, 19, 22):
         assert set(steps[number - 1]["roles"]) == {"admin", "inspector"}
     assert steps[10]["return_steps"] == [10]
     assert steps[14]["return_steps"] == [14]
     assert set(steps[18]["return_steps"]) == {17, 18}
     assert set(steps[21]["return_steps"]) == {17, 18, 19, 20, 21}
+
+
+def test_numbered_qa_titles_do_not_rewrite_historical_definitions(api, monkeypatch):
+    flow = importlib.import_module('flow')
+    item_id = create_item(api, 'FLOW-OLD-QA-TITLE')
+    legacy = {**flow.STEP_BY_NUMBER[2], 'title': 'Check Dimensions'}
+    legacy.pop('qa_code')
+    with monkeypatch.context() as old:
+        old.setattr(flow, 'VERSION', 'CLM-24-v1')
+        old.setitem(flow.STEP_BY_NUMBER, 2, legacy)
+        previous = enroll(api, item_id, 'component', start_step=2)
+    retained = previous['events']
+    assert retained[0]['data']['definition_version'] == 'CLM-24-v1'
+    assert retained[0]['data']['step_definition']['title'] == 'Check Dimensions'
+    current = detail(api, item_id)
+    assert current['events'] == retained
+    assert current['flow']['current']['title'] == 'QA-001-Check Dimensions'
+    assert current['flow']['current']['checks'] == legacy['checks']
+    progressed = advance(api, item_id, role='inspector')
+    newer = next(row for row in progressed['events'] if row['action'] == 'advance')
+    assert newer['data']['definition_version'] == 'CLM-24-v2'
+    assert newer['data']['step_definition']['qa_code'] == 'QA-001'
+    assert next(row for row in progressed['events'] if row['sequence'] == retained[0]['sequence']) == retained[0]
 
 
 def test_flow_requires_auth_and_does_not_invent_existing_history(api):

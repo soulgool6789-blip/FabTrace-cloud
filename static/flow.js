@@ -67,8 +67,9 @@
     try{const url=new URL(text);if(url.searchParams.has('item'))return url.searchParams.get('item')}catch(_){}
     return /^[A-Za-z0-9_-]{3,60}$/.test(text)?text:'';
   }
-  function readId(value,label='Item ID'){
-    const id=normalizeId(value);if(!id)throw Error(label+': scan or enter a valid FabTrace item ID.');return id;
+  async function readId(value,label='Item ID'){
+    const id=typeof window.resolveItemQr==='function'?await window.resolveItemQr(value):normalizeId(value);
+    if(!id)throw Error(label+': scan or enter a valid FabTrace spool label or item ID.');return id;
   }
   function field(name,label,value='',settings={}){
     const id='ff-field-'+name,common=`id="${esc(id)}" name="${esc(name)}"${settings.required?' required':''}${settings.disabled?' disabled':''}`;
@@ -276,7 +277,7 @@
   }
   function wire(){
     const lookupForm=node('flowLookupForm');
-    if(lookupForm)lookupForm.onsubmit=async event=>{event.preventDefault();try{await open({item:readId(node('flowLookup').value)})}catch(error){notify(errorText(error))}};
+    if(lookupForm)lookupForm.onsubmit=async event=>{event.preventDefault();const sequence=state.sequence,lookup=state.lookup=(state.lookup||0)+1;try{const item=await readId(node('flowLookup').value);if(sequence!==state.sequence||lookup!==state.lookup)return;await open({item})}catch(error){if(sequence===state.sequence&&lookup===state.lookup)notify(errorText(error))}};
     for(const [id,key] of [['flowProject','project'],['flowSubproject','subproject'],['flowStatus','status']]){
       const element=node(id);if(element)element.onchange=()=>{state[key]=element.value;if(key==='project')state.subproject='';render();updateUrl()};
     }
@@ -316,9 +317,9 @@
       const confirmations=arr(step.checks).filter(check=>values['check_'+check.id]==='on').map(check=>check.id);
       if(confirmations.length!==arr(step.checks).length)throw Error('Confirm every checklist item before completing this step.');
       const payload={expected_version:detail.flow.version,confirmations,notes:String(values.notes||'').trim()};
-      if(step.requires_scan)payload.scanned_item_id=readId(values.scanned_item_id);
+      if(step.requires_scan)payload.scanned_item_id=await readId(values.scanned_item_id);
       if(step.number===17){
-        payload.scanned_child_ids=String(values.scanned_child_ids||'').split(/\r?\n/).map(value=>value.trim()).filter(Boolean).map(value=>readId(value,'Linked spool ID'));
+        payload.scanned_child_ids=await Promise.all(String(values.scanned_child_ids||'').split(/\r?\n/).map(value=>value.trim()).filter(Boolean).map(value=>readId(value,'Linked spool ID')));
         if(!payload.scanned_child_ids.length)throw Error('Scan or enter each linked spool ID on its own line.');
       }
       if(step.requires_handoff){
@@ -331,10 +332,11 @@
         if(!(location_id==='current'&&transfer.location)&&!arr(state.handoffOptions?.locations).some(row=>row.id===location_id&&row.active))throw Error('Choose an active storage or receiving location.');
         payload.location_id=location_id;payload.expected_transfer_version=transfer.version;
       }
-      if(step.number===5)payload.target_spool_id=readId(values.target_spool_id,'Assigned spool ID');
+      if(step.number===5)payload.target_spool_id=await readId(values.target_spool_id,'Assigned spool ID');
       if(step.requires_reference){payload.reference=String(values.reference||'').trim();if(!payload.reference)throw Error('Enter the required record or inspection reference.');}
       if(step.number===24)for(const key of ['carrier','shipment_reference','destination']){payload[key]=String(values[key]||'').trim();if(!payload[key])throw Error('Enter the carrier, shipping reference, and destination.');}
       if(step.qa&&openExceptions().some(row=>Number(row.step)===Number(step.number))){payload.resolution=String(values.resolution||'').trim();if(!payload.resolution)throw Error('Record the rework resolution and reinspection findings.');}
+      if(state.sequence!==sequence||state.item!==detail.item.id)return;
       await save(ROOT+'/items/'+encode(detail.item.id)+'/advance',payload);
     }catch(error){
       if(state.sequence!==sequence)return;
@@ -405,8 +407,12 @@
   }
   function linkItem(kind){
     if(!can(kind))return;
-    const detail=state.detail,assigning=kind==='assign-component';
-    dialog(assigning?'Assign component to spool':'Link spool to assembly',`<p>${esc(detail.item.id)} · ${assigning?'Assign this component to its existing spool record.':'Add an existing spool to this assembly. Verify its physical barcode or tracking ID.'}</p>`+fields(field('spool_id','Scan or enter spool ID',assigning?detail.parent?.item_id||'':'',{required:true,maxlength:500})+field('reference','BOM / drawing / link reference','',{maxlength:500})+field('notes','Link notes','',{type:'textarea',full:true,maxlength:3000})),values=>save(ROOT+'/items/'+encode(detail.item.id)+'/'+kind,{expected_version:detail.flow.version,spool_id:readId(values.spool_id,'Spool ID'),reference:String(values.reference||'').trim(),notes:String(values.notes||'').trim()}),assigning?'Assign component':'Link spool');
+    const detail=state.detail,assigning=kind==='assign-component',sequence=state.sequence;
+    dialog(assigning?'Assign component to spool':'Link spool to assembly',`<p>${esc(detail.item.display_code||detail.item.id)} · ${assigning?'Assign this component to its existing spool record.':'Add an existing spool to this assembly. Verify its physical QR label or tracking ID.'}</p>`+fields(field('spool_id','Scan or enter spool label',assigning?detail.parent?.item_id||'':'',{required:true,maxlength:2000})+field('reference','BOM / drawing / link reference','',{maxlength:500})+field('notes','Link notes','',{type:'textarea',full:true,maxlength:3000})),async values=>{
+      const spoolId=await readId(values.spool_id,'Spool label');
+      if(state.sequence!==sequence||state.item!==detail.item.id||!node('flowDialog').open)return false;
+      return save(ROOT+'/items/'+encode(detail.item.id)+'/'+kind,{expected_version:detail.flow.version,spool_id:spoolId,reference:String(values.reference||'').trim(),notes:String(values.notes||'').trim()});
+    },assigning?'Assign component':'Link spool');
   }
   function deliver(){
     if(!can('deliver'))return;

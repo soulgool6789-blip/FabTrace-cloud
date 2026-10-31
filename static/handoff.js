@@ -10,6 +10,8 @@
   const text=value=>String(value??'');
   const badgeId=value=>typeof qrId==='function'?qrId(value,'badge'):text(value).trim();
   const itemId=value=>typeof qrId==='function'?qrId(value,'item'):text(value).trim();
+  const resolveItem=value=>typeof window.resolveItemQr==='function'?window.resolveItemQr(value):Promise.resolve(itemId(value));
+  const itemLabel=item=>item?.display_code||item?.qr_alias||item?.id||'';
   const snapshot=item=>item?.transfer||null;
   const statusLabel=(options,id)=>rows(options?.statuses).find(row=>row.id===id)?.label||'Not recorded';
   const destination=(options,transfer,id)=>id==='current'?transfer?.location||'':rows(options?.locations).find(row=>row.id===id&&row.active)?.label||'';
@@ -32,7 +34,7 @@
     const person=employee=>employee?`${employee.name} (${employee.badge})`:'Badge identification required';
     const pair=(label,value)=>`<dt>${esc(label)}</dt><dd>${esc(value||'—')}</dd>`;
     const same=sender&&receiver&&sender.badge===receiver.badge;
-    return `<h3>${esc(item?.id||transfer.item_id)}</h3>${same?'<p class="fh-same">Same custodian — location/status update</p>':''}<dl>${pair('Sending employee',person(sender))}${pair('Receiving employee',person(receiver))}${pair('From location',transfer.location)}${pair('To location',location||'Choose a destination')}${pair('Work status',statusLabel(options,status))}${pair('Recorded by',me?`${me.name} (${me.badge})`:'Sign in required')}</dl>${same&&location===transfer.location&&status===transfer.operational_status?'<p class="fh-help">Choose a changed location or work status before recording this update.</p>':''}`;
+    return `<h3>${esc(itemLabel(item)||transfer.item_id)}</h3>${same?'<p class="fh-same">Same custodian — location/status update</p>':''}<dl>${pair('Sending employee',person(sender))}${pair('Receiving employee',person(receiver))}${pair('From location',transfer.location)}${pair('To location',location||'Choose a destination')}${pair('Work status',statusLabel(options,status))}${pair('Recorded by',me?`${me.name} (${me.badge})`:'Sign in required')}</dl>${same&&location===transfer.location&&status===transfer.operational_status?'<p class="fh-help">Choose a changed location or work status before recording this update.</p>':''}`;
   }
   function validVersion(transfer){return transfer&&Number.isInteger(transfer.version)&&transfer.version>=0}
   function bindControls(prefix,{transfer,options,onChange=()=>{},onRole=()=>{}}={}){
@@ -130,9 +132,13 @@
     try{
       await active.reader.start({facingMode:'environment'},{fps:10,qrbox:{width:210,height:210}},async decoded=>{
         if(camera!==active||active.cancelled||active.handling||request!==cameraRequest||!isCurrent())return;
-        const id=kind==='item'?itemId(decoded):badgeId(decoded);
-        if(!id){status.textContent='That QR is not a valid '+(kind==='item'?'item':'employee badge')+' code. Try again.';return}
-        active.handling=true;await stopCamera();if(isCurrent())await onValue(id,'employee_qr');
+        active.handling=true;
+        try{
+          const id=kind==='item'?await resolveItem(decoded):badgeId(decoded);
+          if(camera!==active||active.cancelled||request!==cameraRequest||!isCurrent())return;
+          if(!id){active.handling=false;status.textContent='That QR is not a valid '+(kind==='item'?'item':'employee badge')+' code. Try again.';return}
+          await stopCamera();if(isCurrent())await onValue(id,'employee_qr');
+        }catch(error){if(camera===active&&!active.cancelled&&isCurrent()){active.handling=false;status.textContent=errorText(error)+' Try another label.';}}
       },()=>{});
       active.started=true;
       if(active.cancelled||camera!==active||request!==cameraRequest||!isCurrent())await cleanupCamera(active);
@@ -189,7 +195,7 @@
     const item=state.item,transfer=snapshot(item),target=node('handoffItemInfo'),process=node('handoffProcessNotice');
     if(!item){target.textContent='Scan or enter the physical item to begin.';process.classList.add('hidden');return}
     const pair=(label,value)=>`<dl><dt>${esc(label)}</dt><dd>${esc(value||'—')}</dd></dl>`;
-    target.innerHTML=`<strong>${esc(item.id)}</strong><div class="fh-current">${pair('Recorded custodian',`${transfer?.handler_name||item.handler||'—'}${transfer?.handler_name?' ('+transfer.handler+')':''}`)}${pair('Recorded location',transfer?.location||item.location)}${pair('Recorded work status',transfer?.status_label||'Not recorded')}${pair('Current process',item.flow_step?'Step '+item.flow_step+' · '+(item.flow_status||'In progress'):item.flow_enabled?item.flow_status||'Route recorded':'No numbered route')}${pair('Release decision',item.release_control?.label||(item.released?'QA released':'Not released'))}</div>${transfer?.handler_active===false?'<p class="fh-inline-error">The recorded custodian is inactive. A supervisor must resolve the employee record before this handoff.</p>':''}`;
+    target.innerHTML=`<strong>${esc(itemLabel(item))}</strong><div class="fh-current">${pair('Recorded custodian',`${transfer?.handler_name||item.handler||'—'}${transfer?.handler_name?' ('+transfer.handler+')':''}`)}${pair('Recorded location',transfer?.location||item.location)}${pair('Recorded work status',transfer?.status_label||'Not recorded')}${pair('Current process',item.flow_step?'Step '+item.flow_step+' · '+(item.flow_status||'In progress'):item.flow_enabled?item.flow_status||'Route recorded':'No numbered route')}${pair('Release decision',item.release_control?.label||(item.released?'QA released':'Not released'))}</div>${transfer?.handler_active===false?'<p class="fh-inline-error">The recorded custodian is inactive. A supervisor must resolve the employee record before this handoff.</p>':''}`;
     process.classList.toggle('hidden',!item.flow_enabled&&!item.released);
     process.innerHTML=`${item.released?'This item is released. Use its permitted later handoff in Process flow.':'To complete a production handoff and move the process clock, use the current numbered step.'}${item.flow_enabled?' <button type="button" id="handoffOpenFlow">Open current process step</button>':''}`;
     if(node('handoffOpenFlow'))node('handoffOpenFlow').onclick=()=>window.FabFlow.open({item:item.id});
@@ -198,16 +204,19 @@
   async function findItem(value){
     if(!state.active)return;
     if(value!==undefined)node('handoffItem').value=text(value);
-    const original=node('handoffItem').value,id=itemId(original),sequence=++state.itemSequence,epoch=state.epoch;
+    const original=node('handoffItem').value,sequence=++state.itemSequence,epoch=state.epoch;
     await stopCamera();if(!state.active||sequence!==state.itemSequence||epoch!==state.epoch||node('handoffItem').value!==original)return;
     state.item=null;clearPending();mountControls();renderIncoming();error();node('handoffProcessNotice').classList.add('hidden');
-    if(!id){node('handoffItemInfo').textContent='Scan an item QR label or enter a valid item ID.';return}
-    node('handoffItemInfo').textContent='Loading item '+id+'…';
+    node('handoffItemInfo').textContent='Loading physical spool…';
     try{
+      const id=await resolveItem(original);
+      if(!state.active||sequence!==state.itemSequence||epoch!==state.epoch||node('handoffItem').value!==original)return;
+      if(!id){node('handoffItemInfo').textContent='Scan an item QR label or enter a valid spool code.';return}
       const item=await api('/api/items/'+encode(id));
       if(!state.active||sequence!==state.itemSequence||epoch!==state.epoch||node('handoffItem').value!==original)return;
+      if(item?.id!==id)throw Error('The physical spool response could not be verified. Try scanning the label again.');
       if(!validVersion(snapshot(item)))throw Error('Transfer details are unavailable. Refresh the page before recording this item.');
-      state.item=item;node('handoffItem').value=item.id;mountControls();renderItem();renderIncoming();remember();
+      state.item=item;node('handoffItem').value=itemLabel(item);mountControls();renderItem();renderIncoming();remember();
     }catch(err){if(state.active&&sequence===state.itemSequence&&epoch===state.epoch){node('handoffItemInfo').textContent=errorText(err);updateReview()}}
   }
   function invalidateItem(){
@@ -246,7 +255,7 @@
       state.saving=true;error();updateReview();await stopCamera();
       await api('/api/items/'+encode(item.id)+'/transfer',{method:'POST',body:JSON.stringify(payload)});
       if(!state.active||epoch!==state.epoch||sequence!==state.itemSequence||state.item?.id!==item.id)return;
-      clearPending();state.item=null;state.itemSequence++;node('handoffItem').value='';node('handoffNotes').value='';state.incoming=null;mountControls();renderIncoming();node('handoffProcessNotice').classList.add('hidden');node('handoffItemInfo').textContent='Transfer recorded for '+item.id+'. Scan the next item and both badges.';notify('Handoff recorded for '+item.id+'.');
+      clearPending();state.item=null;state.itemSequence++;node('handoffItem').value='';node('handoffNotes').value='';state.incoming=null;mountControls();renderIncoming();node('handoffProcessNotice').classList.add('hidden');node('handoffItemInfo').textContent='Transfer recorded for '+itemLabel(item)+'. Scan the next item and both badges.';notify('Handoff recorded for '+itemLabel(item)+'.');
     }catch(err){
       if(!state.active||epoch!==state.epoch||sequence!==state.itemSequence||state.item?.id!==item?.id)return;
       if(err.status===409&&item){

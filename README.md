@@ -1,14 +1,16 @@
 # FabTrace Cloud
 
-## Individual spool materials and arrival QA/QC
+## Individual material records, QA-001 and arrival QA/QC
 
-Release `2026.10.31-spool-arrival.1` replaces the BOM shortcut beneath **Welds per spool** with recorded weld progress. It counts completed current-cycle individual welds against all required physical copies. Unregistered copies stay in the denominator; undeclared or conflicting weld scope does not claim a percentage. **BOM & drawings** remains beside the spool identity.
+Release `2026.10.31-piece-qa-labels.1` saves a separate material record for every whole piece in a physical spool's valid uploaded structured BOM. A flange line with quantity **2** creates **two saved flange records**, each with its own heat number, MTR reference and **QA-001 Pass/Fail** decision. The common BOM stays a reference for one spool; material facts and approvals belong to each actual physical spool and piece.
 
-Open a physical spool's **Materials & QA/QC** to view its own BOM, enter each material piece's heat number and MTR reference, upload/view PDF or scanned MTR pages, and record its arrival inspection. The unique physical spool ID remains visible even when several spools share a drawing number. Setup BOMs may supply their common reference, while physical material entries and QA decisions remain independent. An individual BOM upload overrides only that physical spool.
+Open the spool's **Materials & QA/QC**, confirm its readable spool label, and save the heat/MTR details for every piece. Upload/view the full MTR PDF or scanned pages under the matching reference. QA/QC or an administrator then selects **Pass** or **Fail** for each piece, enters an inspection reference and findings, and chooses **Save QA-001**. No decision is selected automatically, and one piece's Pass does not approve another.
 
-Every physical spool starts with **QA/QC required**. QA/QC or an administrator records **Pass** or **Fail**, a reference, notes and the five checks: identity, BOM, heat numbers, MTRs and condition. A current Pass requires a saved whole-piece material register with heat and MTR references for every piece. A Fail can record missing documents or incorrect material immediately. Until a current Pass exists, spool production, assembly readiness and release are blocked. An administrator's release override cannot bypass this arrival requirement.
+After every piece has a current QA-001 Pass, record the separate **overall arrival inspection** for the spool: identity, BOM, heat numbers, MTRs and condition. All five checks and the current piece approvals are required for an arrival Pass. A Fail can record missing documents or incorrect material immediately. Pending, failed or stale piece/arrival evidence blocks spool production, assembly readiness and release; administrative release cannot bypass it.
 
-Changing the material register, BOM or source evidence makes an earlier Pass require reinspection; affected running timers pause. Adopting a replacement BOM explicitly starts its material entries blank and retains the previous definition, entries and history. MTR versions and arrival decisions are retained as immutable history. Existing work and release records remain unchanged; historical work does not imply an arrival Pass. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for the receiving workflow.
+Material, BOM and relevant MTR changes require fresh affected piece checks and a new overall arrival Pass. Running affected work pauses and must be explicitly resumed after approval. Adopting a replacement BOM starts its new material entries blank and retains the old definition, entries and inspection history. Existing saved heat/MTR values, previous work and issued packets are retained; an upgrade never invents a QA-001 decision.
+
+The saved order's bar beneath **Welds per spool** continues to show actual weld progress. **BOM & drawings** stays beside the spool identity. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md) for the full receiving workflow.
 
 ## Simple orders and automatic file recognition
 
@@ -30,13 +32,15 @@ The document dialog starts with **Upload files** when no documents are saved. It
 
 Uploads in setup belong to that exact P.O., assembly, and spool requirement. Its registered physical spools inherit those references. An individual spool upload overrides only that spool's corresponding document. Repeated spool numbers elsewhere do not receive files automatically. Existing material heat/MTR records remain separate and unchanged. Uploaded references are included with the exact issued Job Packet revision; upload alone records no receipt, production work, or QA approval.
 
-## GPN and spool QR labels from a saved P.O.
+## Readable spool QR labels from a saved P.O.
 
-Open **Orders → Open P.O. → Generate spool QR labels**. FabTrace uses the saved quantities and generates only missing physical records. Choose the actual current location and responsible employee once per batch. Each physical spool receives its own permanent QR code; reprinting retains the same identity.
+Open **Orders → Open P.O. → Generate spool QR labels**. Choose the actual current location and responsible employee. FabTrace creates only missing physical records and any required parent assemblies, with each spool assigned to its exact assembly.
 
-Spool generation creates any missing parent assemblies automatically. It assigns the required spool numbers and quantities to **each individual assembly**, including repeated spool numbers. Spool labels show the spool number, P.O., parent GPN, physical assembly ID and unique spool ID. Print all labels or filter to one GPN, in pages of 100. Generation handles up to 500 new items per batch, including any parent assemblies; continue with the next batch when needed.
+Each physical copy receives a permanent code such as **643-777-PCW-03-01-[001]**. Eighteen new copies of that spool number receive **[001] through [018]** when no earlier copies exist. Numbering continues globally for the same spool number across purchase orders. Removed spools retain their numbers; replacement copies receive new numbers. Reprinting never renumbers existing spools.
 
-Initial quantity setup becomes locked once physical records exist. Declared weld counts create independent numbered weld records for each generated physical spool, with inspections still pending. Label generation records no receipts, completed work or QA acceptance. Active employees can view and reprint labels; administrators and supervisors can generate missing identities. See [ORDERS_GUIDE.md](ORDERS_GUIDE.md).
+Labels show the readable code, P.O., parent GPN and exact assembly context. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
+
+Print all labels or filter to one GPN, in pages of 100. Generation creates up to 500 physical items per batch, including parent assemblies. Declared weld counts produce independent numbered weld records with inspections pending. An inherited valid uploaded BOM creates blank material-piece records; generation supplies no heat/MTR values, receipts or QA approvals. Active employees can view and reprint; administrators and supervisors can generate missing records.
 
 ## Change an employee's position
 
@@ -67,7 +71,7 @@ FabTrace Cloud is a FastAPI and PostgreSQL application for shared fabrication re
 
 ## Later: physical production records
 
-From a saved P.O., use **Production records** (`/?orders=1`) when actual assemblies and spools are ready to register. A planned GPN / Assembly offers **Register physical assembly**; its required spool count comes from the saved per-assembly quantities. Enter actual location/custodian information at this later stage. Each physical assembly receives its own QR tracking ID, separate from its shared Google part number. Registration is limited to the saved assembly quantity, and linked physical spool part numbers/counts must match the saved spool requirements.
+From a saved P.O., use **Production records** (`/?orders=1`) when actual assemblies and spools are ready to register. A planned GPN / Assembly offers **Register physical assembly**; its required spool count comes from the saved per-assembly quantities. Enter actual location/custodian information at this later stage. Each physical assembly receives its own internal tracking ID, separate from its shared Google part number; QR labels belong to its individual spools. Registration is limited to the saved assembly quantity, and linked physical spool part numbers/counts must match the saved spool requirements.
 
 The retained detailed screen shows required, linked, missing and ready spool counts for each physical assembly. Older physical identities, differing retained part numbers, QR links and history remain available. Legacy registration and correction controls remain subject to their existing production/release locks and the quantity requirements of a planned branch.
 
@@ -145,6 +149,8 @@ Download an issued **ZIP** for digital transfer or open its **Print** view for p
 Open **Process flow** in the navigation or from an item's record. An administrator or supervisor starts its route: individual components use steps 1–8, tracked spools use 9–16, and tracked assemblies use 17–24. The full map retains all 24 numbered steps, while each physical item's traveler highlights its own current, completed, pending and unrecorded steps. Parent/child links let staff follow the work across those records.
 
 Declare the required component or child-spool count, link the actual item IDs, and complete each current step's checklist and required scan/entered ID or document reference. Handoff steps require the current custodian's sending badge, the receiving badge and selected location/work status. The app records both employee identities separately from the signed-in recorder and server time. Spools and assemblies need their existing project/weld plans first. An assembly cannot advance with missing or unreleased child spools, or unresolved issues in their component records.
+
+The current flow catalog is **CLM-24-v2**: step **2 = QA-001-Check Dimensions**, **11 = QA-002-Check Dimensions**, **15 = QA-003-Inspect Welds**, **19 = QA-004-Assembly Inspection**, and **22 = QA-005-Final Inspection**. Step numbers and responsibilities are unchanged. Earlier event labels remain as originally recorded.
 
 Incoming verification and the four QA checkpoints have controlled failure returns. A failed inspection creates an exception, sends the traveler to its selected rework step and preserves earlier attempts. Passing the failed checkpoint again requires current quality records and an explicit resolution. Individual weld operations and acceptance still belong to **Projects & welds**. Checkbox confirmations cannot substitute for them.
 

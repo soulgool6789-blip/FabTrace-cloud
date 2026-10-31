@@ -39,7 +39,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.31-spool-arrival.1'
+APP_VERSION='2026.10.31-piece-qa-labels.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -164,6 +164,9 @@ def item_dict(s,r,user=None):
     from spool_receiving import receiving_errors, receiving_summary
     active=not item_is_removed(s,r.id)
     d=asdict(r,ITEM_KEYS)
+    identity=spool_qr_identity(s,r.id)
+    d['qr_alias']=identity.display_code if identity else None
+    d['display_code']=d['qr_alias'] or r.id
     d['bom']=item_bom_summary(r,s) if active else None
     d['receiving']=receiving_summary(s,r,user)
     arrival_blockers=receiving_errors(s,r)
@@ -172,7 +175,7 @@ def item_dict(s,r,user=None):
     d['reworks']=[asdict(w,'id kind reason assigned opened_at closed_at closed_by close_notes'.split()) for w in s.scalars(select(Rework).where(Rework.item_id==r.id).order_by(Rework.id.desc())).all()]
     d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
     d['qr_eligible']=r.kind != 'Assembly'
-    d['qr_url']=phone_link('item',r.id) if d['qr_eligible'] and phone_qr_ready() else None
+    d['qr_url']=(phone_link('spool',d['qr_alias']) if identity else phone_link('item',r.id)) if d['qr_eligible'] and phone_qr_ready() else None
     d['tracking_enabled']=is_tracked(s,r)
     d['tracking']=tracking_summary(s,r) if d['tracking_enabled'] else None
     flow=s.get(FlowPlan,r.id)
@@ -289,12 +292,16 @@ def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Se
     limit=min(max(limit,1),500);offset=max(offset,0)
     q=select(Item).where(item_not_removed())
     if search:
-        q=q.where((Item.id.ilike('%'+search[:100]+'%'))|(Item.description.ilike('%'+search[:100]+'%'))|(Item.project.ilike('%'+search[:100]+'%'))|(Item.google_part_number.ilike('%'+search[:100]+'%')))
+        needle='%'+search[:180]+'%'
+        q=q.where((Item.id.ilike(needle))|(Item.description.ilike(needle))|(Item.project.ilike(needle))|(Item.google_part_number.ilike(needle))|
+                  Item.id.in_(select(SpoolQrIdentity.item_id).where(SpoolQrIdentity.display_code.ilike(needle))))
     count=s.scalar(select(func.count()).select_from(q.subquery()))
     rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
     tracked_ids=set(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.item_id.in_([r.id for r in rows])))) if rows else set()
+    aliases={row.item_id:row.display_code for row in s.scalars(select(SpoolQrIdentity).where(SpoolQrIdentity.item_id.in_([r.id for r in rows])))} if rows else {}
     from administration import release_summary
     return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids,
+        'qr_alias':aliases.get(r.id),'display_code':aliases.get(r.id,r.id),
         'release_control':release_summary(s,r)} for r in rows]}
 class ItemIn(BaseModel):
     id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')
@@ -316,7 +323,10 @@ def create_item(data:ItemIn,u:Employee=Depends(auth),s:Session=Depends(db)):
     if s.get(Item,data.id):raise HTTPException(409,'Item ID already exists')
     employee=s.get(Employee,data.handler)
     if not employee or not employee.active or employee_is_removed(s,data.handler):raise HTTPException(422,'Choose an active employee handler badge')
-    r=Item(**data.model_dump());s.add(r)
+    r=Item(**data.model_dump());s.add(r);s.flush()
+    ensure_spool_qr_identity(s,r,u.badge,'item_create')
+    from spool_boms import ensure_material_piece_records
+    ensure_material_piece_records(s,r,u.badge,'Individual material records initialized with the spool')
     audit(s,r.id,u.badge,'ITEM_CREATED',data.model_dump());s.commit()
     return item_dict(s,r,u)
 
@@ -331,7 +341,8 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
     before=r.google_part_number
     r.google_part_number=data.google_part_number.strip()
     if not r.google_part_number:raise HTTPException(422,'Google part number cannot be blank')
-    from order_spools import guard_registered_spool
+    from order_spools import guard_registered_spool, guard_spool_qr_number
+    guard_spool_qr_number(s,r)
     guard_registered_spool(s,r)
     from spool_boms import guard_spool_bom_identity
     guard_spool_bom_identity(s,r)
@@ -346,6 +357,9 @@ def update_part_number(item_id:str,data:PartNumberUpdate,u:Employee=Depends(auth
         group=s.get(OrderGpn,mapping.gpn_id)
         if _key(r.google_part_number)!=group.normalized_gpn:
             raise HTTPException(409,'The physical assembly part number must match its planned Google part number / assembly number')
+    ensure_spool_qr_identity(s,r,u.badge,'part_number_update')
+    from spool_boms import ensure_material_piece_records
+    ensure_material_piece_records(s,r,u.badge,'Individual material records initialized for the spool number')
     audit(s,r.id,u.badge,'GOOGLE_PART_NUMBER_CHANGED',{'previous':before,'new':r.google_part_number})
     s.commit()
     return item_dict(s,r,u)
@@ -398,7 +412,10 @@ def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends
                       drawing=row.drawing,location=row.location,handler=row.handler,
                       welds_required=row.welds_required)
             if not item.google_part_number:raise HTTPException(422,f'Row {index}: Google part number required')
-            s.add(item)
+            s.add(item);s.flush()
+            ensure_spool_qr_identity(s,item,u.badge,'bulk_item_create')
+            from spool_boms import ensure_material_piece_records
+            ensure_material_piece_records(s,item,u.badge,'Individual material records initialized with the spool')
             audit(s,item.id,u.badge,'ITEM_CREATED_BULK',{'google_part_number':item.google_part_number,'source_row':index})
             new_items.append(item)
     try:
@@ -406,7 +423,9 @@ def bulk_create_items(data:BulkImport,u:Employee=Depends(auth),s:Session=Depends
     except Exception:
         s.rollback()
         raise HTTPException(409,'Import failed; check duplicate IDs and retry. No items from this batch were imported.')
-    return {'created_count':len(new_items),'items':[{'id':r.id,'google_part_number':r.google_part_number,'description':r.description,'kind':r.kind,'qr_eligible':r.kind != 'Assembly'} for r in new_items]}
+    return {'created_count':len(new_items),'items':[{'id':r.id,'google_part_number':r.google_part_number,'description':r.description,'kind':r.kind,'qr_eligible':r.kind != 'Assembly',
+        'qr_alias':identity.display_code if (identity:=spool_qr_identity(s,r.id)) else None,
+        'display_code':identity.display_code if identity else r.id} for r in new_items]}
 
 @app.post('/api/items/{item_id}/scan')
 def scan_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -564,9 +583,18 @@ def qr(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     if item.kind == 'Assembly':
         raise HTTPException(409,'QR labels belong to individual spools. Open this assembly\'s spool records to print their labels.')
     require_phone_qr_ready()
-    image=qrcode.make(phone_link('item',item_id))
+    identity=spool_qr_identity(s,item.id)
+    image=qrcode.make(phone_link('spool',identity.display_code) if identity else phone_link('item',item_id))
     buf=io.BytesIO();image.save(buf,format='PNG');buf.seek(0)
     return StreamingResponse(buf,media_type='image/png',headers={'Content-Disposition':f'inline; filename="{item_id}.png"'})
+@app.get('/api/spool-qr/resolve')
+def resolve_spool_qr(code:str,u:Employee=Depends(auth),s:Session=Depends(db)):
+    if not code.strip() or len(code)>540:
+        raise HTTPException(422,'Enter the complete spool label, including its numbered suffix.')
+    identity=resolve_spool_qr_identity(s,code)
+    if identity is None:
+        raise HTTPException(404,'Spool QR label not found. Scan or enter the complete printed label.')
+    return {'item_id':identity.item_id,'qr_alias':identity.display_code,'display_code':identity.display_code}
 @app.get('/api/qr/status')
 def qr_status(u:Employee=Depends(auth)):
     return {'ready':phone_qr_ready(), 'public_base_url':PUBLIC_BASE_URL if phone_qr_ready() else None, 'message':'Phone QR labels ready' if phone_qr_ready() else 'Set PUBLIC_BASE_URL to the deployed public HTTPS URL, then redeploy; QR printing is disabled until then.'}
@@ -596,11 +624,13 @@ def health(s:Session=Depends(db)):
     s.execute(select(OrderSpoolRequirement.id).limit(1))
     s.execute(select(OrderSpoolWeldRequirement.requirement_id).limit(1))
     s.execute(select(OrderSpool.item_id).limit(1))
+    s.execute(select(SpoolQrIdentity.item_id).limit(1))
     s.execute(select(SpoolDocumentSet.id).limit(1))
     s.execute(select(SpoolDocument.id).limit(1))
     s.execute(select(SpoolDocumentFile.document_id).limit(1))
     s.execute(select(SpoolDocumentFileLink.document_id).limit(1))
     s.execute(select(SpoolArrivalInspection.id).limit(1))
+    s.execute(select(SpoolMaterialInspection.id).limit(1))
     s.execute(select(SpoolMtrDocument.id).limit(1))
     s.execute(select(SpoolMtrFile.document_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
@@ -650,7 +680,8 @@ from order_setup import (router as order_setup_router, OrderAssemblyRequirement,
                          OrderSpoolRequirement, OrderSpoolWeldRequirement)
 app.include_router(order_setup_router)
 
-from order_spools import OrderSpool
+from order_spools import (OrderSpool, SpoolQrIdentity, spool_qr_identity,
+                          ensure_spool_qr_identity, resolve_spool_qr_identity)
 
 from order_labels import router as order_labels_router
 app.include_router(order_labels_router)
@@ -663,7 +694,7 @@ from spool_documents import (router as spool_documents_router, SpoolDocumentSet,
 app.include_router(spool_documents_router)
 
 from spool_receiving import (router as spool_receiving_router, SpoolArrivalInspection,
-                             SpoolMtrDocument, SpoolMtrFile)
+                             SpoolMaterialInspection, SpoolMtrDocument, SpoolMtrFile)
 app.include_router(spool_receiving_router)
 
 from production_progress import router as production_progress_router

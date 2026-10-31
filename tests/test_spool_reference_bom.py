@@ -510,7 +510,7 @@ def test_released_scope_keeps_receiving_history_readable_but_blocks_corrections(
 
 
 def test_receiving_records_follow_the_same_spool_into_production(api):
-    from receiving_helpers import record_arrival
+    from receiving_helpers import approve_materials, record_arrival
     _, rows = physical_copies(api)
     row = rows[0]
     ok(api.put(row['bom']['api_url'] + '/traceability', trace_body(trace_record(api, row)), role='handler'))
@@ -518,11 +518,15 @@ def test_receiving_records_follow_the_same_spool_into_production(api):
     # Establish an actual traveler through the existing API; BOM recording
     # itself must not invent an arrival, production event or approval.
     assert not saved['arrival']['can_proceed']
+    approve_materials(api, row['id'])
     ok(record_arrival(api, row['id']), 201)
     ok(api.post(f'/api/flow/items/{row["id"]}/start', {
         'route': 'spool', 'expected_children': 0,
         'material_reference': 'Synthetic approved material kit basis'}, role='supervisor'), 201)
-    assert trace_record(api, row)['traceability'] == saved['traceability']
+    current_trace = trace_record(api, row)['traceability']
+    assert current_trace['version'] == saved['traceability']['version']
+    assert current_trace['history'] == saved['traceability']['history']
+    assert trace_values(trace_record(api, row)) == trace_values(saved)
     assert trace_record(api, rows[1])['traceability']['version'] == 0
 
 
@@ -559,10 +563,9 @@ def test_recorded_receiving_identity_prevents_renumbering_an_unregistered_physic
         'id': 'SYNTHETIC-LEGACY-SPOOL', 'kind': 'Spool', 'google_part_number': SPOOL_A,
         'location': 'Synthetic receiving', 'handler': BADGES['handler']}), 201)
     number_path = '/api/items/' + row['id'] + '/part-number'
-    # This legacy item has no generated-order registration. Its drawing number
-    # can be corrected until physical receiving records establish its basis.
-    ok(api.patch(number_path, {'google_part_number': SPOOL_B}))
-    row = ok(api.patch(number_path, {'google_part_number': SPOOL_A}))
+    # New physical records now receive a permanent readable QR identity even
+    # without order registration. Material history retains that same scope.
+    assert api.patch(number_path, {'google_part_number': SPOOL_B}).status_code == 409
     ok(api.put(row['bom']['api_url'] + '/traceability',
                trace_body(trace_record(api, row)), role='handler'))
     saved = trace_record(api, row)
@@ -594,7 +597,8 @@ def test_receiving_register_retains_its_approved_basis_when_the_reference_catalo
     before = database_state(api)
     retained = trace_record(api, first)
     assert_reference(retained, SPOOL_A)
-    assert retained['traceability']['materials'] == saved['traceability']['materials']
+    assert [{k: v for k, v in row.items() if k != 'qa001'} for row in retained['traceability']['materials']] == [
+        {k: v for k, v in row.items() if k != 'qa001'} for row in saved['traceability']['materials']]
     assert retained['traceability']['history'] == saved['traceability']['history']
     assert retained['source_status']['changed'] and not retained['traceability']['editable']
     assert ok(api.get('/api/items/' + first['id']))['bom']['revision'] == '2'
@@ -614,4 +618,5 @@ def test_receiving_register_retains_its_approved_basis_when_the_reference_catalo
     assert adopted['traceability']['version'] == 2
     assert all(not piece['heat_number'] and not piece['mtr_reference'] for piece in adopted['traceability']['materials'])
     event = ok(api.get(adopted['traceability']['history'][0]['detail_url']))
-    assert event['changes'][0]['before_materials'] == saved['traceability']['materials']
+    assert event['changes'][0]['before_materials'] == [
+        {k: v for k, v in row.items() if k != 'qa001'} for row in saved['traceability']['materials']]

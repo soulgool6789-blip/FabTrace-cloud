@@ -16,6 +16,14 @@ Define each planned joint; missing joint records block final release. Increase t
 
 Use **Spool parts** to enter the required physical components separately from the weld count: for example, two flanges, four elbows and one pipe section. Assign the actual Part QR IDs and follow assigned, received and prepared quantities against the required pieces. Parts-list requirements reconcile with the numbered spool traveler's component scope; they do not replace individual weld requirements. See [PARTS_GUIDE.md](PARTS_GUIDE.md) for setup, QR allocation, progress meanings and corrections.
 
+### Receive each physical spool before starting work
+
+Open **Materials & QA/QC** on the physical spool's readable code, such as `643-777-PCW-03-01-[001]`. Its whole-piece BOM quantities create separate saved material entries: quantity 2 means two pieces with independent heat numbers, MTR references and inspection history. Save the material information, then have QA/QC or an administrator record **QA-001 Pass/Fail for every piece**, with a reference and findings. A piece Pass needs its current BOM, heat number and MTR reference.
+
+After all pieces pass, record the separate **overall arrival Pass** for that spool, including the five identity/BOM/heat/MTR/condition checks. Pending, failed or stale piece/arrival evidence prevents fit-up, welding, timer start/resume, traveler advancement and release. An assembly also depends on the current acceptance of its child spools. Changes require the affected piece inspections and overall arrival decision to be reviewed again; corrections and pause/finish remain available without inventing work.
+
+Readable codes are permanent aliases, globally numbered per spool number across P.O.s. Removed spools retain their numbers. The internal item ID, old printed QR links and existing records remain valid. Scan the readable QR, paste its full link, or enter the complete code including its bracketed suffix; FabTrace resolves it to the same physical record.
+
 ## 2. Define each individual weld
 
 Select **Add weld** and enter a joint number such as `W01`. Numbers must be unique within their spool and remain unchanged after creation. FabTrace also assigns a permanent internal identity. Root and fill/cap operations belong to this one joint; they do not count as extra welds.
@@ -111,15 +119,15 @@ Administrators can use **Export Excel** to download **Process events**, **Proces
 
 ## 9. Follow the numbered CLM fabrication flow
 
-The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. Its full map shows all 24 numbers. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
+The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v2**. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
 
 | Phase | Numbered steps |
 | --- | --- |
-| Material receipt | **1** Receive Shipment; **2** Check Dimensions; **3** Capture Location; **4** Material in Inventory |
+| Material receipt | **1** Receive Shipment; **2** QA-001-Check Dimensions; **3** Capture Location; **4** Material in Inventory |
 | Component preparation | **5** Select Components for Spool; **6** Release to Fabrication Prep Technician; **7** Prep Components; **8** Return to Production |
-| Spool fabrication | **9** Release to Fit-Up Welder; **10** Fit-Up & Tack Weld; **11** QA/QC – Check Dimensions; **12** Return to Production; **13** Release to Process Welder; **14** Complete Welds; **15** QA/QC – Inspect Welds; **16** Scan Completed Spool |
-| Final assembly | **17** Collect Spools for Assembly; **18** Create Assembly ID; **19** QA/QC – Assembly Inspection |
-| Sandblast & paint | **20** Release to Sandblast & Paint; **21** Sandblast & Paint; **22** QA/QC – Final Inspection |
+| Spool fabrication | **9** Release to Fit-Up Welder; **10** Fit-Up & Tack Weld; **11** QA-002-Check Dimensions; **12** Return to Production; **13** Release to Process Welder; **14** Complete Welds; **15** QA-003-Inspect Welds; **16** Scan Completed Spool |
+| Final assembly | **17** Collect Spools for Assembly; **18** Create Assembly ID; **19** QA-004-Assembly Inspection |
+| Sandblast & paint | **20** Release to Sandblast & Paint; **21** Sandblast & Paint; **22** QA-005-Final Inspection |
 | Shipment | **23** Release to Ready to Ship; **24** Ship to Customer |
 
 ### Set up the records and their scope
@@ -136,7 +144,7 @@ For an existing spool with controlled historical material records, zero newly li
 
 ### Record one current step at a time
 
-The current step lists its required observations. Complete the checklist, scan or enter the exact item ID where requested, and record the required document/report reference. A USB barcode scanner can enter an ID into the same field. Existing phone QR labels open the item; the **Process flow** button opens its traveler. For a handoff, scan the current custodian's **sending badge** and the **receiving badge**, then select a destination location and operational work status. Both employees must be active. The signed-in recorder, sender and receiver are retained separately; badge scanning does not claim an independent signature. Step 3 uses the location dropdown without claiming a custody change. See [HANDOFF_GUIDE.md](HANDOFF_GUIDE.md) for ordinary transfers, custom location management, same-custodian moves and stale-screen recovery.
+The current step lists its required observations. Complete the checklist, scan or enter the full readable spool code or retained item ID where requested, and record the required document/report reference. A USB barcode scanner can enter an ID into the same field. Existing phone QR labels open the item; the **Process flow** button opens its traveler. For a handoff, scan the current custodian's **sending badge** and the **receiving badge**, then select a destination location and operational work status. Both employees must be active. The signed-in recorder, sender and receiver are retained separately; badge scanning does not claim an independent signature. Step 3 uses the location dropdown without claiming a custody change. See [HANDOFF_GUIDE.md](HANDOFF_GUIDE.md) for ordinary transfers, custom location management, same-custodian moves and stale-screen recovery.
 
 The current step has the available action; future steps cannot be checked off out of order. Its process clock starts automatically, moves when the step advances and retains repeated visits. **Pause / record delay** and **Resume** keep running and paused durations separate. Timing measures calendar time and continues across logout. Manual process selection cannot bypass the numbered traveler.
 
@@ -144,7 +152,7 @@ Record individual fit-up and welding work in **Projects & welds**. The traveler 
 
 ### QA failures and return visits
 
-QA steps **2, 11, 15, 19 and 22** require QA/QC or Administrator, including incoming dimensional verification. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
+QA steps **2, 11, 15, 19 and 22** are labeled **QA-001 through QA-005**, respectively, and require QA/QC or Administrator. QA-001 covers incoming dimensional/material verification. The saved per-piece QA-001 decisions and overall spool arrival approval do not automatically complete a component traveler step; record the actual route inspection separately when that route applies. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
 
 **Record failed inspection** creates an exception with its report reference and reason, then returns to the allowed earlier step:
 

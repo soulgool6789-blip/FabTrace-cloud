@@ -23,7 +23,7 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;
 const initialOptions=()=>({locations:[{id:'welding',label:'Welding',kind:'builtin',active:true,version:1},{id:'qa_qc',label:'QA / QC',kind:'builtin',active:true,version:1},{id:'custom_1',label:'Weld Bay 2',kind:'custom',active:true,version:2},{id:'custom_2',label:'Retired rack',kind:'custom',active:false,version:4}],statuses:[{id:'queued',label:'Queued'},{id:'in_progress',label:'In progress'},{id:'awaiting_inspection',label:'Awaiting inspection'},{id:'waiting_material',label:'Waiting for material'},{id:'paused',label:'Paused'},{id:'ready_next_operation',label:'Ready for next operation'}],keep_current_location_id:'current',can_manage_locations:true});
 const employees=[{badge:'SHOP1',name:'Alex Sender',role:'welder',active:true},{badge:'SHOP2',name:'Sam Receiver',role:'handler',active:true},{badge:'SHOP3',name:'Lee Other',role:'handler',active:true},{badge:'OLD1',name:'Inactive worker',role:'handler',active:false}];
 function item(id='SPL-001',extra={}){return {id,kind:'Spool',description:'Fixture <spool>',handler:'SHOP1',location:'Legacy Rack 7',released:false,flow_enabled:true,flow_step:13,flow_status:'active',transfer:{item_id:id,version:4,handler:'SHOP1',handler_name:'Alex Sender',handler_active:true,location:'Legacy Rack 7',location_id:null,operational_status:'queued',status_label:'Queued',can_transfer:true,released:false},...extra}}
-let options=initialOptions(),items={'SPL-001':item(),'SPL-002':item('SPL-002')},directoryQueue=[],reads={},postHold=null,postFailure=null,locationFailure=null;
+let options=initialOptions(),items={'SPL-001':item(),'SPL-002':item('SPL-002')},directoryQueue=[],reads={},qrReads={},postHold=null,postFailure=null,locationFailure=null;
 const calls=[],messages=[],storage=new Map(),cameras=[],events={};
 let startHold=null;
 class Scanner {
@@ -37,6 +37,13 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:{name:'Au
   show(page){if(page!=='handoffPage')context.FabHandoff?.cancelPending();context.page=page},notify:message=>messages.push(message),listItems(){context.show('itemsPage')},FabFlow:{open(value){context.openedFlow=value;context.show('flowPage')}},addEventListener:(event,callback)=>{events[event]=callback},
   api:async(url,request={})=>{
     calls.push({url,...request});
+    if(url.startsWith('/api/spool-qr/resolve?')){
+      const code=new URL(url,'https://fabtrace-cloud.onrender.com').searchParams.get('code');
+      if(qrReads[code])return await qrReads[code];
+      const record=Object.values(items).find(row=>row.qr_alias===code);
+      if(!record)throw Error('Spool QR code not found');
+      return {item_id:record.id,qr_alias:record.qr_alias,display_code:record.display_code};
+    }
     if(url==='/api/transfers/options')return structuredClone(options);
     if(url==='/api/employees/directory')return directoryQueue.length?await directoryQueue.shift():structuredClone(employees);
     if(url==='/api/transfers/locations'&&request.method==='POST'){
@@ -56,6 +63,7 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:{name:'Au
 };context.window=context;vm.createContext(context);
 const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
 vm.runInContext(index.slice(index.indexOf('function qrId('),index.indexOf('function stopCloudCamera(')),context);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/spool-qr.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/handoff.js'),'utf8'),context);
 const el=id=>elements.get(id),click=async id=>{assert.ok(el(id),id+' exists');return await el(id).onclick()},input=(id,value)=>{el(id).value=value;el(id).oninput?.()},change=async(id,value)=>{el(id).value=value;return await el(id).onchange?.()},lookup=async(role,value)=>{input('handoff'+role,value);await click('handoff'+role+'Find')};
 const posts=()=>calls.filter(row=>row.method==='POST'&&row.url.endsWith('/transfer')),flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -122,6 +130,17 @@ async function ready(receiver='SHOP2'){await lookup('Sender','SHOP1');await look
   const current=context.FabHandoff.historyHtml([{actor:'ADMIN',details:{sender_badge:'SHOP1',receiver_badge:'SHOP2',from:{handler:'SHOP1',location:'A'},to:{handler:'SHOP2',location:'B',operational_status:'awaiting_inspection'}}}]);assert.match(current,/Sending badge: SHOP1/);assert.match(current,/Awaiting inspection/);assert.match(current,/Independent sender\/receiver acceptance signatures are not recorded/);
   const correction=context.FabHandoff.historyHtml([{event:'ADMIN_CUSTODY_CORRECTION',actor:'ADMIN',details:{administrative_correction:true,badge_scans_recorded:false,from:{handler:'SHOP1',location:'A'},to:{handler:'SHOP2',location:'B',operational_status:'queued'},reason:'Correct misplaced <record>',reference:'CORR-01'}}]);assert.match(correction,/Administrative custody correction/);assert.match(correction,/Correct misplaced &lt;record&gt;/);assert.match(correction,/CORR-01/);assert.match(correction,/badge scans and independent acceptance signatures were not recorded/);assert.doesNotMatch(correction,/Sending badge:|Receiving badge:/);
   assert.equal(context.qrId('https://unrelated.example/?badge=SHOP1','badge'),'');assert.equal(context.qrId('FABTRACE:EMP:SHOP1','badge'),'SHOP1');assert.equal(context.qrId('FABTRACE:ITEM:SPL-001','item'),'SPL-001');
+  // Alias resolution is asynchronous; a delayed scan must not replace a newer spool.
+  const alias='643-777-PCW-03-01-[001]',aliasUrl='https://fabtrace-cloud.onrender.com/?spool='+encodeURIComponent(alias);
+  items['SPL-001']=item('SPL-001',{qr_alias:alias,display_code:alias});
+  assert.equal(typeof context.resolveItemQr,'function');
+  await context.FabHandoff.open();await change('handoffItem',aliasUrl);
+  assert.ok(el('handoffItemInfo').innerHTML.includes('<strong>'+alias+'</strong>'));assert.equal(el('handoffItem').value,alias);
+  await ready();await change('handoffStatus','in_progress');await click('handoffConfirm');
+  assert.equal(posts().at(-1).url,'/api/items/SPL-001/transfer');assert.match(el('handoffItemInfo').textContent,/643-777-PCW-03-01-\[001\]/);
+  items['SPL-001']=item('SPL-001',{qr_alias:alias,display_code:alias});await context.FabHandoff.open();
+  const delayedAlias=deferred();qrReads[alias]=delayedAlias.promise;el('handoffItem').value=alias;const resolving=click('handoffItemFind');await flush();await change('handoffItem','SPL-002');delayedAlias.resolve({item_id:'SPL-001',qr_alias:alias,display_code:alias});await resolving;delete qrReads[alias];assert.match(el('handoffItemInfo').innerHTML,/SPL-002/);
+  await context.FabHandoff.open();await click('handoffItemCamera');camera=cameras.at(-1);await camera.decode(aliasUrl);assert.equal(el('handoffItem').value,alias);assert.equal(camera.stops,1);assert.equal(camera.clears,1);
   assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));assert.ok(index.indexOf('/static/handoff.js')<index.indexOf('/static/flow.js'));assert.match(index,/FabHandoff\.openBadge/);assert.match(index,/params\.has\('handoff'\)/);assert.doesNotMatch(index,/handler:handoffStaff|findHandoffBadge|function pendingItem/);
   console.log('PASS: two badge identities, current-custodian check, active employees, recorder distinction, catalog selectors, same-custodian updates, snapshot payloads, reset/conflicts, lookup races, camera targets/cleanup, role-safe QR links, location management, and truthful legacy history.');
 })().catch(error=>{console.error(error);process.exitCode=1});

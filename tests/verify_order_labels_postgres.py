@@ -20,6 +20,7 @@ from threading import Barrier, Event
 import uuid
 
 from sqlalchemy import create_engine, event, func, select, text
+from sqlalchemy.exc import DBAPIError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from conftest import BADGES, TEST_PIN, TEST_SECRET, TestAPI
@@ -203,6 +204,42 @@ def verify(dsn):
         assert not unsafe and snapshots and all(x == ('on', 'repeatable read') for x in snapshots)
         assert database_state(api) == spool_before
 
+        # Different POs sharing one spool number must reserve different aliases,
+        # even though both order revisions are independently valid.
+        cross_orders = [create_setup(api, number='ALIAS-CROSS-PO-' + str(n), assemblies=[
+            branch('CROSS-GPN-' + str(n), 1, [
+                {'spool_number': 'GLOBAL-RACE-SP', 'quantity_per_assembly': 2}])])
+            for n in (1, 2)]
+        cross_paths = ['/api/order-labels/' + value['order']['project_id'] + '/generate'
+                       for value in cross_orders]
+        gate, connections = Barrier(2), set()
+        event.listen(app.engine, 'before_cursor_execute', synchronize)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(request, 'post', target, body) for target in cross_paths]
+                cross_result = [future.result(timeout=30) for future in futures]
+        finally:
+            event.remove(app.engine, 'before_cursor_execute', synchronize)
+        assert [result['status'] for result in cross_result] == [200, 200], cross_result
+        registry = importlib.import_module('order_spools')
+        with app.SessionLocal() as s:
+            aliases = s.scalars(select(registry.SpoolQrIdentity).where(
+                registry.SpoolQrIdentity.normalized_number == 'global-race-sp')
+                .order_by(registry.SpoolQrIdentity.sequence)).all()
+            assert [row.display_code for row in aliases] == [f'GLOBAL-RACE-SP-[{n:03d}]' for n in range(1, 5)]
+            alias_id = aliases[0].item_id
+        for statement in (
+            "UPDATE spool_qr_identities SET display_code='FORBIDDEN-[999]' WHERE item_id=:item_id",
+            'DELETE FROM spool_qr_identities WHERE item_id=:item_id',
+        ):
+            try:
+                with app.engine.begin() as connection:
+                    connection.execute(text(statement), {'item_id': alias_id})
+            except DBAPIError as error:
+                assert 'history modification forbidden' in str(error).lower()
+            else:
+                raise AssertionError('Permanent QR identities must reject UPDATE and DELETE')
+
         queued = {}
         for target_role, writer_role, expected_rejection in (
             ('handler', 'admin', 422), ('supervisor', 'supervisor', 401),
@@ -261,6 +298,8 @@ def verify(dsn):
                 'created_spools': 8, 'children_per_assembly': [1, 1, 2, 2, 2],
                 'repeated_generation': 'no-op', 'read_only_stable_labels': True},
             'current_revision_repeat': 'no-op, unchanged data and IDs',
+            'readable_aliases': {'cross_po_race': [200, 200], 'global_unique_sequence': [1, 2, 3, 4],
+                'immutable_update_delete': 'rejected'},
             'read_views': {'stable_ids': True, 'read_only': True, 'isolation': 'repeatable read',
                            'mutations': 0, 'write_locks': 0},
             'queued_account_changes': queued, 'production_evidence_created': False,

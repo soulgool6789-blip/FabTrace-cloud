@@ -92,7 +92,8 @@ def test_generate_registers_each_spool_with_unique_qr_and_one_order_revision(api
             assert item.dimensional == item.weld == 'Not started'
             assert not item.released and item.released_at is None and item.released_by is None
             assert output['purchase_order'] == '000123'
-            assert output['qr_url'] == PUBLIC_URL + '/?item=' + item.id
+            assert output['qr_url'] == api.application.phone_link('spool', output['qr_alias'])
+            assert output['display_code'] == output['qr_alias']
         # An old PO without declared weld counts must not invent weld scope.
         for name in ('tracking_spool_plans', 'tracking_welds', 'flow_plans', 'flow_events',
                      'tracking_process_events', 'inspections', 'reworks', 'item_transfer_events'):

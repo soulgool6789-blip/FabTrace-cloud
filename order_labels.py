@@ -17,13 +17,13 @@ from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit,
                     _event, _flush, _gpn, _key, _locked, _validate_assembly_scope,
                     read_snapshot)
 from order_setup import guard_assembly_registration, requirements_by_gpn
-from order_spools import (OrderSpool, effective_children_by_assembly,
-                          guard_registered_spool, pending_declared_spools,
+from order_spools import (OrderSpool, SpoolQrIdentity, effective_children_by_assembly,
+                          ensure_spool_qr_identity, guard_registered_spool, pending_declared_spools,
                           WELD_GENERATION_LIMIT, SPOOL_INITIALIZATION_LIMIT)
 from permissions import has_capability
 from removals import gpn_not_removed, item_not_removed, project_not_removed
 from tracking import SpoolPlan, initialize_order_weld_scope, new_id
-from spool_boms import item_bom_summary
+from spool_boms import ensure_material_piece_records, item_bom_summary
 
 
 router = APIRouter(prefix='/api/order-labels', tags=['purchase order QR labels'])
@@ -144,20 +144,25 @@ def list_labels(project_id: str,
         ready, items = phone_qr_ready(), []
         requirements = {group_id: {_key(line['spool_number']): line for line in plan['spools']}
                         for group_id, plan in plans.items()}
-        query = _spool_query(Item, OrderGpn, OrderAssembly.item_id, SpoolPlan.item_id, SpoolPlan.planned_welds)
+        query = _spool_query(Item, OrderGpn, OrderAssembly.item_id, SpoolPlan.item_id,
+            SpoolPlan.planned_welds, SpoolQrIdentity).outerjoin(
+                SpoolQrIdentity, SpoolQrIdentity.item_id == Item.id)
         rows = snapshot.execute(query.where(OrderGpn.id.in_(ids))
-            .order_by(OrderGpn.gpn, OrderAssembly.item_id, Item.google_part_number, Item.created_at, Item.id)
+            .order_by(OrderGpn.gpn, Item.google_part_number, SpoolQrIdentity.sequence, Item.created_at, Item.id)
             .offset(offset).limit(limit)).all() if ids else []
-        for item, group, parent_id, plan_id, planned_welds in rows:
+        for item, group, parent_id, plan_id, planned_welds, identity in rows:
             requirement = requirements.get(group.id, {}).get(_key(item.google_part_number or ''))
+            alias = identity.display_code if identity else None
             items.append({'id': item.id, 'kind': 'Spool',
+                'qr_alias': alias, 'display_code': alias or item.id,
                 'google_part_number': item.google_part_number, 'spool_number': item.google_part_number,
                 'assembly_id': parent_id, 'weld_plan_exists': plan_id is not None,
                 'welds_per_spool': requirement['welds_per_spool'] if requirement else None,
                 'planned_welds': planned_welds,
                 'bom': item_bom_summary(item, snapshot),
                 'purchase_order': order.purchase_order, 'gpn_id': group.id, 'gpn': group.gpn,
-                'qr_url': phone_link('item', item.id) if ready else None})
+                'qr_url': phone_link('spool', alias) if ready and alias else
+                          phone_link('item', item.id) if ready else None})
         total = snapshot.scalar(_spool_query(func.count(Item.id)).where(OrderGpn.id.in_(ids))) if ids else 0
         return {'order': _order_dict(order), 'kind': kind, 'items': items,
                 'total': total, 'offset': offset, 'limit': limit, 'qr_ready': ready}
@@ -319,8 +324,15 @@ def generate_labels(project_id: str, data: GenerateLabelsIn,
             'assembly_id': parent_id, 'requirement_id': line['id'],
             'purchase_order': order.purchase_order})
     _flush(s)
+    for _, _, _, item, _ in spools:
+        ensure_spool_qr_identity(s, item, user.badge, source='purchase_order_labels')
+        ensure_material_piece_records(s, item, user.badge,
+            'Initialize physical material pieces from the uploaded purchase-order spool BOM.')
     created_welds = 0
     for item, parent_id, line in initialized:
+        ensure_spool_qr_identity(s, item, user.badge, source='purchase_order_weld_count')
+        ensure_material_piece_records(s, item, user.badge,
+            'Initialize physical material pieces while declaring the saved spool weld count.')
         created_welds += initialize_order_weld_scope(s, item, project_id, parent_id,
                                                    line['welds_per_spool'], user.badge)
     for _, parent_id, line, item, _ in spools:

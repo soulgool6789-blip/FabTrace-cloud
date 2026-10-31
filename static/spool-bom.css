@@ -135,4 +135,31 @@
 #spoolBomDialog .fbom-archive{border:1px solid #cfdeea;padding:12px;border-radius:8px;background:#f8fbfd;margin-top:12px}
 #spoolBomDialog .fbom-history>h4{margin:22px 0 0}
 #spoolBomDialog .fbom-history ul{font-size:12px;line-height:1.6;padding-left:20px;margin:8px 0}
+#spoolBomDialog .fbom-piece-identity{font-size:12px;font-weight:600;color:#50728b;line-height:1.5;overflow-wrap:anywhere;margin:0 0 13px}
+#spoolBomDialog .fbom-piece-record-ref{font-size:11px;color:#678095;line-height:1.5;margin:-6px 0 12px;overflow-wrap:anywhere}
+#spoolBomDialog .fbom-piece-record-ref>summary{cursor:pointer}
+#spoolBomDialog .fbom-piece-record-ref code{display:block;font-size:11px;margin-top:5px}
+#spoolBomDialog .fbom-piece-qa{border-top:1px solid #cedeea;padding-top:16px;margin-top:18px}
+#spoolBomDialog .fbom-piece-qa-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px 12px;margin-bottom:12px}
+#spoolBomDialog .fbom-piece-qa-heading>span{font-size:11px;line-height:1.5;color:#607b90}
+#spoolBomDialog .fbom-piece-qa-status{font-size:12px;line-height:1.5;border-radius:20px;padding:4px 10px;background:#fff2d5;color:#765924}
+#spoolBomDialog .fbom-piece-qa-passed{background:#e5f4eb;color:#276d4b}
+#spoolBomDialog .fbom-piece-qa-failed{background:#fff0ed;color:#9b3d32}
+#spoolBomDialog .fbom-piece-qa-choice legend{font-size:13px;font-weight:750;color:#294e68;padding:0 0 9px}
+#spoolBomDialog .fbom-piece-qa-radios{display:flex;gap:12px;flex-wrap:wrap}
+#spoolBomDialog .fbom-piece-qa-radios label{display:flex;align-items:center;gap:9px;min-height:44px;min-width:104px;margin:0;padding:10px 15px;border:1px solid #b9cfdf;border-radius:8px;background:#fff;color:#355c77;cursor:pointer;font-size:14px;font-weight:650}
+#spoolBomDialog .fbom-piece-qa-radios input{width:18px;height:18px;min-height:0;margin:0;padding:0;accent-color:#1261a0;flex:0 0 auto}
+#spoolBomDialog .fbom-piece-qa-radios label:has(input:checked){border-color:#2c83b5;background:#eef8ff;box-shadow:inset 0 0 0 1px #2c83b5}
+#spoolBomDialog .fbom-piece-qa-radios label:has(input:focus-visible){outline:3px solid #88c5e7;outline-offset:2px}
+#spoolBomDialog .fbom-piece-qa-radios label:has(input:disabled){opacity:.65;cursor:default}
+#spoolBomDialog .fbom-piece-qa>.fbom-note{margin:9px 0 12px}
+#spoolBomDialog .fbom-piece-qa-form{margin-top:16px;padding:14px;border:1px solid #d0e0eb;border-radius:8px;background:#fff}
+#spoolBomDialog .fbom-piece-qa-last{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:#5d788c;line-height:1.6;margin-top:12px}
+#spoolBomDialog .fbom-piece-qa-last>span{overflow-wrap:anywhere}
+#spoolBomDialog .fbom-piece-qa-last button,#spoolBomDialog .fbom-piece-qa>[data-fbom-action="qa-edit"]{font-size:12px;min-height:36px;padding:6px 10px}
+#spoolBomDialog .fbom-piece-qa-history{border:1px solid #d3e0eb;border-radius:7px;background:#fff;margin-top:12px;padding:0 13px;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+#spoolBomDialog .fbom-piece-qa-history article{padding:12px 0;border-bottom:1px solid #dce6ef}
+#spoolBomDialog .fbom-piece-qa-history article:last-child{border-bottom:0}
+#spoolBomDialog .fbom-piece-qa-history p{margin:5px 0}
+@media(max-width:600px){#spoolBomDialog .fbom-piece-qa-radios>label{flex:1;min-width:90px}#spoolBomDialog .fbom-piece-qa-form{padding:12px}#spoolBomDialog .fbom-piece-qa-form .actions>button{flex:1 1 130px}#spoolBomDialog .fbom-piece-qa-last{align-items:flex-start;flex-direction:column}}
 @media(max-width:600px){#spoolBomDialog{max-height:calc(100dvh - 18px);width:calc(100vw - 16px);max-width:calc(100vw - 16px)}#spoolBomDialog .fbom-head{padding:12px 14px}#spoolBomDialog #spoolBomBack{margin-bottom:9px}#spoolBomDialog .fbom-arrival{padding:14px}#spoolBomDialog .fbom-section-heading{gap:9px}#spoolBomDialog .fbom-section-heading>div{flex-basis:100%}#spoolBomDialog .fbom-section-heading>button{width:100%}#spoolBomDialog .fbom-role-note{max-width:none}#spoolBomDialog .fbom-files li{align-items:flex-start;flex-wrap:wrap}#spoolBomDialog .fbom-files li>div{margin-left:auto}#spoolBomDialog .fbom-files li>span{flex-basis:calc(100% - 32px)}#spoolBomDialog .fbom-mtr-upload>.actions>button,#spoolBomDialog .fbom-inspection .actions>button{flex:1 1 150px}#spoolBomDialog .fbom-context{margin:4px 0 17px}.item-spool-records{gap:14px}}

@@ -49,6 +49,29 @@ def record_arrival(api, item_id, *, result='Pass', role='inspector', notes='Synt
         'checks': CHECKS if result == 'Pass' else {key: False for key in CHECKS}}, role=role)
 
 
+def approve_materials(api, item_id):
+    """Use the real per-piece QA endpoint; never infer acceptance from fields."""
+    detail = receiving_detail(api, item_id)
+    for piece in detail['traceability']['materials']:
+        qa = piece['qa001']
+        if qa['can_proceed']:
+            continue
+        detail = ok(api.post(qa['history_url'], {
+            'expected_version': qa['version'], 'basis_sha256': qa['basis_sha256'],
+            'result': 'Pass', 'reference': 'LOCAL-PIECE-QA-001',
+            'notes': 'Synthetic incoming dimensions and material evidence checked for this piece'},
+            role='inspector'), 201)
+    return detail
+
+
+def adopt_current_bom(api, item_id):
+    detail = receiving_detail(api, item_id)
+    return ok(api.post('/api/spool-boms/spools/' + item_id + '/adopt-bom', {
+        'expected_version': detail['traceability']['version'],
+        'expected_bom_sha256': detail['source_status']['expected_bom_sha256'],
+        'reason': 'Explicitly adopt the revised synthetic physical material basis'}))
+
+
 def accept_arrival(api, item_id):
     """Create real synthetic BOM/heat/MTR evidence and use the QA endpoint."""
     detail = receiving_detail(api, item_id)
@@ -59,6 +82,7 @@ def accept_arrival(api, item_id):
     detail = receiving_detail(api, item_id)
     if not detail['traceability']['complete']:
         save_receiving_materials(api, item_id)
+    approve_materials(api, item_id)
     return ok(record_arrival(api, item_id), 201)
 
 

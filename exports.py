@@ -41,9 +41,9 @@ from transfers import ItemTransferState, TransferLocation
 from administration import EmployeeAccessState, EmployeeRemovalState
 from orders import PurchaseOrder, OrderGpn, OrderAssembly
 from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
-from order_spools import OrderSpool
+from order_spools import OrderSpool, SpoolQrIdentity
 from spool_boms import SpoolBomTrace, SpoolBomMaterial, SpoolBomEvent
-from spool_receiving import SpoolArrivalInspection, SpoolMtrDocument
+from spool_receiving import SpoolArrivalInspection, SpoolMaterialInspection, SpoolMtrDocument
 from spool_documents import SpoolDocumentSet, SpoolDocument, SpoolDocumentFileLink
 from removals import RecordRemoval
 
@@ -99,11 +99,13 @@ TABLE_SPECS = (
     _spec(OrderAssembly, 'Order assemblies', 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at', 'item_id'),
     _spec(OrderAssemblyRequirement, 'Assembly quantity plans', 'gpn_id assembly_quantity created_by created_at updated_at', 'gpn_id'),
     _spec(OrderSpool, 'Registered order spools', 'item_id assembly_id requirement_id created_by created_at', 'item_id'),
+    _spec(SpoolQrIdentity, 'Spool QR labels', 'item_id spool_number normalized_number sequence display_code normalized_code created_by created_at source', 'item_id'),
     _spec(OrderSpoolRequirement, 'Spool quantity plans', 'id gpn_id spool_number normalized_number quantity_per_assembly active created_by created_at updated_at'),
     _spec(SpoolBomTrace, 'Spool BOM trace configs', 'spool_id catalog_id spool_number source_sha256 definition version created_by created_at updated_by updated_at', 'spool_id'),
     _spec(SpoolBomMaterial, 'Spool BOM material pieces', 'spool_id piece_key supplier supplier_piece_id heat_number mtr_reference mtr_url notes updated_by updated_at', 'spool_id piece_key'),
     _spec(SpoolBomEvent, 'Spool BOM trace events', 'spool_id version actor at reason changes', 'spool_id version'),
     _spec(SpoolArrivalInspection, 'Spool arrival inspections', 'id spool_id version result actor at reference notes checks basis_sha256 basis'),
+    _spec(SpoolMaterialInspection, 'Material QA-001 inspections', 'id spool_id piece_key version check_code result actor at reference notes basis_sha256 basis'),
     _spec(SpoolMtrDocument, 'Spool MTR documents', 'id spool_id reference reference_key version revision filename media_type size_bytes sha256 selection_sha256 page_count source_files scope_snapshot uploaded_by uploaded_at reason'),
     _spec(SpoolDocumentSet, 'Spool document scopes', 'id requirement_id spool_id scope_snapshot version created_by created_at'),
     _spec(SpoolDocument, 'Spool uploaded documents', 'id set_id kind version filename media_type size_bytes sha256 selection_sha256 page_count revision uploaded_by uploaded_at reason source_files bom'),
@@ -183,7 +185,7 @@ QUALITY_REPORT_COLUMNS = (
     'last_reviewer', 'last_review_at', 'last_review_reference', 'as_of',
 )
 
-FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'route', 'section', 'roles', 'checks',
+FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'qa_code', 'route', 'section', 'roles', 'checks',
                      'requires_scan', 'requires_handoff', 'requires_reference', 'qa', 'return_steps')
 
 PROCESS_CONTEXT_COLUMNS = ('project_id', 'subproject_id', 'item_id', 'description')
@@ -219,6 +221,8 @@ RELATIONSHIPS = (
     'spool_documents retains immutable BOM/drawing revisions, source-file hashes, page counts, uploader and parsed BOM values. Binary spool_document_files.content is excluded from Excel; retrieve full files from the spool or an issued Job Packet ZIP, which retains exact document IDs.',
     'spool_document_file_links.document_id references a shared drawing revision; source_document_id identifies the immutable revision retaining its PDF bytes. Generated spool BOMs retain the drawing hash, source pages, extracted values and reviewed corrections.',
     'items.handler -> employees.badge; items.id is the original physical item identity.',
+    'spool_qr_identities.item_id -> items.id. The permanent display_code is the spool number plus a numbered suffix, e.g. 643-777-PCW-03-01-[001]. Sequence is unique per normalized spool number across purchase orders, is never recycled, and does not replace internal item identities or invalidate older QR labels.',
+    'spool_material_inspections stores immutable QA-001 Pass/Fail decisions for each physical BOM piece. basis_sha256 binds the decision to its exact material, BOM, drawing and MTR evidence. A changed piece requires reinspection; every current piece must pass before overall arrival acceptance.',
     'inspections.item_id / reworks.item_id / audit_events.item_id -> items.id. Audit item_id may be blank for account or project events.',
     'inspections.inspector -> employees.badge; rework assigned / closed_by and audit actor retain employee badge identities.',
     'tracking_subprojects.project_id -> tracking_projects.id.',

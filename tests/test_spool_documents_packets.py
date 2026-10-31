@@ -56,13 +56,14 @@ def test_issued_packet_embeds_complete_files_and_retains_old_revision_after_new_
     assert first.status_code==200,first.text
     with zipfile.ZipFile(io.BytesIO(first.content)) as archive:
         snapshot=json.loads(archive.read('snapshot.json'))
-        metadata=snapshot['spool_documents'][0]
+        metadata=next(row for row in snapshot['spool_documents'] if row['kind']=='isometric')
         path='spool-files/'+metadata['document_id']+'_'+metadata['filename']
         assert archive.read(path)==original
         assert hashlib.sha256(original).hexdigest()==metadata['sha256']
         assert path.encode() in archive.read('job-packet.html')
     ok(api.post('/api/items/'+item_id+'/reopen'))
-    newer=upload_drawing(api,item_id,version=1,pages=5)['active']['isometric']
+    current_version=ok(api.get(ROOT+'/spools/'+item_id))['version']
+    newer=upload_drawing(api,item_id,version=current_version,pages=5)['active']['isometric']
     assert newer['id']!=drawing['id']
     assert packet(api,item_id)['latest_issue']['current'] is False
     retained=api.get(route)
