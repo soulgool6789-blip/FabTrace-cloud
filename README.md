@@ -2,6 +2,10 @@
 
 ## Upload spool bills of material and full isometric drawings
 
+Release `2026.10.31-isometric-boms.1` reads the per-spool material tables in an uploaded isometric and creates a separate Excel BOM for each reviewed spool. In assembly setup, upload the complete drawing once, review the detected spool matches and material rows, then save the drawing and Excel BOMs together. Each selected spool receives a link to the complete drawing and its own BOM; physical copies registered to those requirements inherit the files. The **Download Excel BOM** action is available at the spool level.
+
+For a drawing already saved in FabTrace, choose **Create spool BOMs**. A unique physical-spool upload can create that spool's own Excel BOM; **Use for all assembly spools** switches to the matching assembly setup when the drawing should be shared. Unmatched spool numbers, unreadable tables and uncertain scan values are shown for review. Quantities remain for one physical spool, and earlier document revisions remain in History.
+
 Release `2026.10.31-spool-pdf-viewer.1` corrects the PDF response policy that could leave uploaded BOMs and isometric drawings on a gray browser page. The fix applies to existing saved PDFs and their history; reopen the document to use it. No re-upload is needed.
 
 Release `2026.10.31-spool-documents.1` adds **Documents (optional)** as the fourth P.O. setup step. After entering quantities and weld counts, choose **Save & add documents**. The P.O. is saved once, then each spool offers **Upload / view BOM** and **Upload / view isometric**. Choose **Finish setup** or **Skip for now** when done. Existing spools offer **BOM & drawings** from their saved setup, production records, labels, and item/QR screen.

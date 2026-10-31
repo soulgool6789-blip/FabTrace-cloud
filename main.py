@@ -39,7 +39,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.10.31-spool-pdf-viewer.1'
+APP_VERSION='2026.10.31-isometric-boms.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -590,6 +590,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(SpoolDocumentSet.id).limit(1))
     s.execute(select(SpoolDocument.id).limit(1))
     s.execute(select(SpoolDocumentFile.document_id).limit(1))
+    s.execute(select(SpoolDocumentFileLink.document_id).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -646,7 +647,7 @@ from spool_boms import router as spool_boms_router
 app.include_router(spool_boms_router)
 
 from spool_documents import (router as spool_documents_router, SpoolDocumentSet,
-                             SpoolDocument, SpoolDocumentFile)
+                             SpoolDocument, SpoolDocumentFile, SpoolDocumentFileLink)
 app.include_router(spool_documents_router)
 
 from production_progress import router as production_progress_router

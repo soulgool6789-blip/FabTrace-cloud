@@ -132,7 +132,7 @@ def test_authorized_real_csv_preview_and_upload_still_work(api, monkeypatch):
     assert result.json()['active']['bom']['bom']['line_count'] == 2
 
 
-@pytest.mark.parametrize('suffix', ['preview', 'upload'])
+@pytest.mark.parametrize('suffix', ['preview', 'upload', 'isometric-preview', 'isometric-import'])
 def test_unauthenticated_oversized_multipart_is_413_before_auth_or_parser(api, monkeypatch, suffix):
     monkeypatch.setattr(upload_limits, 'MAX_REQUEST_BYTES', 1024)
     path = requirement_path(setup(api)) + '/' + suffix
@@ -143,10 +143,11 @@ def test_unauthenticated_oversized_multipart_is_413_before_auth_or_parser(api, m
     assert response.headers['x-content-type-options'] == 'nosniff'
 
 
-def test_actual_multipart_parser_is_never_called_for_oversized_chunked_body(api, monkeypatch):
+@pytest.mark.parametrize('suffix', ['preview', 'isometric-preview', 'isometric-import'])
+def test_actual_multipart_parser_is_never_called_for_oversized_chunked_body(api, monkeypatch, suffix):
     from starlette.formparsers import MultiPartParser
 
-    path = requirement_path(setup(api)) + '/preview'
+    path = requirement_path(setup(api)) + '/' + suffix
     monkeypatch.setattr(upload_limits, 'MAX_REQUEST_BYTES', 1024)
     calls = []
 

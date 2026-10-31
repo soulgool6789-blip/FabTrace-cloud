@@ -63,5 +63,37 @@
 #spoolDocumentsDialog .sdoc-footer{border-top:1px solid #d6e3ec;padding:16px 26px;display:flex;align-items:center;justify-content:space-between;gap:15px;background:#f7fafc}
 #spoolDocumentsDialog .sdoc-footer p{font-size:11px;color:#718697;margin:0}
 #spoolDocumentsDialog .sdoc-loading{font-size:14px;color:#54768e;padding:24px}
+#spoolDocumentsDialog .sdoc-share{display:flex;align-items:center;gap:18px;padding:16px 18px;margin:0 0 20px;border:1px solid #b8d6e8;border-radius:9px;background:#edf7ff}
+#spoolDocumentsDialog .sdoc-share>div{flex:1;min-width:0}
+#spoolDocumentsDialog .sdoc-share strong{font-size:14px;color:#255977}
+#spoolDocumentsDialog .sdoc-share p{font-size:12px;color:#55778e;margin:6px 0 0}
+#spoolDocumentsDialog .sdoc-share>button{font-size:13px;flex:0 0 auto}
+#spoolDocumentsDialog .sdoc-package{margin:20px 0;padding:20px;background:#f5faf7;border:1px solid #b8d8c6;border-radius:11px;scroll-margin-top:140px}
+#spoolDocumentsDialog .sdoc-package>p{font-size:13px;overflow-wrap:anywhere}
+#sdocPackageTitle{scroll-margin-top:140px}
+#spoolDocumentsDialog .sdoc-candidates{display:grid;gap:15px;margin:18px 0}
+#spoolDocumentsDialog .sdoc-candidate{min-width:0;padding:17px;background:white;border:1px solid #d2dde4;border-radius:8px}
+#spoolDocumentsDialog .sdoc-candidate-selected{border-color:#73b592}
+#spoolDocumentsDialog .sdoc-candidate-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+#spoolDocumentsDialog .sdoc-check{display:flex;align-items:flex-start;gap:10px;margin:0;font-size:14px;font-weight:650;color:#264c65;line-height:1.5;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-check input{width:18px;height:18px;min-height:18px;flex:0 0 18px;margin:2px 0 0;padding:0;accent-color:#126b9c}
+#spoolDocumentsDialog .sdoc-review-check{font-size:12px;font-weight:500;margin-top:16px;padding:12px;background:#fff7e6;border-radius:6px;color:#755c30}
+#spoolDocumentsDialog .sdoc-candidate .field{margin:14px 0}
+#spoolDocumentsDialog .sdoc-candidate select{width:100%;max-width:100%}
+#spoolDocumentsDialog .sdoc-edit-table{max-height:440px}
+#spoolDocumentsDialog .sdoc-edit-table table{width:max-content;min-width:100%}
+#spoolDocumentsDialog .sdoc-edit-table th,#spoolDocumentsDialog .sdoc-edit-table td{padding:7px}
+#spoolDocumentsDialog .sdoc-edit-table th:last-child,#spoolDocumentsDialog .sdoc-edit-table td:last-child{min-width:78px;white-space:nowrap}
+#spoolDocumentsDialog .sdoc-edit-table input{width:135px;min-height:38px;padding:7px;font-size:12px;background:white}
+#spoolDocumentsDialog .sdoc-edit-table .sdoc-cell-item input,#spoolDocumentsDialog .sdoc-edit-table .sdoc-cell-quantity input,#spoolDocumentsDialog .sdoc-edit-table .sdoc-cell-unit input{width:68px}
+#spoolDocumentsDialog .sdoc-edit-table .sdoc-cell-description input{width:250px}
+#spoolDocumentsDialog .sdoc-edit-table .sdoc-cell-notes input{width:200px}
+#spoolDocumentsDialog .sdoc-edit-table button{font-size:11px;padding:8px}
+#spoolDocumentsDialog .sdoc-package-count{font-weight:700;color:#2b6748;padding-top:12px;border-top:1px solid #c8dfd2}
+#spoolDocumentsDialog .sdoc-package-result{padding:18px 20px;border:1px solid #b9dcc8;border-radius:9px;background:#f0faf4;margin-bottom:20px}
+#spoolDocumentsDialog .sdoc-package-result ul{list-style:none;margin:12px 0 0;padding:0}
+#spoolDocumentsDialog .sdoc-package-result li{display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid #d2e8db;padding:10px 0;font-size:13px;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-package-result li .sdoc-actions{margin:0}
+@media(max-width:650px){#spoolDocumentsDialog .sdoc-share{flex-direction:column;align-items:stretch;padding:14px;gap:12px}#spoolDocumentsDialog .sdoc-package{padding:12px}#spoolDocumentsDialog .sdoc-candidate{padding:12px}#spoolDocumentsDialog .sdoc-candidate-heading{flex-direction:column;gap:8px}#spoolDocumentsDialog .sdoc-package-result{padding:14px}#spoolDocumentsDialog .sdoc-package-result li{align-items:flex-start;flex-direction:column;gap:8px}#spoolDocumentsDialog .sdoc-check{font-size:12px}}
 @media(max-width:650px){#spoolDocumentsDialog{width:calc(100vw - 12px);max-height:calc(100dvh - 12px);border-radius:11px}#spoolDocumentsDialog .sdoc-head{padding:17px 16px;gap:10px}#spoolDocumentsDialog h2{font-size:22px}#spoolDocumentsContent{padding:16px}#spoolDocumentsDialog .sdoc-context{grid-template-columns:1fr 1fr;gap:7px}#spoolDocumentsDialog .sdoc-context>div{padding:10px}#spoolDocumentsDialog .sdoc-context dd{font-size:12px}#spoolDocumentsDialog .sdoc-scope{font-size:11px}#spoolDocumentsDialog .sdoc-tabs{gap:5px}#spoolDocumentsDialog .sdoc-tabs button{font-size:11px;padding:10px 9px;flex:1}#spoolDocumentsDialog .sdoc-saved,#spoolDocumentsDialog .sdoc-history article{padding:14px}#spoolDocumentsDialog .sdoc-saved-title{flex-direction:column;gap:5px}#spoolDocumentsDialog .sdoc-upload-inner{padding:14px}#spoolDocumentsDialog .sdoc-upload>summary{padding:15px;font-size:14px}#spoolDocumentsDialog .sdoc-upload-fields{grid-template-columns:1fr;gap:0}#spoolDocumentsDialog .sdoc-files li{flex-wrap:wrap;gap:8px}#spoolDocumentsDialog .sdoc-file-actions{margin-left:auto}#spoolDocumentsDialog .sdoc-file-name{flex-basis:calc(100% - 91px)}#spoolDocumentsDialog .sdoc-file-actions button{min-height:40px}#spoolDocumentsDialog .sdoc-actions{gap:10px}#spoolDocumentsDialog .sdoc-actions button,#spoolDocumentsDialog .sdoc-actions a,#spoolDocumentsDialog .sdoc-file-button{font-size:12px}#spoolDocumentsDialog .sdoc-preview{padding:12px}#spoolDocumentsDialog iframe{height:400px}#spoolDocumentsDialog .sdoc-footer{padding:14px 16px}}
 @media print{.sdoc-link{display:none!important}}

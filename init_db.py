@@ -18,6 +18,7 @@ HISTORY_TABLES = (
     'spool_bom_events',
     'spool_documents',
     'spool_document_files',
+    'spool_document_file_links',
     'quality_documents',
     'quality_evidence',
     'quality_reviews',

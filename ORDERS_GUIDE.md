@@ -7,9 +7,9 @@ Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** This is the
 1. **P.O. number:** enter the number and choose **Next →**.
 2. **Assemblies & quantities:** enter **Google part number / Assembly number** and **How many assemblies?** Use **+ Add another assembly number** for each additional number. Choose **Next →**.
 3. **Spools & welds:** beneath each assembly number, enter **Spool number**, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** for more spool types. Review the calculated totals and choose **Save & add documents**.
-4. **Documents (optional):** the P.O. is now saved. At each spool choose **Upload / view BOM** or **Upload / view isometric**, preview the file, and save. Include all drawing pages. Choose **Finish setup** or **Skip for now** to return to the saved P.O.
+4. **Documents (optional):** the P.O. is now saved. Choose **Upload / view isometric**, include all drawing pages, and preview. FabTrace reads the spool material tables and shows the matching spools within this assembly. Review their destinations and material rows, then save the complete drawing and separate Excel BOMs together. You can also use **Upload / view BOM** for a prepared BOM. Choose **Finish setup** or **Skip for now** to return to the saved P.O.
 
-**Back** keeps your entries during the first three steps. **Save & add documents** saves the P.O., quantities and weld counts together. Document uploads are separate saves against the exact spool selected in step 4, so a failed upload can be retried without creating a duplicate P.O.
+**Back** keeps your entries during the first three steps. **Save & add documents** saves the P.O., quantities and weld counts together. Document uploads are separate saves, so a failed upload can be retried without creating a duplicate P.O. A reviewed drawing package saves its full drawing and individual BOMs together to the selected spools.
 
 ### BOM and isometric files
 
@@ -18,6 +18,14 @@ Open **BOM & drawings** on a saved spool to use the **Bill of material**, **Isom
 Upload a complete isometric PDF from a computer or scanner. On a phone, **Scan a page with camera** adds a JPG/PNG image; add every page and use the arrows to arrange the files before preview. Multiple PDFs and scan images are combined in that order. **View full isometric** opens the complete saved document in a new tab; **Preview all pages** opens its embedded viewer. PDFs are normalized into a viewable file with active actions removed; original source filenames and hashes are recorded. Page graphics and page count are preserved.
 
 Setup uploads belong only to the P.O., assembly and spool requirement shown. Each physical spool registered under that requirement can view them. Uploading on a unique physical spool overrides that document only for that spool; its siblings continue to use their setup document. No association is made to matching spool numbers in other P.O.s.
+
+### Create Excel BOMs from an isometric
+
+In the **Isometric drawings** tab, select the full drawing PDF or ordered scan pages and preview. FabTrace reads the material tables, normally in each spool sheet's lower-right corner, and uses the spool label beneath each table to identify its materials. Assembly-only hardware is kept separate from spool BOMs. The review shows each detected spool number, drawing revision, source pages, destination and extracted rows. Exact matches in the current assembly are selected; unmatched or unclear results need a destination or correction before they can be saved.
+
+Review quantities, part/TAS numbers, descriptions, cut lengths and material specifications. Quantities are for **one physical spool**, independent of the P.O. or assembly quantity. Correct an unclear value in the review, select the intended spools and save the drawing and Excel BOMs. Each selected setup spool receives the complete drawing and its own Excel file. **Download Excel BOM** opens the unique material list in Excel. Source pages and drawing identity travel with the workbook.
+
+Choose **Create spool BOMs** on an existing saved isometric to use the same extraction and review without uploading it again. When working from a unique physical spool, choose **Use for all assembly spools** to share the package through its matching assembly setup. Individual physical-spool revisions keep their own scope; a shared setup upload does not silently replace them. If a table cannot be read, the full drawing can still be saved while its BOM is supplied or corrected separately.
 
 Each file is limited to 20 MiB, each upload to 40 MiB, a drawing set to 200 pages, and a parsed spool BOM to 500 lines. Authorized administrators, supervisors, material coordinators and QA/QC may upload; other active positions can view. Released scope must return to work before a revision is uploaded. **History** retains earlier versions. Uploads preserve existing heat/MTR records and do not grant QA acceptance. Issued Job Packet ZIPs include the exact uploaded versions retained at issue.
 

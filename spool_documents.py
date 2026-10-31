@@ -95,6 +95,15 @@ class SpoolDocumentFile(Base):
     content = deferred(Column(LargeBinary, nullable=False))
 
 
+class SpoolDocumentFileLink(Base):
+    """An immutable reference to the retained bytes of a shared full drawing."""
+    __tablename__ = 'spool_document_file_links'
+    __table_args__ = (CheckConstraint('document_id <> source_document_id',
+                                     name='ck_spool_document_file_link_not_self'),)
+    document_id = Column(String(60), ForeignKey('spool_documents.id'), primary_key=True)
+    source_document_id = Column(String(60), ForeignKey('spool_documents.id'), nullable=False)
+
+
 def _fail(message, status=422):
     raise HTTPException(status, message)
 
@@ -235,6 +244,9 @@ def _metadata(document, doc_set, inherited=False, include_bom=True):
     bom = document.bom
     if bom and not include_bom:
         bom = {key: value for key, value in bom.items() if key != 'lines'}
+        if bom.get('provenance'):
+            bom['provenance'] = {key: value for key, value in bom['provenance'].items()
+                                 if key != 'original_lines'}
     return {'id': document.id, 'kind': document.kind, 'version': document.version,
             'filename': document.filename, 'media_type': document.media_type,
             'size_bytes': document.size_bytes, 'sha256': document.sha256,
@@ -244,6 +256,8 @@ def _metadata(document, doc_set, inherited=False, include_bom=True):
             'scope_id': doc_set.requirement_id or doc_set.spool_id, 'inherited': inherited,
             'view_url': '/api/spool-documents/files/' + document.id,
             'download_url': '/api/spool-documents/files/' + document.id + '?download=1',
+            'excel_url': ('/api/spool-documents/files/' + document.id + '/bom.xlsx'
+                          if document.bom and document.bom.get('lines') else None),
             'source_files': document.source_files, 'bom': bom}
 
 
@@ -285,8 +299,8 @@ def _detail(s, scope, identity, user):
     locked = _locked_reason(s, scope, identity, item, requirement)
     history = []
     for metadata, row in (local_documents + inherited_documents)[:100]:
-        history.append({**metadata, 'bom': ({key: value for key, value in row.bom.items() if key != 'lines'}
-                                          if row.bom else None)})
+        history.append(_metadata(row, inherited if metadata['inherited'] else local,
+                                 metadata['inherited'], include_bom=False))
     return {'context': context, 'version': local.version if local else 0,
             'editable': _can_upload(user) and not locked, 'locked_reason': locked,
             'active': active, 'history': history,
@@ -592,10 +606,7 @@ def document_file(document_id: str, download: bool = False, user: Employee = Dep
         _fail('Spool document not found.', 404)
     doc_set = s.get(SpoolDocumentSet, document.set_id)
     _target(s, 'requirements' if doc_set.requirement_id else 'spools', doc_set.requirement_id or doc_set.spool_id)
-    stored = s.get(SpoolDocumentFile, document.id)
-    content = stored.content if stored else None
-    if content is None or len(content) != document.size_bytes or hashlib.sha256(content).hexdigest() != document.sha256:
-        _fail('The saved document could not be verified. Contact an administrator.', 503)
+    content, _ = _stored_file(s, document)
     disposition = 'attachment' if download or document.media_type != 'application/pdf' else 'inline'
     fallback = re.sub(r'[^a-zA-Z0-9._ -]', '_', document.filename)
     # Native PDF viewers create browser-owned plugin/frame content. CSP sandbox
@@ -750,10 +761,38 @@ def spool_document_retained_file(s, document_id):
     packet and supply only document IDs retained in that packet's snapshot.
     """
     document = s.get(SpoolDocument, document_id)
-    stored = s.get(SpoolDocumentFile, document_id) if document else None
-    content = stored.content if stored else None
-    if content is None or len(content) != document.size_bytes or hashlib.sha256(content).hexdigest() != document.sha256:
+    if document is None:
         _fail('A retained spool document could not be verified for the Job Packet.', 503)
+    content, _ = _stored_file(s, document)
     return {'document_id': document.id, 'kind': document.kind, 'filename': document.filename,
             'media_type': document.media_type, 'sha256': document.sha256,
             'size_bytes': document.size_bytes, 'content': content}
+
+
+def _stored_file(s, document):
+    """Resolve immutable shared bytes without depending on today's source scope."""
+    current, seen = document, set()
+    for _ in range(10):
+        if current is None or current.id in seen:
+            break
+        seen.add(current.id)
+        if (current.sha256 != document.sha256 or current.size_bytes != document.size_bytes
+                or current.media_type != document.media_type):
+            break
+        stored = s.get(SpoolDocumentFile, current.id)
+        linked = s.get(SpoolDocumentFileLink, current.id)
+        if stored is not None and linked is None:
+            content = stored.content
+            if len(content) == document.size_bytes and hashlib.sha256(content).hexdigest() == document.sha256:
+                return content, current.id
+            break
+        if stored is not None or linked is None:
+            break
+        current = s.get(SpoolDocument, linked.source_document_id)
+    _fail('The saved document could not be verified. Contact an administrator.', 503)
+
+
+# Kept separate from basic uploads so reviewed multi-spool imports have their
+# own bounded, atomic workflow while sharing the same immutable document model.
+from isometric_import import router as isometric_import_router
+router.include_router(isometric_import_router)
