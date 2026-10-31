@@ -65,6 +65,14 @@ const checks=[];async function check(name,fn){await fn();checks.push(name);}
     set('parts-component_ids','https://fabtrace-cloud.onrender.com/?item=PART-003\nFABTRACE:ITEM:PART-004');await submit('partsAssignForm');const body=JSON.parse(writes().at(-1).body);assert.deepEqual(body,{expected_version:3,line_id:'LINE-101',component_ids:['PART-003','PART-004'],reference:'BOM-01 Rev A',notes:'Allocate actual pieces'});
     record=fixture();await context.FabParts.refresh();await click('assign','LINE-101');assert.match(html(),/PART-003/);assert.doesNotMatch(html(),/<option value="PART-005"/,'part-number mismatch is not offered');set('partsCandidate','PART-003');await click('add-candidate');assert.equal(elements.get('parts-component_ids').value,'PART-003');set('parts-candidate_search','004');elements.get('parts-candidate_search').oninput();assert.match(html(),/<option value="PART-004"/);assert.doesNotMatch(html(),/<option value="PART-003"/);assert.equal(elements.get('parts-component_ids').value,'PART-003');await click('cancel-form');
   });
+  await check('registered part options sort naturally by part number and ID without changing the selected identity',async()=>{
+    record=fixture({candidates:[piece('PART-10',{google_part_number:'PN-10'}),piece('PART-10-B',{google_part_number:'PN-2'}),piece('PART-2-A',{google_part_number:'PN-2'}),piece('PART-1',{google_part_number:'PN-1'}),piece('PART-0',{google_part_number:''})]});
+    record.lines[0].part_number='';await context.FabParts.refresh();await click('assign','LINE-101');
+    const choices=html().match(/<select id="partsCandidate">([\s\S]*?)<\/select>/)[1];
+    assert.deepEqual([...choices.matchAll(/<option value="([^"]+)"/g)].map(m=>m[1]),['PART-1','PART-2-A','PART-10-B','PART-10','PART-0']);
+    assert.match(choices,/PN-2 · PART-2-A/);set('partsCandidate','PART-10-B');await click('add-candidate');assert.equal(elements.get('parts-component_ids').value,'PART-10-B');
+    await click('cancel-form');record=fixture();await context.FabParts.refresh();
+  });
   await check('unassignment is explicit, versioned and preserves physical identity',async()=>{
     await click('remove','PART-001');assert.match(html(),/removes the part from its required line and from this spool/);assert.match(html(),/QR, traveler and recorded history remain registered/);set('parts-reference','CORR-01');set('parts-notes','Wrong component selected');await submit('partsRemoveForm');const call=writes().at(-1);assert.equal(call.url,'/api/parts/spools/SPL-001/allocations/PART-001/remove');assert.deepEqual(JSON.parse(call.body),{expected_version:3,reference:'CORR-01',notes:'Wrong component selected'});
   });

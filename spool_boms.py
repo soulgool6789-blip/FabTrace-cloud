@@ -100,11 +100,18 @@ class MaterialIn(Input):
         return value
 
 
+class MaterialQaGuardIn(Input):
+    piece_key: str = Field(min_length=1, max_length=32)
+    expected_version: int = Field(ge=0, le=2147483646, strict=True)
+    basis_sha256: str = Field(min_length=64, max_length=64)
+
+
 class TraceabilityIn(Input):
     expected_version: int = Field(ge=0, le=2147483646, strict=True)
     reason: str = Field(min_length=4, max_length=3000)
     materials: list[MaterialIn] = Field(min_length=1, max_length=500)
     expected_bom_sha256: str = Field(default='', max_length=64)
+    qa001_guard: MaterialQaGuardIn | None = None
 
     @model_validator(mode='after')
     def unique_pieces(self):
@@ -258,7 +265,7 @@ def physical_bom_state(s, item_id):
 def _stamp(value):
     if value is not None and value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.isoformat() if value is not None else None
+    return value.astimezone(timezone.utc).isoformat() if value is not None else None
 
 
 def _materials(s, spool_id, definition):
@@ -522,6 +529,14 @@ def save_traceability(item_id: str, data: TraceabilityIn,
     if ((data.expected_bom_sha256 or state['source_status']['current']['kind'] == 'uploaded')
             and data.expected_bom_sha256 != state['source_status']['expected_bom_sha256']):
         raise HTTPException(409, 'The BOM source changed. Reload and review the current material rows.')
+    if data.qa001_guard is not None:
+        # A combined UI action must inspect the evidence it actually reviewed,
+        # before its own material edit legitimately creates a fresh QA basis.
+        from spool_receiving import material_qa_states
+        guard = data.qa001_guard
+        qa = material_qa_states(s, state, user).get(guard.piece_key)
+        if qa is None or guard.expected_version != qa['version'] or guard.basis_sha256 != qa['basis_sha256']:
+            raise HTTPException(409, 'QA-001 or this piece\'s BOM/MTR evidence changed. No material changes were saved; reload and review before Pass.')
     pieces = _piece_definitions(definition)
     incoming = {row.piece_key: row.model_dump(exclude={'piece_key'}) for row in data.materials}
     if set(incoming) != {row['piece_key'] for row in pieces}:
@@ -536,6 +551,8 @@ def save_traceability(item_id: str, data: TraceabilityIn,
             changes.append({'piece_key': key, 'before': before, 'after': after})
     if not changes:
         raise HTTPException(400, 'No material traceability changes to save')
+    if data.qa001_guard is not None and any(change['piece_key'] != data.qa001_guard.piece_key for change in changes):
+        raise HTTPException(409, 'Save heat/MTR and Pass can change only the reviewed piece. Save other material drafts separately.')
     now = utcnow()
     if trace is None:
         trace = SpoolBomTrace(spool_id=item.id, catalog_id=definition['catalog_id'],

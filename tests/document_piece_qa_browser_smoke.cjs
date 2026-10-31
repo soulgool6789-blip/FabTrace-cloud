@@ -160,10 +160,10 @@ let browser, page, stage = 'launch';
   assert.match(await row(keys[0]).innerText(), /Drawing page:\s*2/);
   assert.match(await row(keys[2]).innerText(), /16 3\/4 in/);
   assert.ok((await page.locator('#dpqaPhysicalName').innerText()).includes(firstInitial.context.display_code));
-  assert.equal(await row(keys[0]).getByRole('radio', {name: 'Pass', exact: true}).isDisabled(), true);
+  assert.equal(await row(keys[0]).getByRole('radio', {name: 'Pass', exact: true}).isDisabled(), false);
   assert.equal(await row(keys[0]).getByRole('radio', {name: 'Fail', exact: true}).isDisabled(), false);
   assert.equal(await panel().locator('input[type="radio"]:checked').count(), 0);
-  checks.push('A shared BOM requires an explicit readable physical spool selection; each of its three persisted pieces has its own QA controls and missing saved material prevents Pass');
+  checks.push('A shared BOM requires an explicit readable physical spool selection; each persisted piece has its own actionable QA controls while recording Pass still requires material evidence');
 
   stage = 'inline heat and MTR affect only the clicked row';
   await row(keys[1]).locator('[data-dpqa-material="heat_number"]').fill('UNSAVED-SECOND-FLANGE');
@@ -173,8 +173,8 @@ let browser, page, stage = 'launch';
   assert.equal(detail.traceability.materials[2].heat_number, '');
   assert.equal(await row(keys[1]).locator('[data-dpqa-material="heat_number"]').inputValue(), 'UNSAVED-SECOND-FLANGE');
   assert.equal(await row(keys[0]).getByRole('radio', {name: 'Pass', exact: true}).isDisabled(), false);
-  assert.equal(await row(keys[1]).getByRole('radio', {name: 'Pass', exact: true}).isDisabled(), true);
-  checks.push('Saving heat/MTR directly on one BOM row persists only that physical piece, retains the other row draft and enables only its own Pass');
+  assert.equal(await row(keys[1]).getByRole('radio', {name: 'Pass', exact: true}).isDisabled(), false);
+  checks.push('Saving heat/MTR directly on one BOM row persists only that physical piece, retains the other row draft and leaves each piece’s Pass action available');
 
   stage = 'one flange Pass does not approve other pieces or copies';
   await chooseQa(keys[0], 'Pass', 'QA-FLANGE-001', 'First flange dimensions and material evidence verified.');

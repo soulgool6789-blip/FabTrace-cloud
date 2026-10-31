@@ -83,6 +83,22 @@ def test_single_registered_copy_is_selected_for_requirement(api):
     assert not view['selection_required'] and view['record_matches_document']
 
 
+def test_shared_spool_options_follow_permanent_numeric_alias_sequence(api):
+    from order_spools import SpoolQrIdentity
+    from sqlalchemy import select
+    saved, _, children = physical_setup(api, quantity=18)
+    with api.session_factory() as s:
+        aliases = list(s.scalars(select(SpoolQrIdentity).where(
+            SpoolQrIdentity.item_id.in_([row['id'] for row in children])).order_by(SpoolQrIdentity.sequence)))
+        expected = [(row.item_id, row.display_code) for row in aliases]
+    before = database_state(api)
+    view = ok(records(api, requirement_path(saved)))
+    assert [(row['item_id'], row['display_code']) for row in view['spools']] == expected
+    assert [int(row['display_code'].rsplit('[', 1)[1].rstrip(']')) for row in view['spools']] == list(range(1, 19))
+    assert view['selected_spool_id'] is None and view['selection_required']
+    assert database_state(api) == before
+
+
 def test_foreign_same_number_and_unregistered_selections_are_rejected(api):
     saved, _, children = physical_setup(api)
     _, _, foreign = physical_setup(api, number='OTHER-MATERIAL-PAGE-PO')

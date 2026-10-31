@@ -61,12 +61,30 @@
 #spoolDocumentsDialog .dpqa-error p,#spoolDocumentsDialog .dpqa-source-warning p{margin:5px 0 9px}
 #spoolDocumentsDialog .dpqa-loading{font-size:12px;color:#55758b}
 #spoolDocumentsDialog .dpqa-footnote{margin-top:12px}
+#spoolDocumentsDialog .dpqa-pass-blockers{font-size:11px;line-height:1.5;padding-left:17px;margin:10px 0;color:#865925}
+#spoolDocumentsDialog .dpqa-pass-blockers:empty{display:none}
+#spoolDocumentsDialog .dpqa-pass-blockers button{padding:3px 0;border:0;background:none;text-decoration:underline;font-size:11px;color:#126b9c}
+#spoolDocumentsDialog .dpqa-bulk{padding:16px 18px;margin:18px 0;border:1px solid #b6d4e5;border-radius:9px;background:#f0f8fd}
+#spoolDocumentsDialog .dpqa-bulk-heading{display:flex;justify-content:space-between;align-items:center;gap:16px}
+#spoolDocumentsDialog .dpqa-bulk h4{font-size:15px;margin:0 0 5px}
+#spoolDocumentsDialog .dpqa-bulk p{font-size:12px;line-height:1.6;margin:5px 0;overflow-wrap:anywhere}
+#spoolDocumentsDialog .dpqa-bulk [data-dpqa-action=pass-all]{background:#126b9c;color:white;border-color:#126b9c;min-height:44px;white-space:nowrap}
+#spoolDocumentsDialog #dpqaPassAll{margin-top:15px;padding-top:15px;border-top:1px solid #c7dfec}
+#spoolDocumentsDialog #dpqaPassAll label{font-size:12px;margin:12px 0 6px}
+#spoolDocumentsDialog #dpqaPassAll input,#spoolDocumentsDialog #dpqaPassAll textarea{font-size:13px;max-width:100%;width:100%}
+#spoolDocumentsDialog .dpqa-bulk-blockers{background:#fff8e6;border:1px solid #e8d4aa;border-radius:7px;padding:12px;color:#795c27;font-size:12px;margin:12px 0}
+#spoolDocumentsDialog .dpqa-bulk-blockers ul{margin:9px 0 0;padding-left:19px}
+#spoolDocumentsDialog .dpqa-bulk-blockers li{margin:8px 0;overflow-wrap:anywhere}
+#spoolDocumentsDialog .dpqa-bulk-blockers button{font-size:11px;padding:4px 7px;margin-top:4px}
+#spoolDocumentsDialog [data-dpqa-action=confirm-pass-all]:not(:disabled){background:#126b9c;border-color:#126b9c;color:white}
 #spoolDocumentsDialog .dpqa-adoption{margin-top:16px;padding-top:15px;border-top:1px solid #e1cca0}
 #spoolDocumentsDialog .dpqa-adoption h4{font-size:14px}
 #spoolDocumentsDialog .dpqa-adoption label{font-size:12px;color:#715727;margin:12px 0 6px}
 #spoolDocumentsDialog .dpqa-adoption textarea{width:100%;max-width:100%;font-size:13px;min-height:75px}
 #spoolDocumentsDialog .dpqa-adoption [data-dpqa-action=adopt-bom]:not(:disabled){background:#126b9c;border-color:#126b9c;color:white}
 @media(max-width:760px){
+ #spoolDocumentsDialog .dpqa-bulk{padding:13px}
+ #spoolDocumentsDialog .dpqa-bulk-heading{align-items:stretch;flex-direction:column;gap:10px}
  #spoolDocumentsDialog .dpqa-heading{flex-direction:column;gap:10px}
  #spoolDocumentsDialog .dpqa-physical{max-width:100%;text-align:left}
  #spoolDocumentsDialog .dpqa-table,#spoolDocumentsDialog .dpqa-table tbody{display:block;width:100%;min-width:0}

@@ -127,10 +127,24 @@ class MaterialInspectionIn(Input):
     notes: str = Field(min_length=4, max_length=3000)
 
 
+class MaterialPassExpectationIn(Input):
+    piece_key: str = Field(min_length=1, max_length=32)
+    expected_version: int = Field(ge=0, le=2147483646, strict=True)
+    basis_sha256: str = Field(min_length=64, max_length=64)
+
+
+class MaterialPassAllIn(Input):
+    expected_trace_version: int = Field(ge=0, le=2147483646, strict=True)
+    expected_bom_sha256: str = Field(min_length=64, max_length=64)
+    reference: str = Field(min_length=2, max_length=300)
+    notes: str = Field(min_length=4, max_length=3000)
+    pieces: list[MaterialPassExpectationIn] = Field(min_length=1, max_length=500)
+
+
 def _stamp(value):
     if value is not None and value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.isoformat() if value is not None else None
+    return value.astimezone(timezone.utc).isoformat() if value is not None else None
 
 
 def _digest(value):
@@ -319,6 +333,20 @@ def _material_qa_bases(s, state):
         'mtr_document': mtrs.get(_key(row['mtr_reference']))} for row in state['materials']}
 
 
+def _material_pass_blockers(state, material):
+    """Evidence prerequisites, independent of the previous inspection result."""
+    blockers = []
+    if not material['persisted']:
+        blockers.append('Save this physical material record before recording QA-001.')
+    if state['source_status']['changed']:
+        blockers.append('Adopt and review the current BOM before approving this piece.')
+    if not material['heat_number'].strip():
+        blockers.append('Enter and save this piece\'s heat number before Pass.')
+    if not material['mtr_reference'].strip():
+        blockers.append('Enter and save this piece\'s MTR reference before Pass.')
+    return blockers
+
+
 def material_qa_states(s, state, user=None, *, bases=None):
     """Per-piece decisions: sibling edits never change this piece's basis."""
     bases = _material_qa_bases(s, state) if bases is None else bases
@@ -327,13 +355,8 @@ def material_qa_states(s, state, user=None, *, bases=None):
     result = {}
     for material in state['materials']:
         key = material['piece_key']
-        blockers = []
-        if not material['persisted']:
-            blockers.append('Save this physical material record before recording QA-001.')
-        if state['source_status']['changed']:
-            blockers.append('Adopt and review the current BOM before approving this piece.')
-        if not material['heat_number'].strip() or not material['mtr_reference'].strip():
-            blockers.append('Record this piece\'s heat number and MTR reference before Pass.')
+        pass_blockers = _material_pass_blockers(state, material)
+        blockers = list(pass_blockers)
         digest = _digest(bases[key])
         decision = latest.get(key)
         current = bool(decision and decision.result == 'Pass' and decision.basis_sha256 == digest and not blockers)
@@ -347,7 +370,7 @@ def material_qa_states(s, state, user=None, *, bases=None):
             blockers.insert(0, 'This piece or its source/MTR evidence changed after QA-001 Pass. Reinspection is required.')
         result[key] = {'code': 'QA-001', 'version': decision.version if decision else 0,
             'status': status, 'can_proceed': current, 'basis_sha256': digest,
-            'latest': _material_inspection_view(decision), 'blockers': blockers,
+            'latest': _material_inspection_view(decision), 'blockers': blockers, 'pass_blockers': pass_blockers,
             'history_url': f'/api/spool-boms/spools/{quote(state["item"].id, safe="")}/materials/{quote(key, safe="")}/qa-001',
             'permissions': {'can_inspect': bool(permitted and material['persisted'])}}
     return result
@@ -542,6 +565,88 @@ def inspect_material(item_id: str, piece_key: str, data: MaterialInspectionIn,
     audit(s, item.id, user.badge, 'SPOOL_MATERIAL_QA001_INSPECTED', _material_inspection_view(row))
     source_changed(s, 'spools', item.id, user.badge, f'QA-001 {data.result} recorded for {material["piece_identifier"]}')
     result = _spool_detail(s, item.id, user)
+    _commit(s)
+    return result
+
+
+@router.post('/spools/{item_id}/materials/qa-001/pass-all')
+def pass_all_materials(item_id: str, data: MaterialPassAllIn,
+                       user: Employee = Depends(auth), s: Session = Depends(db)):
+    """One reviewed physical spool, validated in full before any QA event is added."""
+    from flow import lock_topology
+    from spool_boms import physical_bom_state, _spool_detail
+    if not has_capability(user, 'quality_review'):
+        raise HTTPException(403, 'Only QA/QC or an administrator can record QA-001.')
+    lock_topology(s)
+    # lock_topology refreshes employee authority after a queued write resumes.
+    if not has_capability(user, 'quality_review'):
+        raise HTTPException(403, 'Only QA/QC or an administrator can record QA-001.')
+    item = lock_item(s, item_id)
+    state = physical_bom_state(s, item.id)
+    blockers = []
+    locked = _locked_reason(s, item)
+    if locked:
+        blockers.append(locked)
+    trace = state['trace']
+    if data.expected_trace_version != (trace.version if trace else 0):
+        blockers.append('Material traceability changed. Reload the saved rows before using PASS ALL.')
+    if data.expected_bom_sha256 != state['source_status']['expected_bom_sha256']:
+        blockers.append('The BOM source changed. Reload and review the current physical material records.')
+    if not state['definition'] or not state['definition'].get('traceable', True) or not state['materials']:
+        blockers.append('A current structured BOM with distinct physical material records is required for PASS ALL.')
+    if state['source_status']['changed']:
+        blockers.append('Adopt and review the current BOM before using PASS ALL.')
+
+    bases = _material_qa_bases(s, state)
+    states = material_qa_states(s, state, user, bases=bases)
+    incoming = {row.piece_key: row for row in data.pieces}
+    current_keys = set(states)
+    if len(incoming) != len(data.pieces) or set(incoming) != current_keys:
+        blockers.append('Supply every current physical piece exactly once, including pieces already at Pass; reload this spool.')
+    piece_blockers = []
+    for material in state['materials']:
+        key = material['piece_key']
+        qa = states[key]
+        expected = incoming.get(key)
+        errors = list(qa['pass_blockers'])
+        if expected is None:
+            errors.append('This physical piece was omitted from PASS ALL. Reload the complete spool record.')
+        else:
+            if expected.expected_version != qa['version']:
+                errors.append('QA-001 changed for this piece. Reload and review its latest decision.')
+            if expected.basis_sha256 != qa['basis_sha256']:
+                errors.append('This piece, BOM or MTR evidence changed. Reload and inspect the current evidence.')
+        if errors:
+            piece_blockers.append({'piece_key': key, 'piece_identifier': material['piece_identifier'],
+                'piece_label': material['piece_label'], 'blockers': errors})
+    for key in sorted(set(incoming) - current_keys):
+        piece_blockers.append({'piece_key': key, 'piece_identifier': None, 'piece_label': None,
+            'blockers': ['This piece does not belong to the current pinned BOM of the selected physical spool.']})
+    if blockers or piece_blockers:
+        raise HTTPException(409, {'message': 'PASS ALL was not saved. Resolve the listed issues and review this spool again.',
+            'blockers': blockers, 'piece_blockers': piece_blockers})
+
+    # The lock protects every checked source and row until commit. Do not append
+    # a redundant event for an already-current Pass or manufacture arrival QA.
+    passed = [row['piece_key'] for row in state['materials'] if not states[row['piece_key']]['can_proceed']]
+    unchanged = [row['piece_key'] for row in state['materials'] if states[row['piece_key']]['can_proceed']]
+    now = utcnow()
+    events = []
+    for key in passed:
+        event = SpoolMaterialInspection(spool_id=item.id, piece_key=key,
+            version=states[key]['version'] + 1, check_code='QA-001', result='Pass',
+            actor=user.badge, at=now, reference=data.reference, notes=data.notes,
+            basis_sha256=states[key]['basis_sha256'], basis=bases[key])
+        s.add(event)
+        events.append(event)
+    if events:
+        s.flush()
+        for event in events:
+            audit(s, item.id, user.badge, 'SPOOL_MATERIAL_QA001_INSPECTED', _material_inspection_view(event))
+        source_changed(s, 'spools', item.id, user.badge, 'QA-001 PASS ALL recorded for the reviewed physical material pieces')
+    result = _spool_detail(s, item.id, user)
+    result['qa001_bulk_result'] = {'spool_id': item.id, 'passed_count': len(passed),
+        'already_passed_count': len(unchanged), 'passed_piece_keys': passed, 'already_passed_piece_keys': unchanged}
     _commit(s)
     return result
 

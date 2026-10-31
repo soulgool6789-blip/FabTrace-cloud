@@ -348,6 +348,11 @@ def _material_record_source_match(document_id, record, *, has_spools=False):
         'reason_code': code, 'reason': reason}
 
 
+def _natural_spool_key(value):
+    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
+                 for part in re.split(r'(\d+)', value or '') if part)
+
+
 def _material_records(s, scope, identity, user, spool_id=None):
     """Resolve one exact physical register for the saved BOM page, without writes."""
     from order_spools import SpoolQrIdentity, spool_qr_identity
@@ -372,6 +377,11 @@ def _material_records(s, scope, identity, user, spool_id=None):
                    Item.project == context['project_id'], item_not_removed(Item.id),
                    item_not_removed(OrderSpool.assembly_id))
             .order_by(Item.id)).all()
+        # Permanent alias sequence is numeric; the opaque Item ID is only a
+        # final tie-breaker. Reading options must never allocate new aliases.
+        candidates.sort(key=lambda row: (_natural_spool_key(row[0].google_part_number),
+            row[2].sequence if row[2] else float('inf'),
+            _natural_spool_key(row[2].display_code if row[2] else row[0].id), row[0].id))
         spools = [{'item_id': child.id, 'display_code': qr.display_code if qr else child.id,
                    'spool_number': child.google_part_number, 'assembly_id': registration.assembly_id}
                   for child, registration, qr in candidates
