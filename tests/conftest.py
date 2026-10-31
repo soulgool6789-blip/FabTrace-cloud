@@ -10,23 +10,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
+from fixture_accounts import BADGES, TEST_PIN
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-TEST_PIN = "only-for-local-tests-12345"
 TEST_SECRET = "fabtrace-local-tests-only-secret-not-for-production-123456"
-BADGES = {
-    "admin": "TEST-ADMIN",
-    "supervisor": "TEST-SUPERVISOR",
-    "inspector": "TEST-QA",
-    "welder": "TEST-WELDER",
-    "handler": "TEST-HANDLER",
-    "fitup_welder": "TEST-FITUP-WELDER",
-    "process_welder": "TEST-PROCESS-WELDER",
-    "painter": "TEST-PAINTER",
-    "finisher": "TEST-FINISHER",
-    "misc": "TEST-MISC",
-}
 
 
 @pytest.fixture(scope="session")

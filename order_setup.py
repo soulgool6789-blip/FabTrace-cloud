@@ -111,6 +111,7 @@ class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
 def requirements_by_gpn(s, gpn_ids):
     """Load declared requirements once; callers select active/historical groups."""
     from spool_boms import requirement_bom_summary
+    from spool_documents import SpoolDocument, SpoolDocumentSet
     ids = set(gpn_ids)
     if not ids:
         return {}
@@ -124,12 +125,23 @@ def requirements_by_gpn(s, gpn_ids):
             .order_by(OrderSpoolRequirement.spool_number, OrderSpoolRequirement.id)):
         lines[row.gpn_id].append(row)
         weld_counts[row.id] = declared.welds_per_spool if declared else None
+    # A lightweight file-status projection keeps order setup useful after a
+    # reload without loading PDF bytes or every retained material table.
+    documents = defaultdict(set)
+    requirement_ids = [line.id for group in lines.values() for line in group]
+    if requirement_ids:
+        for requirement_id, kind in s.execute(select(
+                SpoolDocumentSet.requirement_id, SpoolDocument.kind)
+                .join(SpoolDocument, SpoolDocument.set_id == SpoolDocumentSet.id)
+                .where(SpoolDocumentSet.requirement_id.in_(requirement_ids)).distinct()):
+            documents[requirement_id].add(kind)
     result = {}
     for plan in plans:
         spools = [{'id': line.id, 'spool_number': line.spool_number,
                    'quantity_per_assembly': line.quantity_per_assembly,
                    'welds_per_spool': weld_counts[line.id],
                    'bom': requirement_bom_summary(line),
+                   'documents': {kind: kind in documents[line.id] for kind in ('bom', 'isometric')},
                    'total_quantity': line.quantity_per_assembly * plan.assembly_quantity}
                   for line in lines[plan.gpn_id]]
         per_assembly = sum(line['quantity_per_assembly'] for line in spools)

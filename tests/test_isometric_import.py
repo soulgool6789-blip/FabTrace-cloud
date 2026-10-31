@@ -8,9 +8,10 @@ from hashlib import sha256
 import pytest
 from openpyxl import load_workbook
 from pypdf import PdfReader
+from PIL import Image
 from sqlalchemy import select
 
-from isometric_fixtures import DEFAULT_ROWS, make_isometric_pdf
+from isometric_fixtures import DEFAULT_ROWS, make_bom_pdf, make_isometric_pdf
 from test_order_setup import branch, create_setup
 from test_order_labels import generate, labels, public_qr_url
 from test_progress import database_state
@@ -34,9 +35,11 @@ def path(saved, index=0, group=0):
     return ROOT + '/requirements/' + saved['assemblies'][group]['spools'][index]['id']
 
 
-def preview(api, location, content=None, document_id=None, role='admin'):
+def preview(api, location, content=None, document_id=None, role='admin', source_mode=None):
     kwargs = ({'data': {'document_id': document_id}} if document_id else
         {'files': [('files', ('test-isometric.pdf', content or make_isometric_pdf(), 'application/pdf'))]})
+    if source_mode is not None:
+        kwargs.setdefault('data', {})['source_mode'] = source_mode
     return api.request('POST', location + '/isometric-preview', role=role, **kwargs)
 
 
@@ -373,6 +376,147 @@ def test_oversized_extraction_does_not_issue_unsaveable_preview_and_large_review
     assert response.status_code == 413
     assert 'Select fewer spools' in response.json()['detail']
     assert database_state(api) == before
+
+
+@pytest.mark.parametrize('source_layout', ['crop', 'empty_drawing_template'])
+def test_standalone_pdf_bom_retains_source_and_excel_without_replacing_existing_drawing(api, source_layout):
+    saved = setup(api, numbers=[NUMBERS[0]])
+    location = path(saved)
+    complete = make_isometric_pdf([{'number': NUMBERS[0]}])
+    initial = ok(save(api, location, ok(preview(api, location, complete)), content=complete))
+    drawing = initial['active']['isometric']
+    drawing_bytes = api.get(drawing['view_url']).content
+    content = (make_bom_pdf(spool_number=NUMBERS[0]) if source_layout == 'crop' else
+               make_isometric_pdf([{'number': NUMBERS[0]}], include_assembly=False, include_geometry=False))
+    data = ok(preview(api, location, content))
+    assert data['source']['classification'] == data['source']['document_kind'] == 'bom'
+    review = review_body(data)
+    review['source_mode'] = 'isometric'  # Unsigned client data cannot change classification.
+    result = ok(save(api, location, data, content=content, review=review))
+    row = result['package_result']['requirements'][0]
+    assert row['saved_kinds'] == ['bom'] and row['has_isometric']
+    assert result['package_result']['created_isometric_count'] == 0
+    assert result['active']['isometric']['id'] == drawing['id']
+    assert api.get(drawing['view_url']).content == drawing_bytes
+    bom = result['active']['bom']
+    assert bom['source_document_kind'] == 'bom'
+    assert bom['source_document_id'] == row['source_document']['id']
+    assert bom['source_view_url'] == row['source_document']['view_url']
+    retained = api.get(bom['source_view_url'])
+    assert retained.headers['content-type'] == 'application/pdf'
+    assert len(PdfReader(io.BytesIO(retained.content)).pages) == 1
+    assert row['source_document']['source_files'][0]['sha256'] == sha256(content).hexdigest()
+    assert sha256(retained.content).hexdigest() == row['source_document']['sha256']
+    assert row['source_document']['kind'] == 'bom'
+    # Saved BOM images/PDFs can be analyzed again without reuploading or
+    # duplicating the retained source PDF; only the reviewed Excel is revised.
+    repeated = ok(preview(api, location, document_id=bom['source_document_id']))
+    updated = ok(save(api, location, repeated))
+    assert updated['version'] == result['version'] + 1
+    assert updated['active']['bom']['source_document_id'] == bom['source_document_id']
+    assert updated['active']['isometric']['id'] == drawing['id']
+
+
+def test_unlabeled_assembly_upload_requires_spool_selection_and_never_uses_first_origin(api):
+    saved = setup(api)
+    content = make_bom_pdf()
+    data = ok(preview(api, path(saved), content))
+    candidate = data['candidates'][0]
+    assert candidate['spool_number'] == '' and candidate['review_required']
+    assert not candidate['selected'] and candidate['matched_requirement_id'] is None
+    before = database_state(api)
+    assert save(api, path(saved), data, content=content).status_code == 422
+    assert database_state(api) == before
+    review = review_body(data)
+    review['mappings'] = [{'candidate_id': candidate['candidate_id'],
+        'requirement_id': data['targets'][1]['requirement_id'], 'expected_version': 0,
+        'lines': candidate['lines']}]
+    result = ok(save(api, path(saved), data, content=content, review=review))
+    assert result['version'] == 0 and result['active'] == {'bom': None, 'isometric': None}
+    row = result['package_result']['requirements'][0]
+    assert row['spool_number'] == NUMBERS[1]
+    assert row['saved_kinds'] == ['bom'] and not row['has_isometric']
+    assert row['isometric_document'] is None
+    assert row['bom_document']['bom']['provenance']['source_spool_number'] == ''
+    assert row['bom_document']['bom']['provenance']['manually_assigned']
+
+
+def test_one_unlabeled_bom_uses_only_single_eligible_context_and_multiple_tables_stay_unassigned(api):
+    saved = setup(api, numbers=[NUMBERS[0]])
+    content = make_bom_pdf()
+    data = ok(preview(api, path(saved), content))
+    candidate = data['candidates'][0]
+    assert candidate['selected'] and candidate['assignment_basis'] == 'selected_scope'
+    assert candidate['review_required'] and not candidate['quantity_basis_verified']
+    result = ok(save(api, path(saved), data, content=content))
+    assert result['active']['isometric'] is None
+    assert result['active']['bom']['bom']['line_count'] == 2
+    multiple = ok(preview(api, path(saved), make_bom_pdf(table_count=2)))
+    assert len(multiple['candidates']) == 2
+    assert all(not candidate['selected'] for candidate in multiple['candidates'])
+
+
+@pytest.mark.parametrize('full_sheet', [True, False])
+def test_image_upload_analysis_splits_full_sheet_or_bom_crop_without_kind_contamination(api, monkeypatch, full_sheet):
+    saved = setup(api, numbers=[NUMBERS[0]])
+    picture = io.BytesIO()
+    Image.new('RGB', (1200, 800) if full_sheet else (900, 240), 'white').save(picture, 'PNG')
+    image_bytes = picture.getvalue()
+    class OCR:
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def __call__(self, content, page_number, width, height):
+            return {'drawing': 'TEST-100' if full_sheet else '', 'revision': 'A' if full_sheet else '',
+                'drawing_geometry': full_sheet,
+                'tables': [{'rows': [*copy.deepcopy(DEFAULT_ROWS),
+                    ['ITEM', 'QTY', 'PART NUMBER', 'DESCRIPTION', 'LENGTH', 'MATERIAL'],
+                    [f'"{NUMBERS[0]}" QTY. SHOWN FOR ONE (1)', None, None, None, None, None]],
+                    'bbox': [width * .51, height * .6, width * .98, height * .9] if full_sheet else [0, 0, width, height]}],
+                'warnings': []}
+    monkeypatch.setattr(importlib.import_module('isometric_ocr'), 'LocalOCRProvider', OCR)
+    files = [('files', ('uploaded-image.png', image_bytes, 'image/png'))]
+    data = ok(api.request('POST', path(saved) + '/isometric-preview', data={'source_mode': 'auto'}, files=files))
+    expected_kind = 'isometric' if full_sheet else 'bom'
+    assert data['source']['document_kind'] == expected_kind
+    assert data['candidates'][0]['source_method'] == 'ocr'
+    result = ok(api.request('POST', path(saved) + '/isometric-import',
+        data={'review': json.dumps(review_body(data))}, files=files))
+    assert result['active']['bom']['bom']['line_count'] == 2
+    assert bool(result['active']['isometric']) is full_sheet
+    assert result['active']['bom']['source_document_kind'] == expected_kind
+    retained = api.get(result['active']['bom']['source_view_url'])
+    assert len(PdfReader(io.BytesIO(retained.content)).pages) == 1
+    assert result['package_result']['requirements'][0]['source_document']['source_files'][0]['sha256'] == sha256(image_bytes).hexdigest()
+
+
+def test_unknown_pdf_does_not_choose_document_kind_or_fabricate_bom(api):
+    saved = setup(api)
+    content = make_bom_pdf(commercial=True)
+    before = database_state(api)
+    data = ok(preview(api, path(saved), content))
+    assert data['source']['classification'] == 'unknown' and data['source']['document_kind'] is None
+    assert data['candidates'] == []
+    assert save(api, path(saved), data, content=content).status_code == 422
+    assert database_state(api) == before
+
+
+def test_explicit_bom_source_choice_is_signed_and_keeps_full_sheet_in_bom_history(api):
+    saved = setup(api, numbers=[NUMBERS[0]])
+    content = make_isometric_pdf([{'number': NUMBERS[0]}])
+    data = ok(preview(api, path(saved), content, source_mode='bom'))
+    assert data['source']['classification'] == 'isometric'
+    assert data['source']['document_kind'] == 'bom' and data['source']['source_mode'] == 'bom'
+    result = ok(save(api, path(saved), data, content=content))
+    assert result['active']['isometric'] is None
+    assert result['active']['bom']['source_document_kind'] == 'bom'
+
+
+def test_multiple_scanned_bom_pages_can_be_retained_as_one_viewable_source(api):
+    saved = setup(api, numbers=[NUMBERS[0]])
+    files = [('one.pdf', make_bom_pdf(), 'application/pdf'), ('two.pdf', make_bom_pdf(), 'application/pdf')]
+    result = ok(request_upload(api, path(saved), kind='bom', files=files))
+    assert result['active']['bom']['page_count'] == 2
+    assert result['active']['isometric'] is None
 
 
 @pytest.mark.parametrize('role', [None, 'welder', 'painter'])

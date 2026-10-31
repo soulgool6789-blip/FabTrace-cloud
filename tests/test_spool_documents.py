@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from sqlalchemy import select
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from conftest import BADGES
 from tracking_helpers import ok
@@ -155,6 +155,106 @@ def test_camera_scans_and_pdf_pages_merge_in_selected_order(api):
     downloaded = PdfReader(io.BytesIO(api.get(drawing['view_url']).content))
     assert float(downloaded.pages[0].mediabox.height) > float(downloaded.pages[0].mediabox.width)
     assert [float(page.mediabox.width) for page in downloaded.pages[1:]] == [600, 601]
+
+
+@pytest.mark.parametrize('mode,format,orientation', [
+    ('RGB', 'PNG', None), ('RGBA', 'PNG', None), ('L', 'PNG', None),
+    ('RGB', 'JPEG', 6),
+])
+def test_camera_normalization_preserves_non_rgb_pages_and_exif_orientation(api, mode, format, orientation):
+    """Native buffer cleanup must retain image size, content and camera rotation."""
+    models = importlib.import_module('spool_documents')
+    image = Image.new(mode, (80, 40), 80 if mode == 'L' else 'red')
+    if mode != 'L':
+        image.paste('blue', (40, 0, 80, 40))
+    source = io.BytesIO()
+    options = {}
+    if orientation:
+        exif = image.getexif()
+        exif[274] = orientation
+        options['exif'] = exif
+    image.save(source, format=format, **options)
+    image.close()
+    reader = models._pdf_pages(source.getvalue(), '.jpg' if format == 'JPEG' else '.png')
+    try:
+        page = reader.pages[0]
+        expected = (40, 80) if orientation else (80, 40)
+        assert (float(page.mediabox.width), float(page.mediabox.height)) == pytest.approx(
+            tuple(pixels * 72 / 150 for pixels in expected))
+        retained = page.images[0].image
+        assert retained.size == expected and retained.mode == 'RGB'
+        if mode == 'L':
+            assert retained.getpixel((20, 20)) == pytest.approx((80, 80, 80), abs=2)
+        else:
+            red = retained.getpixel((20, 20))
+            blue = retained.getpixel((20, 60) if orientation else (60, 20))
+            assert red[0] > 220 and red[2] < 30
+            assert blue[2] > 220 and blue[0] < 30
+        retained.close()
+    finally:
+        reader.close()
+
+
+def test_failed_camera_pdf_encoding_releases_non_rgb_conversion(api, monkeypatch, tmp_path):
+    import socket
+    from isometric_ocr import _image_pdf_worker
+    source = io.BytesIO()
+    with Image.new('RGBA', (80, 40), 'red') as image:
+        image.save(source, format='PNG')
+    converted = []
+    opened = []
+    original_convert = Image.Image.convert
+    original_open = Image.open
+    def remember_open(*args, **kwargs):
+        result = original_open(*args, **kwargs)
+        opened.append(result)
+        return result
+    def remember_conversion(image, *args, **kwargs):
+        result = original_convert(image, *args, **kwargs)
+        converted.append(result)
+        return result
+    def broken_encode(*args, **kwargs):
+        raise OSError('Synthetic PDF encoder failure')
+    monkeypatch.setattr(Image.Image, 'convert', remember_conversion)
+    monkeypatch.setattr(Image.Image, 'save', broken_encode)
+    monkeypatch.setattr(Image, 'open', remember_open)
+    # The encoder normally runs only in its child. Restore its offline socket
+    # guard after this direct failure-path check in the test interpreter.
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    path = tmp_path / 'camera.png'
+    path.write_bytes(source.getvalue())
+    with pytest.raises(OSError, match='Synthetic PDF encoder failure'):
+        _image_pdf_worker(path, tmp_path / 'page.pdf')
+    assert len(converted) == len(opened) == 1
+    for image in [*opened, *converted]:
+        with pytest.raises(ValueError, match='closed image'):
+            image.getpixel((0, 0))
+
+
+def test_normalized_scan_total_is_bounded_before_more_pages_are_accumulated(api, monkeypatch):
+    models = importlib.import_module('spool_documents')
+    normalized_page = pdf(1)
+    monkeypatch.setattr(models, 'MAX_TOTAL_BYTES', len(normalized_page) * 2 - 1)
+    normalized, added = [], []
+    def normalize(content, extension):
+        normalized.append(content)
+        return PdfReader(io.BytesIO(normalized_page))
+    original_add = PdfWriter.add_page
+    def add_page(writer, page, *args, **kwargs):
+        added.append(page)
+        return original_add(writer, page, *args, **kwargs)
+    monkeypatch.setattr(models, '_pdf_pages', normalize)
+    monkeypatch.setattr(PdfWriter, 'add_page', add_page)
+    files = [UploadFile(filename=f'{index}.png', file=io.BytesIO(bytes([index]))) for index in (1, 2, 3)]
+    try:
+        with pytest.raises(HTTPException) as failure:
+            models._prepare(files, 'isometric', '', {'spool_number': 'TEST-SPOOL', 'item_id': ''})
+        assert failure.value.status_code == 413 and 'normalized pages' in failure.value.detail
+        assert normalized == [b'\x01', b'\x02'] and len(added) == 1
+    finally:
+        for uploaded in files:
+            uploaded.file.close()
 
 
 def test_revisions_keep_original_bytes_and_stale_writes_do_not_duplicate(api):

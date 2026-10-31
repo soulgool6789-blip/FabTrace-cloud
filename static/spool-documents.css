@@ -63,6 +63,29 @@
 #spoolDocumentsDialog .sdoc-footer{border-top:1px solid #d6e3ec;padding:16px 26px;display:flex;align-items:center;justify-content:space-between;gap:15px;background:#f7fafc}
 #spoolDocumentsDialog .sdoc-footer p{font-size:11px;color:#718697;margin:0}
 #spoolDocumentsDialog .sdoc-loading{font-size:14px;color:#54768e;padding:24px}
+#spoolDocumentsDialog .sdoc-heading{display:flex;gap:18px;align-items:center;min-width:0}
+#spoolDocumentsBack{font-size:12px;white-space:nowrap;padding:8px 11px;background:white;color:#315d79;flex:0 0 auto}
+#spoolDocumentsDialog .sdoc-file-nav{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+#spoolDocumentsDialog .sdoc-file-nav .sdoc-tabs{flex:1;margin:0}
+#spoolDocumentsDialog .sdoc-history-link{font-size:12px;color:#5b7689;background:none;border:0;text-decoration:underline;padding:8px}
+#spoolDocumentsDialog .sdoc-upload-start,#spoolDocumentsDialog .sdoc-bom-review,#spoolDocumentsDialog .sdoc-uploaded{padding:24px;border:1px solid #ccdfeb;border-radius:12px;background:#f5fafd}
+#spoolDocumentsDialog .sdoc-upload-start>p,#spoolDocumentsDialog .sdoc-uploaded>p{font-size:14px;color:#577186;max-width:760px}
+#spoolDocumentsDialog .sdoc-choose-primary{background:#126b9c;color:white;border-color:#126b9c;padding:12px 18px}
+#spoolDocumentsDialog .sdoc-file-options,#spoolDocumentsDialog .sdoc-save-options{margin:16px 0;font-size:12px;color:#5a7487}
+#spoolDocumentsDialog .sdoc-file-options>summary,#spoolDocumentsDialog .sdoc-save-options>summary{cursor:pointer;font-weight:650;padding:5px 0}
+#spoolDocumentsDialog .sdoc-file-options .field{margin-top:12px;max-width:360px}
+#spoolDocumentsDialog .sdoc-processing{text-align:center;padding:45px 24px;border:1px solid #d5e3ed;border-radius:12px;background:#f6fafd;min-height:260px}
+#spoolDocumentsDialog .sdoc-processing>p{max-width:600px;margin:12px auto;font-size:13px;color:#5a7486}
+#spoolDocumentsDialog .sdoc-spinner{display:block;width:36px;height:36px;margin:0 auto 20px;border:4px solid #d5e8f3;border-top-color:#126b9c;border-radius:50%;animation:sdoc-spin .9s linear infinite}
+#spoolDocumentsDialog .sdoc-detected{background:#eaf5ee;border:1px solid #c5dfcf;padding:10px 12px;border-radius:7px;color:#286546}
+#spoolDocumentsDialog .sdoc-material-preview{list-style:none;margin:12px 0;padding:0;display:grid;gap:8px}
+#spoolDocumentsDialog .sdoc-material-preview li{display:flex;gap:12px;font-size:12px;line-height:1.5;border-bottom:1px solid #e4ecf1;padding-bottom:8px}
+#spoolDocumentsDialog .sdoc-material-preview li>strong{flex:0 0 55px;color:#32634b}
+#spoolDocumentsDialog .sdoc-material-preview li>span{min-width:0;overflow-wrap:anywhere}
+#spoolDocumentsDialog .sdoc-material-preview small{display:block;color:#708596;font-size:11px}
+@keyframes sdoc-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#spoolDocumentsDialog .sdoc-spinner{animation:none}}
+@media(max-width:650px){#spoolDocumentsDialog .sdoc-heading{display:block}#spoolDocumentsBack{margin-bottom:8px}#spoolDocumentsDialog .sdoc-upload-start,#spoolDocumentsDialog .sdoc-bom-review,#spoolDocumentsDialog .sdoc-uploaded{padding:16px}#spoolDocumentsDialog .sdoc-file-nav{gap:4px}#spoolDocumentsDialog .sdoc-file-nav .sdoc-tabs button{padding:10px 7px}#spoolDocumentsDialog .sdoc-history-link{padding:7px 3px;font-size:11px}#sdocPackageTitle{scroll-margin-top:170px}}
 #spoolDocumentsDialog .sdoc-share{display:flex;align-items:center;gap:18px;padding:16px 18px;margin:0 0 20px;border:1px solid #b8d6e8;border-radius:9px;background:#edf7ff}
 #spoolDocumentsDialog .sdoc-share>div{flex:1;min-width:0}
 #spoolDocumentsDialog .sdoc-share strong{font-size:14px;color:#255977}
@@ -70,7 +93,7 @@
 #spoolDocumentsDialog .sdoc-share>button{font-size:13px;flex:0 0 auto}
 #spoolDocumentsDialog .sdoc-package{margin:20px 0;padding:20px;background:#f5faf7;border:1px solid #b8d8c6;border-radius:11px;scroll-margin-top:140px}
 #spoolDocumentsDialog .sdoc-package>p{font-size:13px;overflow-wrap:anywhere}
-#sdocPackageTitle{scroll-margin-top:140px}
+#sdocPackageTitle{scroll-margin-top:175px}
 #spoolDocumentsDialog .sdoc-candidates{display:grid;gap:15px;margin:18px 0}
 #spoolDocumentsDialog .sdoc-candidate{min-width:0;padding:17px;background:white;border:1px solid #d2dde4;border-radius:8px}
 #spoolDocumentsDialog .sdoc-candidate-selected{border-color:#73b592}

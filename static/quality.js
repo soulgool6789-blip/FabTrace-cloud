@@ -62,10 +62,10 @@
   const empty=(title,copy,controls='')=>`<div class="fq-empty"><strong>${esc(title)}</strong><p>${esc(copy)}</p>${controls}</div>`;
   const meta=pairs=>`<div class="fq-meta">${pairs.map(([label,value])=>`<dl><dt>${esc(label)}</dt><dd>${esc(value||'—')}</dd></dl>`).join('')}</div>`;
   function blockers(values){return arr(values).length?`<div class="fq-blockers"><strong>What still needs attention</strong><ul>${values.map(value=>`<li>${esc(value)}</li>`).join('')}</ul></div>`:'';}
-  function updateUrl(){const query=new URLSearchParams({quality:'1'});if(state.workspace)query.set('workspace',state.workspace);if(state.requirement)query.set('requirement',state.requirement);if(state.project)query.set('project',state.project);history.replaceState(null,'','/?'+query.toString());}
+  function updateUrl(){const query=new URLSearchParams({quality:'1'});if(state.workspace)query.set('workspace',state.workspace);if(state.requirement)query.set('requirement',state.requirement);if(state.project)query.set('project',state.project);if(state.tab!=='requirements')query.set('tab',state.tab);history.replaceState(null,'','/?'+query.toString());}
   async function open(options={}){
     if(!me)return;show('qualityPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;
-    state.workspace=text(options.workspace||'');state.requirement=text(options.requirement||'');state.detail=null;state.notice='';state.tab='requirements';
+    state.workspace=text(options.workspace||'');state.requirement=text(options.requirement||'');state.detail=null;state.notice='';state.tab=['requirements','documents','evidence','actions'].includes(options.tab)?options.tab:'requirements';
     if(Object.prototype.hasOwnProperty.call(options,'project'))state.project=options.project||'';
     await load();
   }

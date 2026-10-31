@@ -1,5 +1,11 @@
 # FabTrace Cloud
 
+## Simple orders and automatic file recognition
+
+Release `2026.10.31-simple-uploads.1` reduces the main menu to everyday work: **Orders**, **Production progress**, **Scan & transfer**, **Process flow**, and **Guide**. Specialist screens, including Projects & welds, Spool parts, Job Packets and administrator Excel exports, are available in **More tools**. Each screen has contextual **Back** navigation; order setup preserves entered values when moving between steps or returning to an unfinished setup.
+
+The order setup follows **P.O. number → Assemblies → Spools → Drawings & BOMs**. Use one **Upload drawing or BOM** action for the assembly or open the files beside an individual spool. Selecting a PDF, photo or scan starts reading automatically; prepared Excel/CSV BOMs use the corresponding spool's file view. Full drawings produce the complete viewable drawing and separate Excel BOMs. Standalone material-table images produce a BOM source and Excel list. Unclear source types or spool assignments are shown for review. Saved BOM/drawing status is visible beside each spool after reloading.
+
 ## Upload spool bills of material and full isometric drawings
 
 Release `2026.10.31-isometric-boms.1` reads the per-spool material tables in an uploaded isometric and creates a separate Excel BOM for each reviewed spool. In assembly setup, upload the complete drawing once, review the detected spool matches and material rows, then save the drawing and Excel BOMs together. Each selected spool receives a link to the complete drawing and its own BOM; physical copies registered to those requirements inherit the files. The **Download Excel BOM** action is available at the spool level.
@@ -8,15 +14,15 @@ For a drawing already saved in FabTrace, choose **Create spool BOMs**. A unique 
 
 Release `2026.10.31-spool-pdf-viewer.1` corrects the PDF response policy that could leave uploaded BOMs and isometric drawings on a gray browser page. The fix applies to existing saved PDFs and their history; reopen the document to use it. No re-upload is needed.
 
-Release `2026.10.31-spool-documents.1` adds **Documents (optional)** as the fourth P.O. setup step. After entering quantities and weld counts, choose **Save & add documents**. The P.O. is saved once, then each spool offers **Upload / view BOM** and **Upload / view isometric**. Choose **Finish setup** or **Skip for now** when done. Existing spools offer **BOM & drawings** from their saved setup, production records, labels, and item/QR screen.
+Release `2026.10.31-spool-documents.1` introduced the optional fourth P.O. setup step. Its current **Drawings & BOMs** flow follows **Save & add files**: the P.O. is saved once, then the assembly and spool file actions open the upload or saved documents. Choose **Finish setup** or **Do this later** when done. Existing spools offer **BOM & drawings** from their saved setup, production records, labels, and item/QR screen.
 
-The document dialog has **Bill of material**, **Isometric drawings**, and **History** tabs. Preview a CSV or XLSX BOM, select its worksheet if needed, and save the material grid and source file. A scanned BOM PDF is viewable as a document. A full drawing PDF or ordered PDF/JPEG/PNG pages are retained as one complete viewable PDF; the phone camera can add individual pages. **View full isometric** opens all pages. Document revision and upload history remain available.
+The document dialog starts with **Upload files** when no documents are saved. Its saved views include **BOM**, **Drawings**, and **History**. A selected CSV or XLSX BOM opens its review automatically; select its worksheet if needed and save the material grid and source file. A scanned BOM PDF is viewable as a document. A full drawing PDF or ordered PDF/JPEG/PNG pages are retained as one complete viewable PDF; the phone camera can add individual pages. **View full isometric** opens all pages. Document revision and upload history remain available.
 
 Uploads in setup belong to that exact P.O., assembly, and spool requirement. Its registered physical spools inherit those references. An individual spool upload overrides only that spool's corresponding document. Repeated spool numbers elsewhere do not receive files automatically. Existing material heat/MTR records remain separate and unchanged. Uploaded references are included with the exact issued Job Packet revision; upload alone records no receipt, production work, or QA approval.
 
 ## GPN and spool QR labels from a saved P.O.
 
-Open **Purchase orders → Open P.O. → Generate spool QR labels**. FabTrace uses the saved quantities and generates only missing physical records. Choose the actual current location and responsible employee once per batch. Each physical spool receives its own permanent QR code; reprinting retains the same identity.
+Open **Orders → Open P.O. → Generate spool QR labels**. FabTrace uses the saved quantities and generates only missing physical records. Choose the actual current location and responsible employee once per batch. Each physical spool receives its own permanent QR code; reprinting retains the same identity.
 
 Spool generation creates any missing parent assemblies automatically. It assigns the required spool numbers and quantities to **each individual assembly**, including repeated spool numbers. Spool labels show the spool number, P.O., parent GPN, physical assembly ID and unique spool ID. Print all labels or filter to one GPN, in pages of 100. Generation handles up to 500 new items per batch, including any parent assemblies; continue with the next batch when needed.
 
@@ -28,12 +34,12 @@ An administrator can open **Employees → Change position**, select the new posi
 
 ## Simple P.O. setup
 
-Open **Purchase orders** (`/?order-setup=1`) and choose **New P.O.** Administrators and supervisors land here after signing in. Setup has three entry steps followed by an optional document step:
+Open **Orders** (`/?order-setup=1`) and choose **New P.O.** This is the ordinary signed-in landing screen; creation and edits retain their existing permissions. Setup has three entry steps followed by an optional document step:
 
 1. **P.O. number** — enter the purchase-order number.
-2. **Assemblies & quantities** — add each **Google part number / Assembly number** and answer **How many assemblies?** Use **+ Add another assembly number** for additional numbers on the same P.O.
-3. **Spools & welds** — under each assembly number, enter its spool numbers, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** as needed, then **Save & add documents**.
-4. **Documents (optional)** — upload/view the BOM and all pages of the corresponding isometric for each selected spool. Finish setup or skip for now; the P.O. and quantities are already saved.
+2. **Assemblies** — add each **Google part number / Assembly number** and answer **How many assemblies?** Use **+ Add another assembly number** for additional numbers on the same P.O.
+3. **Spools** — under each assembly number, enter its spool numbers, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** as needed, then **Save & add files**.
+4. **Drawings & BOMs (optional)** — upload/view the BOM and all pages of the corresponding isometric for each selected spool. Finish setup or choose **Do this later**; the P.O. and quantities are already saved.
 
 Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. The setup save records the numbers, quantities, and weld counts together; optional documents are saved separately to the selected spool scope. Physical records and custody are entered later.
 

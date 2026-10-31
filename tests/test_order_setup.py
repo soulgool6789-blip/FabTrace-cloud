@@ -75,6 +75,29 @@ def test_setup_is_one_atomic_po_with_multiple_assembly_and_spool_quantities(api)
     assert listed['assembly_quantity'] == 5 and listed['total_spools'] == 17
 
 
+def test_saved_document_status_survives_reload_and_stays_in_exact_order_scope(api):
+    from test_spool_documents import bom_csv, pdf, request_upload
+
+    saved = create_setup(api)
+    other = create_setup(api, number='OTHER-ORDER')
+    spool = saved['assemblies'][0]['spools'][0]
+    location = '/api/spool-documents/requirements/' + spool['id']
+    assert spool['documents'] == {'bom': False, 'isometric': False}
+    ok(request_upload(api, location, files=[('BOM.csv', bom_csv(spool['spool_number']), 'text/csv')]))
+    ok(request_upload(api, location, files=[('drawing.pdf', pdf(3), 'application/pdf')],
+                      kind='isometric', version=1))
+
+    before = database_state(api)
+    reloaded = ok(api.get(ROOT + '/' + saved['order']['project_id'], role='inspector'))
+    rows = reloaded['assemblies'][0]['spools']
+    assert rows[0]['documents'] == {'bom': True, 'isometric': True}
+    assert rows[1]['documents'] == {'bom': False, 'isometric': False}
+    separate = detail(api, other['order']['project_id'])
+    assert all(row['documents'] == {'bom': False, 'isometric': False}
+               for row in separate['assemblies'][0]['spools'])
+    assert database_state(api) == before
+
+
 @pytest.mark.parametrize('role', [None, 'handler', 'welder', 'fitup_welder', 'process_welder',
                                   'inspector', 'painter', 'finisher', 'misc'])
 def test_write_permissions_reject_all_setup_mutations_without_partial_records(api, role):

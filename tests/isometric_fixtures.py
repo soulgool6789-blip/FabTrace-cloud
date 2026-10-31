@@ -20,7 +20,7 @@ def _pdf_string(value):
 
 def make_isometric_pdf(spools=None, *, drawing='TEST-100', revision='A',
                        include_assembly=True, extra_blank_pages=0,
-                       header_at_top=False, footer_override=None):
+                       header_at_top=False, footer_override=None, include_geometry=True):
     """Generate a PDF; spools=[{'number': '...', 'rows': [[6 cells], ...]}].
 
     Each table has item, quantity, TAS part number, description, length and
@@ -52,7 +52,10 @@ def make_isometric_pdf(spools=None, *, drawing='TEST-100', revision='A',
             ops.append(f'BT /F1 {size} Tf 1 0 0 1 {x} {y} Tm ({_pdf_string(value)}) Tj ET')
 
         text(50, 740, 'SYNTHETIC ISOMETRIC TEST DRAWING', 14)
-        text(55, 700, 'Drawing geometry is intentionally omitted. These materials are test data.', 10)
+        text(55, 700, 'Invented pipe geometry and materials for testing only.', 10)
+        if include_geometry:
+            for offset in (0, 14):
+                ops.append(f'145 {420 + offset} m 360 {544 + offset} l 540 {440 + offset} l S')
         headers = ['ITEM', 'QTY', 'TAS PART #', 'DESCRIPTION', 'LENGTH', 'MATERIAL']
         table_rows = [headers, *rows] if header_at_top else [*rows, headers]
         cols = [610, 646, 686, 752, 1040, 1114, 1180]
@@ -87,6 +90,49 @@ def make_isometric_pdf(spools=None, *, drawing='TEST-100', revision='A',
         page[NameObject('/Contents')] = writer._add_object(stream)
     for _ in range(extra_blank_pages):
         writer.add_blank_page(width=1200, height=800)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def make_bom_pdf(*, spool_number='', rows=None, table_count=1, header_at_top=True,
+                 commercial=False):
+    """A standalone ruled material table, with no full-drawing title block."""
+    rows = DEFAULT_ROWS if rows is None else rows
+    writer = PdfWriter()
+    height = 90 + table_count * (32 * (len(rows) + 1) + (32 if spool_number else 0) + 45)
+    page = writer.add_blank_page(width=900, height=height)
+    font = DictionaryObject({NameObject('/Type'): NameObject('/Font'),
+        NameObject('/Subtype'): NameObject('/Type1'), NameObject('/BaseFont'): NameObject('/Helvetica')})
+    page[NameObject('/Resources')] = DictionaryObject({NameObject('/Font'): DictionaryObject({NameObject('/F1'): writer._add_object(font)})})
+    ops = ['0.8 w']
+    def text(x, y, value, size=10):
+        ops.append(f'BT /F1 {size} Tf 1 0 0 1 {x} {y} Tm ({_pdf_string(value)}) Tj ET')
+    text(20, height - 25, 'INVOICE' if commercial else 'BILL OF MATERIAL', 15)
+    columns = [20, 70, 120, 230, 650, 760, 880]
+    headers = ['ITEM', 'QTY', 'PART NUMBER', 'DESCRIPTION', 'LENGTH', 'UNIT PRICE' if commercial else 'MATERIAL']
+    top = height - 55
+    for _ in range(table_count):
+        table_rows = [headers, *rows] if header_at_top else [*rows, headers]
+        bottom = top - len(table_rows) * 32
+        for x in columns:
+            ops.append(f'{x} {bottom} m {x} {top} l S')
+        for index in range(len(table_rows) + 1):
+            y = top - index * 32
+            ops.append(f'{columns[0]} {y} m {columns[-1]} {y} l S')
+        for index, row in enumerate(table_rows):
+            for column, value in enumerate(row):
+                text(columns[column] + 4, top - (index + 1) * 32 + 12, value, 9)
+        if spool_number:
+            ops.extend([f'{columns[0]} {bottom} m {columns[0]} {bottom - 32} l S',
+                        f'{columns[-1]} {bottom} m {columns[-1]} {bottom - 32} l S',
+                        f'{columns[0]} {bottom - 32} m {columns[-1]} {bottom - 32} l S'])
+            text(columns[0] + 5, bottom - 21, f'"{spool_number}" QTY. SHOWN FOR ONE (1); ONE (1) REQ\'D', 10)
+            bottom -= 32
+        top = bottom - 45
+    stream = DecodedStreamObject()
+    stream.set_data('\n'.join(ops).encode('latin-1'))
+    page[NameObject('/Contents')] = writer._add_object(stream)
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()

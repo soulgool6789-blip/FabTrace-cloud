@@ -28,7 +28,10 @@ def serve():
             PUBLIC_BASE_URL="https://fabtrace-training.example",
         )
         import main
-        from conftest import BADGES, TEST_PIN
+        # Import only synthetic account constants. Loading conftest here also
+        # loads pytest/TestClient into the app process and distorts the bounded
+        # OCR memory checks compared with the deployed web service.
+        from fixture_accounts import BADGES, TEST_PIN
         from permissions import role_label
         import uvicorn
 

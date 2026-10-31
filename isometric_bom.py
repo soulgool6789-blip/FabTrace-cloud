@@ -1,4 +1,4 @@
-"""Read per-spool reference BOMs from the lower-right grids of isometric PDFs.
+"""Read per-spool BOMs from complete isometrics and standalone ruled tables.
 
 The parser binds a grid to its own spool footer and never chooses a production
 record. It preserves source quantities and cut lengths; ambiguous grids are
@@ -10,6 +10,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import hashlib
 import io
+import math
 import re
 from typing import Callable
 
@@ -21,7 +22,7 @@ MAX_TABLE_LINES = 500
 MAX_PAGE_CHARACTERS = 60_000
 MAX_PAGE_EDGES = 12_000
 MAX_TABLES_PER_PAGE = 50
-EXTRACTION_VERSION = 1
+EXTRACTION_VERSION = 2
 
 # No drawing IDs, spool prefixes, part numbers, or row values are hardcoded.
 _FOOTER = re.compile(
@@ -124,28 +125,74 @@ def _title_block(page):
 
 def _native_page(page):
     """Use vector grid edges; text inside a drawing view is never a BOM row."""
+    # Preserve the bounded engineering-sheet region: CAD page borders and view
+    # geometry can otherwise connect many cells into one enormous false table.
+    drawing, revision = _title_block(page)
     crop = page.crop((page.width * .45, page.height * .30,
                       page.width, page.height * .94))
-    if len(crop.edges) > MAX_PAGE_EDGES:
-        return {'tables': [], 'warnings': ['The lower-right drawing area has too many grid edges to extract safely.']}
-    tables = crop.find_tables()
+    focused = []
+    if len(crop.edges) <= MAX_PAGE_EDGES:
+        tables = crop.find_tables()
+        if len(tables) <= MAX_TABLES_PER_PAGE:
+            focused = [{'rows': table.extract(x_tolerance=2, y_tolerance=2),
+                         'bbox': list(table.bbox)} for table in tables]
+    labeled = any(any(_header(row) for row in table['rows']) and
+                  any(_FOOTER.search(' '.join(_text(cell) for cell in row)) for row in table['rows'])
+                  for table in focused)
+    if drawing and labeled:
+        return {'tables': focused, 'drawing': drawing, 'revision': revision,
+                'drawing_geometry': _native_geometry(page, [table['bbox'] for table in focused
+                    if any(_header(row) for row in table['rows'])]), 'warnings': []}
+    # A standalone BOM can occupy the full page or have a header at its top.
+    # Only use this fallback when the complete isometric layout was not found.
+    if len(page.edges) > MAX_PAGE_EDGES:
+        return {'tables': focused if labeled else [], 'drawing': drawing, 'revision': revision,
+                'drawing_geometry': _native_geometry(page) if drawing else False,
+                'warnings': ['The rest of this page has too many grid edges to extract safely.']}
+    tables = page.find_tables()
     if len(tables) > MAX_TABLES_PER_PAGE:
         return {'tables': [], 'warnings': ['The lower-right drawing area has too many tables to identify a spool BOM safely.']}
-    drawing, revision = _title_block(page)
     return {'tables': [{'rows': table.extract(x_tolerance=2, y_tolerance=2),
                          'bbox': list(table.bbox)} for table in tables],
-            'drawing': drawing, 'revision': revision, 'warnings': []}
+            'drawing': drawing, 'revision': revision,
+            'drawing_geometry': _native_geometry(page) if drawing else False, 'warnings': []}
+
+
+def _native_geometry(page, table_boxes=()):
+    """Require long oblique drawing edges away from material and title tables.
+
+    Borders, letters and a lower-right BOM on an otherwise empty drawing
+    template do not establish that the uploaded page contains an isometric.
+    """
+    minimum = min(float(page.width), float(page.height))
+    count, length = 0, 0.0
+    for edge in page.edges[:MAX_PAGE_EDGES]:
+        dx, dy = edge.get('x1', 0) - edge.get('x0', 0), edge.get('bottom', 0) - edge.get('top', 0)
+        middle_x = (edge.get('x0', 0) + edge.get('x1', 0)) / 2
+        middle_y = (edge.get('top', 0) + edge.get('bottom', 0)) / 2
+        if any(box[0] <= middle_x <= box[2] and box[1] <= middle_y <= box[3] for box in table_boxes):
+            continue
+        if (dx > minimum * .025 and dy > minimum * .025 and page.width * .05 < middle_x < page.width * .96
+                and page.height * .08 < middle_y < page.height * .74):
+            count += 1
+            length += math.hypot(dx, dy)
+            if count >= 2 and length >= minimum * .16:
+                return True
+    return False
 
 
 def _has_scanned_bom_area(page):
     """A scan may have a small native title or OCR layer around a raster BOM."""
-    x0, top, x1, bottom = page.width * .45, page.height * .30, page.width, page.height * .94
-    area = (x1 - x0) * (bottom - top)
-    covered = 0
-    for image in page.images:
-        covered += max(0, min(x1, image['x1']) - max(x0, image['x0'])) * max(
-            0, min(bottom, image['bottom']) - max(top, image['top']))
-    return covered > area * .20
+    # Keep the original focused-area check for hybrid CAD PDFs whose title and
+    # geometry are native but whose relatively small lower-right BOM is raster.
+    for x0, top, x1, bottom in ((page.width * .45, page.height * .30, page.width, page.height * .94),
+                                (0, 0, page.width, page.height)):
+        area = (x1 - x0) * (bottom - top)
+        covered = sum(max(0, min(x1, image['x1']) - max(x0, image['x0'])) * max(
+            0, min(bottom, image['bottom']) - max(top, image['top'])) for image in page.images)
+        if covered > area * .20:
+            return True
+    return False
 
 
 def _parse_table(table, page_number, drawing, revision, source_method):
@@ -164,16 +211,30 @@ def _parse_table(table, page_number, drawing, revision, source_method):
         text = ' '.join(_text(value) for value in row if value is not None)
         for match in _FOOTER.finditer(text):
             footers.append((index, _text(match.group(1))))
-    if len(footers) != 1:
-        return None, ('A BOM grid has no unique quoted spool number and per-one quantity footer; '
-                      'no spool assignment was guessed.')
-    footer_index, spool_number = footers[0]
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/ -]{0,119}', spool_number):
+    if len(footers) > 1:
+        return None, ('A BOM grid contains multiple spool-number footers; no spool assignment was guessed.')
+    footer_index, spool_number = footers[0] if footers else (len(rows), '')
+    if spool_number and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/ -]{0,119}', spool_number):
         return None, 'The BOM footer has an unsupported or unreadable spool number.'
-    # The reference format puts its header below all data; top-header grids
-    # work as well. Only rows before the attached footer belong to the BOM.
-    source_rows = rows[:header_index] if header_index < footer_index and header_index > 0 else rows[header_index + 1:footer_index]
-    source_rows = [row for row in source_rows if any(_text(value) for value in row)]
+    if not footers:
+        # Generic invoices and arbitrary prose must not become spool material
+        # records. An unlabeled table needs material-oriented headings in
+        # addition to Item, Quantity and Description, with no commercial header.
+        header_keys = {_key(value) for value in rows[header_index]}
+        commercial = {'PRICE', 'UNITPRICE', 'AMOUNT', 'EXTENDEDPRICE', 'TOTALPRICE', 'TOTALCOST', 'INVOICE'}
+        if not {'part_number', 'material', 'length', 'size'}.intersection(mapping) or header_keys.intersection(commercial):
+            return None, 'This unlabeled table is not an unambiguous material BOM; no spool assignment was guessed.'
+        if any(re.search(r'\b(?:MATERIAL\s+LIST|BILL\s+OF\s+MATERIALS?)\s+FOR\s+(?:AN?\s+)?ASSEMBLY\b',
+                         ' '.join(_text(value) for value in row), re.I) for row in rows):
+            return None, 'This is labeled as an assembly material list, without a unique per-spool footer; no spool assignment was guessed.'
+    def material_row(row):
+        return any(_value(row, mapping, field) for field in
+                   ('description', 'quantity', 'part_number', 'length', 'material', 'size'))
+    before = [row for row in rows[:header_index] if material_row(row)]
+    after = [row for row in rows[header_index + 1:footer_index] if material_row(row)]
+    if before and after:
+        return None, 'Material rows appear on both sides of one header; the BOM boundary needs manual review.'
+    source_rows = before or after
     if not source_rows or len(source_rows) > MAX_TABLE_LINES:
         return None, f'Spool {spool_number} has no readable BOM rows or exceeds {MAX_TABLE_LINES} rows.'
     warnings = [_text(warning) for warning in table.get('warnings', [])]
@@ -181,6 +242,8 @@ def _parse_table(table, page_number, drawing, revision, source_method):
     lines = []
     deleted_items = []
     seen_items = set()
+    if not footers:
+        warnings.append('No spool number or per-one quantity footer is printed on this BOM. Choose the correct spool and confirm that these quantities are for one spool.')
     if not drawing:
         warnings.append('Drawing number could not be read from the title block. Verify it against the full drawing.')
     if not revision:
@@ -244,7 +307,29 @@ def _parse_table(table, page_number, drawing, revision, source_method):
             'source_pages': [page_number], 'quantity_basis': 'one_spool', 'lines': lines,
             'line_count': len(lines), 'warnings': warnings, 'review_required': bool(warnings),
             'source_method': source_method, 'table_bbox': table.get('bbox'),
-            'deleted_items': deleted_items, 'validation_errors': errors}, None
+            'deleted_items': deleted_items, 'validation_errors': errors,
+            'has_spool_footer': bool(footers), 'quantity_basis_verified': bool(footers)}, None
+
+
+def _record_kind(record, page_width, page_height, drawing_geometry=False):
+    """Only positive full-sheet evidence permits replacing a saved drawing.
+
+    A crop can retain a valid spool footer but still is only a material table.
+    Require separate drawing geometry plus a small, labeled lower-right grid.
+    A title value may be unreadable in a scan and remains explicitly blank.
+    Everything else recognized as a BOM remains a BOM source conservatively.
+    """
+    bbox = record.get('table_bbox')
+    if (not drawing_geometry or not record.get('has_spool_footer')
+            or not bbox or len(bbox) != 4):
+        return 'bom'
+    x0, top, x1, bottom = bbox
+    area = max(0, x1 - x0) * max(0, bottom - top)
+    if (page_width > 0 and page_height > 0 and x0 >= page_width * .38
+            and top >= page_height * .12 and bottom <= page_height * .97
+            and area < page_width * page_height * .40):
+        return 'isometric'
+    return 'bom'
 
 
 def _is_assembly(record, footer_ids):
@@ -275,7 +360,9 @@ def extract_isometric_boms(pdf_bytes: bytes, filename: str = '', *,
     """
     result = {'status': 'no_bom', 'page_count': 0, 'candidates': [], 'warnings': [],
               'unreadable_pages': [], 'excluded_pages': [],
-              'extraction_version': EXTRACTION_VERSION}
+              'extraction_version': EXTRACTION_VERSION, 'classification': 'unknown',
+              'classification_reason': 'No recognizable spool material table was found.',
+              'drawing_pages': []}
     source_hash = hashlib.sha256(pdf_bytes).hexdigest()
     records = []
     try:
@@ -315,6 +402,8 @@ def extract_isometric_boms(pdf_bytes: bytes, filename: str = '', *,
                             page_data = ocr_page_provider(pdf_bytes, index, float(page.width), float(page.height)) or {}
                     for warning in page_data.get('warnings', []):
                         result['warnings'].append(f'Page {index}: {_text(warning)}')
+                    if page_data.get('drawing_geometry') and (page_data.get('drawing') or page_data.get('title_block_evidence')):
+                        result['drawing_pages'].append(index)
                     tables = page_data.get('tables') or []
                     if len(tables) > MAX_TABLES_PER_PAGE:
                         result['unreadable_pages'].append(index)
@@ -330,6 +419,8 @@ def extract_isometric_boms(pdf_bytes: bytes, filename: str = '', *,
                             result['excluded_pages'].append({'page': index, 'reason': error})
                         if record:
                             found_bom = True
+                            record['document_kind'] = _record_kind(record, float(page.width), float(page.height),
+                                                                  bool(page_data.get('drawing_geometry')))
                             key = f'{source_hash}:{index}:{table_index}:{record["spool_number"]}'
                             record['candidate_id'] = 'ibom_' + hashlib.sha256(key.encode()).hexdigest()[:24]
                             records.append(record)
@@ -350,17 +441,24 @@ def extract_isometric_boms(pdf_bytes: bytes, filename: str = '', *,
         result['warnings'].append(f'The PDF could not be read for BOM extraction ({type(exc).__name__}).')
         return result
     footer_ids = {_identity(record['spool_number']) for record in records}
+    if result['drawing_pages'] or any(record['document_kind'] == 'isometric' for record in records):
+        result['classification'] = 'isometric'
+        result['classification_reason'] = 'Drawing views and their title or labeled spool BOM were recognized in the complete uploaded page set.'
     for record in records:
         reason = _is_assembly(record, footer_ids)
         if reason:
             result['excluded_pages'].append({'page': record['source_pages'][0], 'reason': reason})
             continue
         result['candidates'].append(record)
+    if result['classification'] == 'unknown' and result['candidates']:
+        result['classification'] = 'bom'
+        result['classification_reason'] = 'A material BOM table was recognized without enough evidence of a complete isometric sheet.'
     # Repeated spool IDs may be duplicate pages, alternatives, or continuation
     # pages. Do not sum them or choose one revision without an explicit review.
     identities = {}
     for candidate in result['candidates']:
-        identities.setdefault(_identity(candidate['spool_number']), []).append(candidate)
+        if candidate['spool_number']:
+            identities.setdefault(_identity(candidate['spool_number']), []).append(candidate)
     for group in identities.values():
         if len(group) > 1:
             pages = ', '.join(str(candidate['source_pages'][0]) for candidate in group)

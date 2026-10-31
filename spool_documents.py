@@ -15,19 +15,18 @@ import re
 import unicodedata
 from urllib.parse import quote
 import uuid
-import warnings
 import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import load_workbook
-from PIL import Image, ImageOps
 from pypdf import PdfReader, PdfWriter
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
 from sqlalchemy.orm import Session, deferred
 from sqlalchemy.exc import IntegrityError
 
+from isometric_ocr import ImageNormalizationError, normalize_image_pdf
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
 from flow import lock_topology
 from orders import OrderAssembly, OrderGpn, PurchaseOrder, _key, read_snapshot
@@ -45,7 +44,6 @@ MAX_SCOPE_BYTES = 256 * 1024 * 1024
 MAX_FILES = 40
 MAX_PAGES = 200
 MAX_LINES = 500
-MAX_IMAGE_PIXELS = 20_000_000
 BOM_COLUMNS = ['item', 'quantity', 'unit', 'part_number', 'description', 'size',
                'material', 'length', 'notes']
 XLSX_MEDIA = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -242,6 +240,9 @@ def _locked_reason(s, scope, identity, item, requirement):
 
 def _metadata(document, doc_set, inherited=False, include_bom=True):
     bom = document.bom
+    provenance = (bom or {}).get('provenance') or {}
+    source_id = (provenance.get('source_document_id') if provenance.get('source_document_kind') else
+                 provenance.get('isometric_document_id') or provenance.get('source_document_id'))
     if bom and not include_bom:
         bom = {key: value for key, value in bom.items() if key != 'lines'}
         if bom.get('provenance'):
@@ -258,6 +259,9 @@ def _metadata(document, doc_set, inherited=False, include_bom=True):
             'download_url': '/api/spool-documents/files/' + document.id + '?download=1',
             'excel_url': ('/api/spool-documents/files/' + document.id + '/bom.xlsx'
                           if document.bom and document.bom.get('lines') else None),
+            'source_document_id': source_id,
+            'source_document_kind': provenance.get('source_document_kind', 'isometric' if source_id else None),
+            'source_view_url': '/api/spool-documents/files/' + source_id if source_id else None,
             'source_files': document.source_files, 'bom': bom}
 
 
@@ -484,19 +488,12 @@ def _pdf_pages(content, extension):
             return reader
         if extension not in ('.png', '.jpg', '.jpeg'):
             _fail('Isometric scans must be PDF, PNG or JPEG files.', 415)
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(content)) as picture:
-                if picture.format not in ('PNG', 'JPEG'):
-                    _fail('The actual scan format must be PNG or JPEG.', 415)
-                if picture.width * picture.height > MAX_IMAGE_PIXELS:
-                    _fail('A scan is too large. Use an image of at most 20 megapixels.')
-                picture.load()
-                converted = ImageOps.exif_transpose(picture).convert('RGB')
-                output = io.BytesIO()
-                converted.save(output, format='PDF', resolution=150.0)
-                converted.close()
-                return PdfReader(io.BytesIO(output.getvalue()))
+        # A short-lived local encoder prevents Pillow's freed pixel allocations
+        # from accumulating in the web server's request-thread heaps. The PDF
+        # still follows the same page validation/sanitization and signing path.
+        return PdfReader(io.BytesIO(normalize_image_pdf(content)))
+    except ImageNormalizationError as exc:
+        _fail(str(exc), exc.status_code)
     except HTTPException:
         raise
     except Exception:
@@ -526,8 +523,9 @@ def _prepare(files, kind, sheet, context):
     if kind not in ('bom', 'isometric'):
         _fail('Choose Bill of material or Isometric drawings.')
     sources = _read_files(files)
-    if kind == 'bom' and len(sources) != 1:
-        _fail('Upload one BOM file at a time. Combine scanned BOM pages into one PDF first.')
+    if kind == 'bom' and len(sources) != 1 and any(
+            source['filename'].rsplit('.', 1)[-1].lower() in ('xlsx', 'csv', 'tsv') for source in sources):
+        _fail('Upload one spreadsheet BOM at a time. Scanned PDF and image BOM pages can be selected together.')
     selection = hashlib.sha256(json.dumps({'kind': kind, 'sheet': sheet, 'files': [
         {key: value for key, value in source.items() if key != 'content'} for source in sources]},
         sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -556,10 +554,18 @@ def _prepare(files, kind, sheet, context):
             bom = _bom_grid(rows, context['spool_number'], context['assembly_number'], selected_sheet)
     else:
         writer = PdfWriter()
+        normalized_bytes = 0
         try:
             for source in sources:
                 source_extension = '.' + source['filename'].rsplit('.', 1)[-1].lower()
                 reader = _pdf_pages(source['content'], source_extension)
+                # A compact PNG may expand substantially when it becomes a
+                # full-resolution PDF page. Bound the retained normalized
+                # sources before cloning more pages into the combined writer.
+                with reader.stream.getbuffer() as normalized_view:
+                    normalized_bytes += len(normalized_view)
+                if normalized_bytes > MAX_TOTAL_BYTES:
+                    _fail('The combined normalized pages exceed the 40 MiB document limit. Upload fewer pages at a time.', 413)
                 if len(writer.pages) + len(reader.pages) > MAX_PAGES:
                     _fail(f'The combined document exceeds {MAX_PAGES} pages.')
                 seen = set()

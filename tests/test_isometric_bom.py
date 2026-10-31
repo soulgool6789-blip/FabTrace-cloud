@@ -2,16 +2,19 @@
 import copy
 
 from pypdf import PdfWriter
+from pypdf import PdfReader
 import io
+from types import SimpleNamespace
 
-from isometric_bom import extract_isometric_boms
-from isometric_fixtures import DEFAULT_ROWS, make_isometric_pdf
+from isometric_bom import _has_scanned_bom_area, extract_isometric_boms
+from isometric_fixtures import DEFAULT_ROWS, make_bom_pdf, make_isometric_pdf
 
 
 def test_native_spools_bound_to_own_grid_and_assembly_hardware_excluded():
     content = make_isometric_pdf()
     result = extract_isometric_boms(content, 'unrelated-filename.pdf')
     assert result['status'] == 'ready'
+    assert result['classification'] == 'isometric'
     assert result['page_count'] == 3
     assert result['unreadable_pages'] == []
     candidates = result['candidates']
@@ -27,6 +30,76 @@ def test_native_spools_bound_to_own_grid_and_assembly_hardware_excluded():
         assert not candidate['review_required']
     assert any(row['page'] == 1 and 'Assembly BOM' in row['reason'] for row in result['excluded_pages'])
     assert extract_isometric_boms(content)['candidates'] == candidates
+
+
+def test_standalone_bom_header_at_top_or_bottom_preserves_rows_without_inventing_spool():
+    for at_top in (True, False):
+        result = extract_isometric_boms(make_bom_pdf(header_at_top=at_top), 'TEST-100-SPOOL-01.pdf')
+        assert result['classification'] == 'bom'
+        assert len(result['candidates']) == 1
+        candidate = result['candidates'][0]
+        assert candidate['spool_number'] == ''
+        assert candidate['document_kind'] == 'bom'
+        assert not candidate['has_spool_footer'] and not candidate['quantity_basis_verified']
+        assert candidate['review_required'] and len(candidate['lines']) == 2
+        assert [line['part_number'] for line in candidate['lines']] == ['000123', '000456']
+        assert candidate['lines'][1]['length'] == '16 3/4"'
+
+
+def test_labeled_bom_crop_is_not_a_complete_isometric():
+    result = extract_isometric_boms(make_bom_pdf(spool_number='TEST-100-SPOOL-01'))
+    assert result['classification'] == 'bom'
+    assert result['candidates'][0]['spool_number'] == 'TEST-100-SPOOL-01'
+    assert result['candidates'][0]['has_spool_footer']
+
+
+def test_bom_on_an_empty_drawing_template_does_not_count_as_full_isometric():
+    content = make_isometric_pdf([{'number': 'TEST-100-SPOOL-01'}],
+        include_assembly=False, include_geometry=False)
+    result = extract_isometric_boms(content)
+    assert result['classification'] == 'bom'
+    assert result['candidates'][0]['drawing'] == 'TEST-100'
+    assert result['candidates'][0]['has_spool_footer']
+    assert result['candidates'][0]['document_kind'] == 'bom'
+
+
+def test_separate_drawing_page_and_standalone_bom_page_stay_one_full_drawing_source():
+    drawing = make_isometric_pdf([{'number': 'TEST-100-SPOOL-01', 'rows': []}], include_assembly=False)
+    writer = PdfWriter()
+    for content in (drawing, make_bom_pdf(spool_number='TEST-100-SPOOL-01')):
+        for page in PdfReader(io.BytesIO(content)).pages:
+            writer.add_page(page)
+    output = io.BytesIO()
+    writer.write(output)
+    result = extract_isometric_boms(output.getvalue())
+    assert result['classification'] == 'isometric'
+    assert result['drawing_pages'] == [1]
+    assert len(result['candidates']) == 1
+    assert result['candidates'][0]['source_pages'] == [2]
+
+
+def test_multiple_unlabeled_bom_tables_stay_distinct_and_unassigned():
+    result = extract_isometric_boms(make_bom_pdf(table_count=2))
+    assert result['classification'] == 'bom'
+    assert len(result['candidates']) == 2
+    assert all(candidate['spool_number'] == '' for candidate in result['candidates'])
+    assert len({candidate['candidate_id'] for candidate in result['candidates']}) == 2
+
+
+def test_arbitrary_commercial_table_cannot_become_a_material_bom():
+    result = extract_isometric_boms(make_bom_pdf(commercial=True), 'spool-bom.pdf')
+    assert result['classification'] == 'unknown'
+    assert result['candidates'] == []
+
+
+def test_small_raster_bom_in_hybrid_native_page_still_triggers_local_ocr():
+    page = SimpleNamespace(width=1200, height=800,
+        images=[{'x0': 610, 'top': 500, 'x1': 1180, 'bottom': 700}])
+    assert _has_scanned_bom_area(page)
+    page.images = [{'x0': 0, 'top': 0, 'x1': 50, 'bottom': 50}]
+    assert not _has_scanned_bom_area(page)
+    page.images = [{'x0': 0, 'top': 0, 'x1': 1200, 'bottom': 800}]
+    assert _has_scanned_bom_area(page)
 
 
 def test_top_header_and_arbitrary_identifiers_work_without_filename_inference():
@@ -87,7 +160,7 @@ def test_unbound_table_is_not_assigned_from_filename_or_drawing_label():
     result = extract_isometric_boms(make_isometric_pdf(
         include_assembly=False, footer_override='MATERIAL LIST FOR ASSEMBLY'), 'TEST-100-SPOOL-01.pdf')
     assert result['candidates'] == []
-    assert any('no unique quoted spool number' in w for w in result['warnings'])
+    assert any('assembly material list' in w for w in result['warnings'])
 
 
 def test_scans_and_blank_pages_never_fabricate_materials():

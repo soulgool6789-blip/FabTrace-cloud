@@ -77,8 +77,8 @@ def _require_writer(user):
 
 def _saved_source(s, document_id, origin):
     document = s.get(SpoolDocument, document_id)
-    if document is None or document.kind != 'isometric' or document.media_type != 'application/pdf':
-        _fail('Choose a saved isometric PDF from this assembly or spool.', 404)
+    if document is None or document.kind not in ('isometric', 'bom') or document.media_type != 'application/pdf':
+        _fail('Choose a saved drawing or BOM PDF from this assembly or spool.', 404)
     doc_set = s.get(SpoolDocumentSet, document.set_id)
     source_scope = 'requirements' if doc_set.requirement_id else 'spools'
     source_identity = doc_set.requirement_id or doc_set.spool_id
@@ -93,7 +93,7 @@ def _saved_source(s, document_id, origin):
     if not allowed:
         _fail('This saved drawing belongs to a different purchase order, assembly or physical spool.', 409)
     content, owner_id = _stored_file(s, document)
-    return {'kind': 'isometric', 'filename': document.filename, 'media_type': document.media_type,
+    return {'kind': document.kind, 'filename': document.filename, 'media_type': document.media_type,
             'size_bytes': document.size_bytes, 'sha256': document.sha256,
             'selection_sha256': document.selection_sha256, 'page_count': document.page_count,
             'source_files': document.source_files, 'bom': None, 'content': content,
@@ -110,12 +110,18 @@ def _source(s, origin, files, document_id):
     return {**prepared, 'source_document_id': None, 'owner_document_id': None}
 
 
-def _source_view(prepared):
+def _source_view(prepared, extraction=None, source_mode='auto'):
     document_id = prepared['source_document_id']
+    classification = (extraction or {}).get('classification', 'unknown')
+    document_kind = source_mode if source_mode in ('bom', 'isometric') else (
+        classification if classification in ('bom', 'isometric') else None)
     return {'kind': 'saved' if document_id else 'upload', 'document_id': document_id,
             'filename': prepared['filename'], 'sha256': prepared['sha256'],
             'selection_sha256': prepared['selection_sha256'],
             'page_count': prepared['page_count'],
+            'document_kind': document_kind, 'classification': classification,
+            'classification_reason': (extraction or {}).get('classification_reason', ''),
+            'source_mode': source_mode,
             'view_url': '/api/spool-documents/files/' + document_id if document_id else None}
 
 
@@ -192,14 +198,22 @@ def _candidate_views(extraction, targets, scope):
     candidates = copy.deepcopy(extraction['candidates'])
     counts = Counter(_key(candidate['spool_number']) for candidate in candidates)
     for candidate in candidates:
-        matches = [target for target in targets if _key(target['spool_number']) == _key(candidate['spool_number'])]
+        matches = [target for target in targets if candidate['spool_number']
+                   and _key(target['spool_number']) == _key(candidate['spool_number'])]
         target = matches[0] if len(matches) == 1 else None
+        candidate['assignment_basis'] = 'spool_number' if target else None
+        eligible = [value for value in targets if value['editable']]
+        if not candidate['spool_number'] and len(candidates) == 1 and len(eligible) == 1:
+            target = eligible[0]
+            candidate['assignment_basis'] = 'selected_scope'
+            candidate['review_required'] = True
+            candidate['warnings'].append('This standalone BOM has no printed spool identity. Confirm the selected spool and the one-spool quantity basis before saving.')
         candidate['matched_requirement_id'] = (target['requirement_id'] if target and scope == 'requirements' else None)
         candidate['matched_spool_id'] = target['spool_id'] if target and scope == 'spools' else None
         candidate['selected'] = bool(target and target['editable'] and counts[_key(candidate['spool_number'])] == 1)
         if not target:
             candidate['review_required'] = True
-            candidate['warnings'].append('No exact spool match was found in the selected purchase order and assembly scope.')
+            candidate['warnings'].append('Choose the correct spool in this purchase order and assembly; no assignment was guessed.')
         elif counts[_key(candidate['spool_number'])] > 1:
             candidate['review_required'] = True
     return candidates
@@ -207,8 +221,11 @@ def _candidate_views(extraction, targets, scope):
 
 @router.post('/{scope}/{identity}/isometric-preview')
 def preview_isometric(scope: str, identity: str, files: list[UploadFile] | None = File(None),
-                      document_id: str = Form(''), user: Employee = Depends(auth), s: Session = Depends(db)):
+                      document_id: str = Form(''), source_mode: str = Form('auto'),
+                      user: Employee = Depends(auth), s: Session = Depends(db)):
     _require_writer(user)
+    if source_mode not in ('auto', 'bom', 'isometric'):
+        _fail('Choose automatic detection, BOM source, or complete isometric.')
     with _work_slot():
         origin, _, _ = _target(s, scope, identity)
         prepared = _source(s, origin, files, document_id.strip())
@@ -229,7 +246,7 @@ def preview_isometric(scope: str, identity: str, files: list[UploadFile] | None 
         warnings = list(extraction.get('warnings', []))
         warnings.extend(_override_warning(target['spool_number'], target['physical_override_count'])
                         for target in targets if target.get('physical_override_count'))
-        source = _source_view(prepared)
+        source = _source_view(prepared, extraction, source_mode)
         claim = {'aud': TOKEN_AUDIENCE, 'sub': user.badge, 'iat': utcnow(),
                  'exp': utcnow() + dt.timedelta(minutes=30), 'jti': uuid.uuid4().hex,
                  'scope': scope, 'identity': identity, 'origin': current, 'source': source,
@@ -430,6 +447,19 @@ def _append(s, doc_set, prepared, user, revision, reason, owner_id=None):
     return document
 
 
+def _active_isometric(s, doc_set, context):
+    inherited = (_set_for(s, 'requirements', context['requirement_id'])
+                 if context['kind'] == 'spool' and context['requirement_id'] else None)
+    for candidate_set in (doc_set, inherited):
+        if candidate_set is None:
+            continue
+        document = s.scalar(select(SpoolDocument).where(SpoolDocument.set_id == candidate_set.id,
+            SpoolDocument.kind == 'isometric').order_by(SpoolDocument.version.desc()).limit(1))
+        if document is not None:
+            return _metadata(document, candidate_set, inherited=candidate_set is inherited)
+    return None
+
+
 @router.post('/{scope}/{identity}/isometric-import')
 def import_isometric(scope: str, identity: str, review: str = Form(...),
                      files: list[UploadFile] | None = File(None),
@@ -441,8 +471,11 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
         if origin != claim['origin']:
             _fail('The selected assembly or spool changed after review. Preview again.', 409)
         prepared = _source(s, origin, files, claim['source'].get('document_id'))
-        if _source_view(prepared) != claim['source']:
+        if _source_view(prepared, claim['extraction'], claim['source'].get('source_mode', 'auto')) != claim['source']:
             _fail('The drawing selection changed after preview. Preview these files again before saving.', 409)
+        prepared['kind'] = claim['source'].get('document_kind')
+        if prepared['kind'] not in ('bom', 'isometric'):
+            _fail('The file contents were not identified. Choose BOM source or complete drawing and preview again.')
         candidates = {candidate['candidate_id']: candidate for candidate in claim['extraction']['candidates']}
         identity_field = 'requirement_id' if scope == 'requirements' else 'spool_id'
         targets = {target[identity_field]: target for target in claim['targets']}
@@ -496,6 +529,7 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
         reviewed_at = _stamp(utcnow())
         owner_id = prepared['owner_document_id']
         results, warnings = [], list(claim['extraction'].get('warnings', []))
+        created_sources = 0
         overrides = _override_counts(s, [plan['target_id'] for plan in plans]) if scope == 'requirements' else {}
         for plan in plans:
             target_id, target, candidate, bom = plan['target_id'], plan['target'], plan['candidate'], plan['bom']
@@ -503,14 +537,20 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
             if overrides.get(target_id):
                 warnings.append(_override_warning(context['spool_number'], overrides[target_id]))
             doc_set = _set_for(s, scope, target_id)
-            existing_drawing = (s.scalar(select(SpoolDocument).where(
-                SpoolDocument.set_id == doc_set.id, SpoolDocument.kind == 'isometric')
-                .order_by(SpoolDocument.version.desc()).limit(1)) if doc_set else None)
-            keep_drawing = bool(existing_drawing and existing_drawing.sha256 == prepared['sha256'])
+            existing_query = select(SpoolDocument).where(
+                SpoolDocument.set_id == doc_set.id, SpoolDocument.kind == prepared['kind']) if doc_set else None
+            if existing_query is not None and prepared['kind'] == 'bom':
+                existing_query = existing_query.where(SpoolDocument.media_type == 'application/pdf',
+                                                      SpoolDocument.sha256 == prepared['sha256'])
+            existing_source = s.scalar(existing_query.order_by(SpoolDocument.version.desc()).limit(1)) if existing_query is not None else None
+            keep_source = bool(existing_source and existing_source.sha256 == prepared['sha256'])
             provenance = {'package_id': package_id, 'candidate_id': candidate['candidate_id'],
                 'source_spool_number': candidate['spool_number'], 'source_pages': candidate['source_pages'],
                 'source_sha256': prepared['sha256'], 'source_selection_sha256': prepared['selection_sha256'],
-                'source_document_id': prepared['source_document_id'], 'source_filename': prepared['filename'],
+                'input_document_id': prepared['source_document_id'], 'source_filename': prepared['filename'],
+                'source_document_kind': prepared['kind'],
+                'source_classification': claim['source']['classification'],
+                'source_mode': claim['source']['source_mode'],
                 'source_method': candidate.get('source_method', 'native_pdf'),
                 'extraction_version': candidate.get('extraction_version'),
                 'original_lines': candidate['lines'], 'original_lines_sha256': _json_hash(candidate['lines']),
@@ -521,9 +561,9 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
                 'warnings': candidate.get('warnings', []),
                 'source_validation_errors': candidate.get('validation_errors', [])}
             bom['provenance'] = provenance
-            content = build_bom_excel(bom, context, source=_source_view(prepared),
+            content = build_bom_excel(bom, context, source=claim['source'],
                                       revision=revision or candidate.get('revision', ''), provenance=provenance)
-            size = len(content) + (0 if keep_drawing else prepared['size_bytes'])
+            size = len(content) + (0 if keep_source else prepared['size_bytes'])
             stored_size = (s.scalar(select(func.sum(SpoolDocument.size_bytes))
                 .where(SpoolDocument.set_id == doc_set.id)) or 0) if doc_set else 0
             if stored_size + size > MAX_SCOPE_BYTES:
@@ -535,37 +575,46 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
                     version=0, created_by=user.badge)
                 s.add(doc_set)
                 s.flush()
-            if keep_drawing:
-                drawing = existing_drawing
-                _, existing_owner_id = _stored_file(s, drawing)
+            if keep_source:
+                source_document = existing_source
+                _, existing_owner_id = _stored_file(s, source_document)
                 if owner_id is None:
                     owner_id = existing_owner_id
             else:
-                drawing = _append(s, doc_set, prepared, user,
+                source_document = _append(s, doc_set, prepared, user,
                     revision or candidate.get('revision', ''), reason, owner_id=owner_id)
+                created_sources += 1
                 if owner_id is None:
-                    owner_id = drawing.id
-            provenance['isometric_document_id'] = drawing.id
+                    owner_id = source_document.id
+            provenance['source_document_id'] = source_document.id
+            if prepared['kind'] == 'isometric':
+                provenance['isometric_document_id'] = source_document.id
             digest = hashlib.sha256(content).hexdigest()
             bom_prepared = {'kind': 'bom', 'filename': _safe_filename(context['spool_number'] + '_BOM.xlsx'),
                 'media_type': XLSX_MEDIA, 'size_bytes': len(content), 'sha256': digest,
                 'selection_sha256': digest, 'page_count': None, 'content': content, 'bom': bom,
                 'source_files': prepared['source_files']}
             document = _append(s, doc_set, bom_prepared, user, revision or candidate.get('revision', ''), reason)
-            audit(s, context['item_id'], user.badge, 'ISOMETRIC_SPOOL_BOM_IMPORTED', {
+            audit(s, context['item_id'], user.badge,
+                'ISOMETRIC_SPOOL_BOM_IMPORTED' if prepared['kind'] == 'isometric' else 'BOM_SOURCE_IMPORTED', {
                 'package_id': package_id, 'scope_kind': context['kind'], 'scope_id': target_id,
                 'project_id': context['project_id'], 'gpn_id': context['gpn_id'],
                 'spool_number': context['spool_number'], 'candidate_id': candidate['candidate_id'],
-                'isometric_document_id': drawing.id, 'bom_document_id': document.id,
+                'source_document_id': source_document.id, 'source_document_kind': prepared['kind'],
+                'isometric_document_id': source_document.id if prepared['kind'] == 'isometric' else None,
+                'bom_document_id': document.id,
                 'source_sha256': prepared['sha256'], 'bom_sha256': digest,
                 'source_pages': candidate['source_pages'], 'edited': provenance['edited'],
                 'manually_assigned': provenance['manually_assigned'], 'reason': reason})
             warnings.extend(candidate.get('warnings', []))
+            drawing = _active_isometric(s, doc_set, context)
             results.append({'requirement_id': context['requirement_id'], 'spool_id': context['item_id'],
                 'spool_number': context['spool_number'], 'version': doc_set.version,
-                'has_bom': True, 'has_isometric': True,
+                'has_bom': True, 'has_isometric': drawing is not None,
+                'saved_kinds': ['bom', 'isometric'] if prepared['kind'] == 'isometric' and not keep_source else ['bom'],
                 'bom_document': _metadata(document, doc_set),
-                'isometric_document': _metadata(drawing, doc_set)})
+                'source_document': _metadata(source_document, doc_set),
+                'isometric_document': drawing})
         try:
             s.commit()
         except IntegrityError:
@@ -574,6 +623,9 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
         detail = _detail(s, scope, identity, user)
         warnings = list(dict.fromkeys(warnings))
         detail['package_result'] = {'package_id': package_id, 'count': len(results),
+            'source_document_kind': prepared['kind'], 'source_document_count': created_sources,
+            'bom_count': len(results),
+            'created_isometric_count': sum('isometric' in row['saved_kinds'] for row in results),
             'requirements': results if scope == 'requirements' else [],
             'spools': results if scope == 'spools' else [], 'warnings': warnings, 'warning_count': len(warnings)}
         return detail

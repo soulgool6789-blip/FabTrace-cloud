@@ -42,16 +42,27 @@ const checks = [], errors = [], imports = [];
   const action = name => page.locator('[data-sdoc-action="' + name + '"]');
   const settle = () => page.locator('#spoolDocumentsContent[aria-busy="false"]').waitFor();
   const previewClick = async locator => {
-    const pending = page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/isometric-preview'));
+    const pending = page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/isometric-preview'), {timeout: 120000});
     await locator.click(); const data = await json(await pending); await settle(); return data;
   };
+  const autoPreview = async files => {
+    const pending = page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/isometric-preview'), {timeout: 120000});
+    await page.locator('#sdocFileInput').setInputFiles(files);
+    const result = await json(await pending); await settle(); return result;
+  };
+  const expand = async index => {
+    const toggle = page.locator('[data-sdoc-action="toggle-materials"][data-sdoc-candidate="' + index + '"]');
+    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  };
   const savePackage = async () => {
+    const reason = page.locator('#sdocReason');
+    if (await reason.isVisible() && !(await reason.inputValue()).trim()) await reason.fill('Reviewed synthetic material revision');
     for (const checkbox of await page.locator('[data-sdoc-reviewed]').all()) if (!(await checkbox.isChecked())) await checkbox.check();
     const pending = page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/isometric-import'));
     await action('save-package').click(); const data = await json(await pending); await settle(); return data;
   };
   const open = async (kind, id, tab = 'isometric') => {
-    await page.evaluate(target => window.FabSpoolDocuments.open(target), {kind, id, tab}); await settle();
+    await page.evaluate(target => window.FabSpoolDocuments.open(target), {kind, id, tab, fresh:true}); await settle();
   };
   const file = {name: 'synthetic-full-isometric.pdf', mimeType: 'application/pdf', buffer: pdf};
   const create = number => api('post', '/api/order-setup', {expected_version: 0, purchase_order: number,
@@ -71,8 +82,7 @@ const checks = [], errors = [], imports = [];
 
   stage = 'find exact spool matches and review material rows';
   await open('requirements', firstRequirement);
-  await page.locator('#sdocFileInput').setInputFiles(file);
-  let preview = await previewClick(action('preview'));
+  let preview = await autoPreview(file);
   assert.equal(preview.source.page_count, 4);
   assert.equal(preview.candidates.length, 3);
   assert.equal(preview.targets.length, 2);
@@ -88,6 +98,8 @@ const checks = [], errors = [], imports = [];
   assert.match(await page.locator('.sdoc-package').innerText(), /earlier BOM stays in History/);
   assert.match(await page.locator('.sdoc-package').innerText(), /No exact match was found/);
   await page.screenshot({path: path.join(OUT, 'shared-review-desktop.png'), fullPage: true});
+  await expand(firstIndex);
+  await page.locator('#sdocReason').fill('Reviewed drawing and material corrections');
   const firstCard = page.locator('[data-sdoc-card="' + firstIndex + '"]');
   await firstCard.locator('[data-sdoc-field="part_number"]').first().fill('000999');
   await firstCard.locator('[data-sdoc-field="quantity"]').first().fill('');
@@ -163,6 +175,7 @@ const checks = [], errors = [], imports = [];
   assert.equal(await page.locator('.sdoc-package [data-sdoc-action="use-assembly"]').isVisible(), true);
   assert.match(await page.locator('.sdoc-package').innerText(), /Other spool tables remain unselected/);
   const localIndex = preview.candidates.findIndex(candidate => candidate.spool_number === FIRST);
+  await expand(localIndex);
   await page.locator('[data-sdoc-card="' + localIndex + '"] [data-sdoc-field="part_number"]').first().fill('000LOCAL');
   await page.screenshot({path: path.join(OUT, 'physical-review-share-option.png'), fullPage: true});
   saved = await savePackage(); assert.equal(saved.package_result.count, 1);
@@ -174,6 +187,7 @@ const checks = [], errors = [], imports = [];
   checks.push('Saved full drawing creates a local Excel BOM without reuploading, shows a prominent all-spool switch, and preserves the sibling’s inherited setup BOM');
 
   stage = 'explicit assembly sharing from saved physical drawing';
+  await page.locator('#sdoc-tab-isometric').click();
   preview = await previewClick(action('create-boms'));
   preview = await previewClick(page.locator('.sdoc-package [data-sdoc-action="use-assembly"]'));
   assert.equal(preview.context.kind, 'requirement');
@@ -192,11 +206,11 @@ const checks = [], errors = [], imports = [];
   await page.locator('#itemPage [data-sdoc-kind="spools"]').click(); await settle();
   await page.locator('#sdoc-tab-isometric').click();
   await page.locator('.sdoc-upload > summary').click();
-  await page.locator('#sdocFileInput').setInputFiles(file);
-  preview = await previewClick(action('preview'));
+  preview = await autoPreview(file);
   assert.equal(preview.source.kind, 'upload');
   const sha = preview.source.selection_sha256;
   const carriedIndex = preview.candidates.findIndex(candidate => candidate.spool_number === FIRST);
+  await expand(carriedIndex);
   await page.locator('[data-sdoc-card="' + carriedIndex + '"] [data-sdoc-field="part_number"]').first().fill('000CARRY');
   preview = await previewClick(page.locator('.sdoc-package [data-sdoc-action="use-assembly"]'));
   assert.equal(preview.source.kind, 'upload');

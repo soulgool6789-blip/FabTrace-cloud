@@ -1,0 +1,20 @@
+/* Primary work areas stay visible; specialist tools retain their existing permissions. */
+#mainNav{align-items:flex-start;gap:8px;margin-bottom:12px}
+#mainNav>button,#moreTools>summary{min-height:43px}
+#moreTools{position:relative;margin-left:auto}
+#moreTools>summary{display:flex;align-items:center;gap:12px;list-style:none;cursor:pointer;border:1px solid #bdcbd7;border-radius:8px;padding:10px 14px;background:#fff;font-weight:650;white-space:nowrap}
+#moreTools>summary::-webkit-details-marker{display:none}
+#moreTools>summary:after{content:'⌄';font-size:16px;line-height:1}
+#moreTools[open]>summary:after{transform:rotate(180deg)}
+#moreTools.fn-selected>summary{background:#e7f1fa;border-color:#1261a0;color:#124d78}
+.fn-tools{position:absolute;right:0;top:calc(100% + 7px);z-index:20;display:grid;grid-template-columns:repeat(2,minmax(190px,1fr));gap:18px;padding:18px;width:490px;max-width:calc(100vw - 32px);background:#fff;border:1px solid #c9d6e1;border-radius:12px;box-shadow:0 10px 35px #102a4026}
+.fn-tool-group{display:flex;flex-direction:column;gap:7px;min-width:0}
+.fn-tool-group h2{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#657383;margin:0 0 3px}
+.fn-tool-group>button{text-align:left;width:100%;font-size:13px}
+.fn-context{display:flex;align-items:center;gap:14px;min-height:43px;margin:0 0 18px;padding:9px 0 11px;border-bottom:1px solid #d9e3eb}
+#navBack{display:inline-flex;align-items:center;gap:8px;min-height:39px;padding:7px 12px;color:#164f79;flex-shrink:0}
+#navBack:focus-visible,#moreTools>summary:focus-visible{outline:3px solid #65a7d6;outline-offset:2px}
+#navCurrent{font-size:13px;color:#5b6e7e;overflow-wrap:anywhere}
+.fn-legacy-back{display:none!important}
+@media(max-width:680px){#mainNav>button{flex:1 1 calc(50% - 8px);font-size:13px;padding:9px 7px}#moreTools{margin-left:0;flex:1 1 calc(50% - 8px)}#moreTools>summary{justify-content:space-between;font-size:13px}.fn-tools{right:0;width:calc(100vw - 28px);max-width:calc(100vw - 28px);gap:12px;padding:13px;grid-template-columns:repeat(2,minmax(0,1fr))}.fn-tool-group>button{font-size:12px;padding:9px 7px}.fn-context{align-items:flex-start;gap:10px}#navBack{font-size:13px;max-width:65%;white-space:normal;text-align:left}#navCurrent{font-size:12px;padding-top:8px}}
+@media print{#mainNav,.fn-context{display:none!important}}
