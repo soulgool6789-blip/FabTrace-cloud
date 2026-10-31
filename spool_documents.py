@@ -598,10 +598,17 @@ def document_file(document_id: str, download: bool = False, user: Employee = Dep
         _fail('The saved document could not be verified. Contact an administrator.', 503)
     disposition = 'attachment' if download or document.media_type != 'application/pdf' else 'inline'
     fallback = re.sub(r'[^a-zA-Z0-9._ -]', '_', document.filename)
+    # Native PDF viewers create browser-owned plugin/frame content. CSP sandbox
+    # blocks embedded PDFs in WebKit, while default-src 'none' can also block
+    # viewer resources. Keep same-origin embedding protection without applying
+    # HTML execution restrictions to a validated, action-sanitized PDF response.
+    # This response-only change also fixes previously uploaded revisions.
+    policy = ("frame-ancestors 'self'" if document.media_type == 'application/pdf'
+              else "sandbox; default-src 'none'; frame-ancestors 'self'")
     return Response(content, media_type=document.media_type, headers={
         'Content-Disposition': f'{disposition}; filename="{fallback}"; filename*=UTF-8\'\'{quote(document.filename)}',
         'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': "sandbox; default-src 'none'; frame-ancestors 'self'",
+        'Content-Security-Policy': policy,
         'X-Frame-Options': 'SAMEORIGIN'})
 
 

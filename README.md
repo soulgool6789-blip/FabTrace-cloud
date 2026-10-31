@@ -2,6 +2,8 @@
 
 ## Upload spool bills of material and full isometric drawings
 
+Release `2026.10.31-spool-pdf-viewer.1` corrects the PDF response policy that could leave uploaded BOMs and isometric drawings on a gray browser page. The fix applies to existing saved PDFs and their history; reopen the document to use it. No re-upload is needed.
+
 Release `2026.10.31-spool-documents.1` adds **Documents (optional)** as the fourth P.O. setup step. After entering quantities and weld counts, choose **Save & add documents**. The P.O. is saved once, then each spool offers **Upload / view BOM** and **Upload / view isometric**. Choose **Finish setup** or **Skip for now** when done. Existing spools offer **BOM & drawings** from their saved setup, production records, labels, and item/QR screen.
 
 The document dialog has **Bill of material**, **Isometric drawings**, and **History** tabs. Preview a CSV or XLSX BOM, select its worksheet if needed, and save the material grid and source file. A scanned BOM PDF is viewable as a document. A full drawing PDF or ordered PDF/JPEG/PNG pages are retained as one complete viewable PDF; the phone camera can add individual pages. **View full isometric** opens all pages. Document revision and upload history remain available.

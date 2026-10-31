@@ -301,6 +301,41 @@ def test_pdf_bom_remains_viewable_without_inventing_line_items(api):
     assert len(PdfReader(io.BytesIO(api.get(document['view_url']).content)).pages) == 2
 
 
+@pytest.mark.parametrize('kind', ['bom', 'isometric'])
+def test_pdf_response_allows_native_viewer_without_changing_saved_revision_or_access(api, kind):
+    path = requirement_path(setup(api))
+    document = ok(request_upload(api, path, kind=kind,
+        files=[('Existing-Document.pdf', pdf(2), 'application/pdf')]))['active'][kind]
+    before = database_state(api)
+    viewed = api.get(document['view_url'], role='welder')
+    downloaded = api.get(document['download_url'], role='welder')
+    for response in (viewed, downloaded):
+        assert response.status_code == 200
+        assert response.headers['content-type'] == 'application/pdf'
+        assert response.headers['content-security-policy'] == "frame-ancestors 'self'"
+        assert response.headers['x-frame-options'] == 'SAMEORIGIN'
+        assert response.headers['x-content-type-options'] == 'nosniff'
+        assert 'no-store' in response.headers['cache-control']
+        assert sha256(response.content).hexdigest() == document['sha256']
+        assert len(PdfReader(io.BytesIO(response.content)).pages) == 2
+    assert viewed.headers['content-disposition'].startswith('inline;')
+    assert downloaded.headers['content-disposition'].startswith('attachment;')
+    assert viewed.content == downloaded.content
+    assert api.get(document['view_url'], role=None).status_code == 401
+    assert api.get(document['download_url'], role=None).status_code == 401
+    assert database_state(api) == before
+    assert ok(api.get(path))['active'][kind]['id'] == document['id']
+
+
+def test_non_pdf_download_keeps_restrictive_content_policy(api):
+    path = requirement_path(setup(api))
+    document = ok(request_upload(api, path))['active']['bom']
+    response = api.get(document['download_url'])
+    assert response.status_code == 200 and response.content == bom_csv()
+    assert response.headers['content-security-policy'] == "sandbox; default-src 'none'; frame-ancestors 'self'"
+    assert response.headers['content-disposition'].startswith('attachment;')
+
+
 def test_template_is_authenticated_and_downloadable(api):
     response = api.get(ROOT + '/template.csv')
     assert response.status_code == 200 and 'spool_number' in response.text
