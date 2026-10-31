@@ -51,6 +51,12 @@ This guide describes the implemented tracking extension and the constraints that
 
 `main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, order_setup, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
 
+## Result-specific inspection fields
+
+Version `2026.10.31-qa-pass-fields.1` makes supplementary `reference` and `notes` optional strings (default empty, maximum lengths 300/3000) for per-piece QA-001 Pass, PASS ALL and overall arrival Pass. Fail still requires an inspection reference of at least two characters and a failure reason of at least four characters after whitespace stripping. UI labels and validation follow the selected result; only Fail displays **Failure reason (required)**. Empty Pass text is stored as empty text, with no invented findings or report numbers. Each event still records the inspector, time, immutable decision ID and complete reviewed basis. The optional inspection reference describes a report/checklist number and is separate from the required piece MTR reference.
+
+This change does not alter persistence schema, evidence requirements, release gates, role checks, optimistic concurrency, bulk atomicity, or the arrival checklist. Regression coverage verifies blank/omitted Pass fields, preserved supplied notes, Fail rejection without a reason/reference, result toggles and saved individual/bulk decisions from both material views.
+
 ## Responsive Pass controls and atomic PASS ALL
 
 Version `2026.10.31-qa-pass-all.1` lets an authorized inspector select Pass before completing the heat/MTR fields, shows precise missing-field guidance, and supports an explicit combined save of one piece's material changes and QA decision. The existing evidence, source, role and release gates still apply at write time. Optional `qa001_guard: {piece_key, expected_version, basis_sha256}` on the traceability PUT verifies the original inspected piece before editing and rejects changes to sibling pieces. The subsequent QA POST uses the returned current version/hash. If the material save succeeds but the decision fails, the UI reports that distinction, retains the findings and requires review instead of claiming a Pass.

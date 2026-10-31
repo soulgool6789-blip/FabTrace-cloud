@@ -12,7 +12,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
 from sqlalchemy.orm import Session, deferred
@@ -110,21 +110,34 @@ class ArrivalChecks(Input):
     condition: bool = Field(default=False, strict=True)
 
 
-class ArrivalIn(Input):
+class InspectionDecisionIn(Input):
+    """A Pass is signed by its actor and evidence; only Fail needs a reason."""
+    result: str = Field(pattern='^(Pass|Fail)$')
+    reference: str = Field(default='', max_length=300)
+    notes: str = Field(default='', max_length=3000)
+
+    @model_validator(mode='after')
+    def require_failure_details(self):
+        if self.result == 'Fail':
+            errors = []
+            if len(self.reference) < 2:
+                errors.append('Fail requires an inspection reference of at least 2 characters')
+            if len(self.notes) < 4:
+                errors.append('Fail requires a failure reason of at least 4 characters')
+            if errors:
+                raise ValueError('; '.join(errors))
+        return self
+
+
+class ArrivalIn(InspectionDecisionIn):
     expected_version: int = Field(ge=0, le=2147483646, strict=True)
     basis_sha256: str = Field(min_length=64, max_length=64)
-    result: str = Field(pattern='^(Pass|Fail)$')
-    reference: str = Field(min_length=2, max_length=300)
-    notes: str = Field(min_length=4, max_length=3000)
     checks: ArrivalChecks
 
 
-class MaterialInspectionIn(Input):
+class MaterialInspectionIn(InspectionDecisionIn):
     expected_version: int = Field(ge=0, le=2147483646, strict=True)
     basis_sha256: str = Field(min_length=64, max_length=64)
-    result: str = Field(pattern='^(Pass|Fail)$')
-    reference: str = Field(min_length=2, max_length=300)
-    notes: str = Field(min_length=4, max_length=3000)
 
 
 class MaterialPassExpectationIn(Input):
@@ -136,8 +149,8 @@ class MaterialPassExpectationIn(Input):
 class MaterialPassAllIn(Input):
     expected_trace_version: int = Field(ge=0, le=2147483646, strict=True)
     expected_bom_sha256: str = Field(min_length=64, max_length=64)
-    reference: str = Field(min_length=2, max_length=300)
-    notes: str = Field(min_length=4, max_length=3000)
+    reference: str = Field(default='', max_length=300)
+    notes: str = Field(default='', max_length=3000)
     pieces: list[MaterialPassExpectationIn] = Field(min_length=1, max_length=500)
 
 
