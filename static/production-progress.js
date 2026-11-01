@@ -54,7 +54,7 @@
   function searchMatch(values){const q=state.query.trim().toLowerCase();return !q||values.some(v=>text(v).toLowerCase().includes(q));}
   function ownMatch(n){return (state.kind==='all'||kind(n)===state.kind)&&(state.status==='all'||state.status==='hold'&&n.on_hold||state.status==='finished'&&n.fabrication_finished||state.status==='wip'&&!n.fabrication_finished);}
   function filterItem(n,inherited=false){
-    const matched=inherited||searchMatch([n.id,n.spool_number,n.google_part_number,n.part_number,n.qr_alias,n.display_code,n.current_title,n.location,n.handler,n.handler_name]);
+    const matched=inherited||searchMatch([n.id,n.spool_number,n.google_part_number,n.part_number,n.qr_alias,n.display_code,n.flow_stage?.label,n.current_title,n.location,n.handler,n.handler_name]);
     const children=arr(n.children).map(c=>filterItem(c,matched)).filter(Boolean);
     const own=matched&&ownMatch(n);
     return own||children.length?{...n,children,_context:!own}:null;
@@ -66,6 +66,20 @@
     const empty=matched&&!arr(o.gpns).length&&!arr(o.unassigned).length&&state.kind==='all'&&['all','wip'].includes(state.status);
     return gpns.length||unassigned.length||empty?{...o,gpns,unassigned}:null;
   }).filter(Boolean);}
+  function processSpools(orders){
+    const copies=new Map();
+    const visit=(n,context)=>{
+      const scope=n.route==='assembly'?{...context,assembly_id:n.id}:context;
+      if(n.route==='spool'&&!n._context&&!copies.has(n.id))copies.set(n.id,{...n,...scope,item_id:n.id});
+      arr(n.children).forEach(child=>visit(child,scope));
+    };
+    for(const order of orders){
+      const context={project_id:order.project_id,purchase_order:order.purchase_order};
+      for(const group of order.gpns)for(const assembly of group.assemblies)visit(assembly,{...context,assembly_number:group.gpn});
+      order.unassigned.forEach(item=>visit(item,context));
+    }
+    return [...copies.values()];
+  }
   function expandFiltered(){
     if(!isFiltered())return;
     const parent=n=>{if(arr(n.children).length){state.expanded.add(key('item',n.id));n.children.forEach(parent);}};
@@ -121,8 +135,8 @@
     if(o.unassigned.length)html+=`<section class="pp-unassigned"><h3>Parts awaiting a GPN / Assembly link</h3><p>These records belong to this P.O. Their parent scope still needs review.</p>${o.unassigned.map(n=>itemView(n)).join('')}</section>`;
     return html+'</div></details>';
   }
-  function controls(){return `<section class="pp-controls"><div class="field pp-po-select"><label for="ppPo">Purchase order</label><select id="ppPo">${option('','All P.O.s',state.project)}${state.choices.map(o=>option(o.project_id,`P.O ${o.purchase_order}${o.customer?' · '+o.customer:''}`,state.project)).join('')}</select></div><div class="field"><label for="ppStatus">Production status</label><select id="ppStatus">${[['all','All statuses'],['wip','WIP'],['finished','Finished / prepared'],['hold','On hold']].map(([v,l])=>option(v,l,state.status)).join('')}</select></div><div class="field"><label for="ppKind">Show</label><select id="ppKind">${[['all','Assemblies, spools & parts'],['spool','Spools'],['part','Individual parts'],['assembly','Assemblies']].map(([v,l])=>option(v,l,state.kind)).join('')}</select></div><div class="field pp-search"><label for="ppSearch">Find a P.O., GPN or part</label><input id="ppSearch" type="search" value="${esc(state.query)}" placeholder="P.O number, GPN, spool or part ID"></div></section>`;}
-  function header(){return `<div class="pp-head"><div><span class="pp-eyebrow">CLM · Production visibility</span><h1>Production progress</h1><p>Inventory to Ready To Ship. Expand a P.O. to follow each assembly, spool and individual part.</p></div><div class="actions">${button('refresh','Refresh','','','primary')}${button('orders','Purchase orders')}${button('legacy-progress',state.project?'Project detail':'All project records')}</div></div>`;}
+  function controls(){return `<section class="pp-controls"><div class="field pp-po-select"><label for="ppPo">Purchase order</label><select id="ppPo">${option('','All P.O.s',state.project)}${state.choices.map(o=>option(o.project_id,`P.O ${o.purchase_order}${o.customer?' · '+o.customer:''}`,state.project)).join('')}</select></div><div class="field"><label for="ppStatus">Production status</label><select id="ppStatus">${[['all','All statuses'],['wip','WIP'],['finished','Finished / prepared'],['hold','On hold']].map(([v,l])=>option(v,l,state.status)).join('')}</select></div><div class="field"><label for="ppKind">Show</label><select id="ppKind">${[['all','Assemblies, spools & parts'],['spool','Spools'],['part','Individual parts'],['assembly','Assemblies']].map(([v,l])=>option(v,l,state.kind)).join('')}</select></div><div class="field pp-search"><label for="ppSearch">Find a P.O., GPN or part</label><input id="ppSearch" type="search" value="${esc(state.query)}" placeholder="P.O., spool number, process or part ID"></div></section>`;}
+  function header(){return `<div class="pp-head"><div><span class="pp-eyebrow">CLM · Production visibility</span><h1>Production progress</h1><p>Every individual spool is grouped under its current process, from Inventory to Ready To Ship.</p></div><div class="actions">${button('refresh','Refresh','','','primary')}${button('orders','Purchase orders')}${button('legacy-progress',state.project?'Project detail':'All project records')}</div></div>`;}
   function summaryView(){const s=state.data.summary||{};return `<section class="pp-overview"><div>${meter(overallProgress(s),'Recorded production steps',s.complete)}<p class="pp-progress-note">Recorded steps describe the selected P.O. scope. Part preparation, spool fabrication, assembly finish and shipment are separate milestones.</p>${s.scope_complete===false?'<p class="pp-warning pp-scope-inline">Scope incomplete · the registered step percentage does not prove the whole order is finished.</p>':''}</div><div class="pp-totals">${[['P.O.s',state.data.orders.length],['Spools',s.spools],['Individual parts',s.parts],['On hold',s.on_hold]].map(([l,n])=>`<div><span>${l}</span><strong>${quantity(n)}</strong></div>`).join('')}</div></section>`;}
   function render(){
     if(!state.active)return;
@@ -130,7 +144,9 @@
     if(state.loading)html+='<div class="pp-state" role="status">Loading the current P.O. production flow…</div>';
     else if(state.error)html+=`<div class="pp-state pp-error" role="alert"><strong>Production progress could not be verified.</strong><p>${esc(state.error)}</p>${button('refresh','Try again')}${button('all','All P.O.s')}</div>`;
     else if(state.data){
-      const rows=filteredOrders();html+=summaryView()+(flowStatus()?.legend()||'');
+      const rows=filteredOrders();
+      if(['all','spool'].includes(state.kind))html+=(flowStatus()?.processBoard(processSpools(rows),{attribute:'data-pp-spool'})||'')+(flowStatus()?.legend()||'');
+      html+='<h2>P.O., assembly &amp; part details</h2>'+summaryView();
       if(isFiltered())html+='<p class="pp-filter-note">Search and status filters keep matching items with their parent context. P.O. progress totals still describe the full selected scope.</p>';
       html+=`<div class="pp-list-tools"><span>${rows.length} matching P.O.${rows.length===1?'':'s'}${state.data.as_of?' · Updated '+esc(new Date(state.data.as_of).toLocaleString()):''}</span><div class="actions">${isFiltered()?button('clear','Clear filters'):''}${button('expand','Expand all')}${button('collapse','Collapse all')}</div></div>`;
       if(rows.length)html+=rows.map(orderView).join('');
@@ -168,7 +184,7 @@
     if(action==='project-detail')return window.FabProgress.open({project});if(action==='dossier')return window.FabDossier.open({project});
     if(action==='item')return openItem(id);if(action==='flow')return window.FabFlow.open({item:id,project});if(action==='welds')return window.FabTracking.open({spool:id,project});if(action==='parts')return window.FabParts.open({spool:id,project});
   }
-  node('productionProgressContent').addEventListener('click',async event=>{const target=event.target.closest('[data-pp-action]');if(!target||target.disabled)return;try{await act(target.dataset.ppAction,target.dataset.ppId||'',target.dataset.ppProject||'');}catch(error){notify(errorText(error));}});
+  node('productionProgressContent').addEventListener('click',async event=>{const target=event.target.closest('[data-pp-action],[data-pp-spool]');if(!target||target.disabled)return;try{if(target.dataset.ppSpool)return await act('flow',target.dataset.ppSpool,target.dataset.spoolProject||'');await act(target.dataset.ppAction,target.dataset.ppId||'',target.dataset.ppProject||'');}catch(error){notify(errorText(error));}});
   if(node('navProgress'))node('navProgress').onclick=()=>open();
   window.FabProductionProgress={open,refresh:load,cancelPending(){state.active=false;state.sequence++;state.loading=false;}};
 })();

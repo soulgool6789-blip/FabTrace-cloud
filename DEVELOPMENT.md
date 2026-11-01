@@ -53,6 +53,8 @@ This guide describes the implemented tracking extension and the constraints that
 
 ## Flow progress and spool number colors
 
+Release `2026.11.01-individual-spool-processes.1` adds the shared `FabFlowStatus.processBoard` projection: eleven ordered process buckets, one entry per internal physical-spool ID, natural alias sorting, independently colored copy labels and exact-ID process navigation. Process flow reads `/api/flow/board`, which includes active physical spools with no traveler; Production Progress flattens its existing validated P.O. tree within the current filters. Both use the existing authoritative `flow_stage`. The read-only board does not change a spool’s recorded process.
+
 Release `2026.11.01-spool-number-colors.1` uses `flow_stages.py` as the backend display catalog over the existing numbered traveler. The catalog version is `CLM-24-v3`; numeric step IDs, gate logic, database schema and prior event snapshots remain unchanged. `qa_code` retains the legacy integration code. New `display_qa_code` and `flow_stage_key` identify the current labels, including final QA/QC-004 at step 22. Step 19 remains the required assembly inspection in Testing; a display stage does not create a test result.
 
 | Flow stage | Existing steps | Text color |

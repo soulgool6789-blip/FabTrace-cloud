@@ -8,7 +8,7 @@ History is append-only; failed inspections return to explicit rework steps.
 import datetime as dt
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, select, text
 from sqlalchemy.exc import IntegrityError
@@ -715,6 +715,16 @@ def items(project_id: str = '', subproject_id: str = '', u: Employee = Depends(a
             continue
         result.append(_summary(s, item, plan))
     return {'items': result}
+
+
+@router.get('/board')
+def board(project_id: str = Query('', max_length=80), subproject_id: str = Query('', max_length=80),
+          u: Employee = Depends(auth), s: Session = Depends(db)):
+    from orders import read_snapshot
+    from spool_presentation import physical_spool_board
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        return physical_spool_board(snapshot, project_id, subproject_id)
 
 
 @router.get('/items/{item_id}')

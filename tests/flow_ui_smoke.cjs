@@ -35,7 +35,7 @@ function detailAt(number,extra={}){
   const identity=step.route==='spool'?{spool_number:'643-777-PCW-03-01',google_part_number:'643-777-PCW-03-01',qr_alias:'643-777-PCW-03-01-[001]',display_code:'643-777-PCW-03-01-[001]'}:{};
   return {flow_stage:{key:({1:'inventory',2:'qa_001',3:'qa_001',4:'qa_001',5:'preparation',6:'preparation',7:'preparation',8:'preparation',9:'preparation',10:'preparation',11:'qa_002',12:'floor',13:'welding',14:'welding',15:'qa_003',16:'qa_003',17:'testing',18:'testing',19:'testing',20:'paint',21:'paint',22:'qa_004',23:'ready_to_ship',24:'ready_to_ship'})[number],source_item_id:'ITM-001',inherited:false},transfer,item:{...identity,id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24].includes(number)},flow:{item_id:'ITM-001',route:step.route,current_step:number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:catalog.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
 }
-let record=detailAt(6),allowedOverride=null,fail=null,hold=null,now=10000,timerId=0;
+let record=detailAt(6),physicalCopies=[],allowedOverride=null,fail=null,hold=null,now=10000,timerId=0;
 const calls=[],messages=[],timers=new Map();
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function allowed(){
@@ -59,12 +59,16 @@ const context={location:{origin:'https://fabtrace-cloud.onrender.com'},qrStatus:
     if(url==='/api/transfers/options')return structuredClone(handoffOptions);
     if(url==='/api/employees/directory')return [{badge:'SHOP1',name:'Sender One',role:'welder',active:true},{badge:'SHOP2',name:'Receiver Two',role:'handler',active:true},{badge:'OLD1',name:'Former worker',role:'handler',active:false}];
     if(url==='/api/flow/catalog')return structuredClone(catalog);
+    if(url==='/api/flow/board')return {items:structuredClone(physicalCopies.length?physicalCopies:record.flow?.route==='spool'?[{...record.item,item_id:record.item.id,route:'spool',flow_stage:record.flow_stage,status:record.flow.status,current_step:record.flow.current_step,project_id:'P1',subproject_id:'SUB1'}]:[])};
     if(url==='/api/flow/items')return {items:[{item_id:'ITM-001',spool_number:record.item.spool_number,google_part_number:record.item.google_part_number,qr_alias:record.item.qr_alias,display_code:record.item.display_code,flow_stage:record.flow_stage,description:'Test item',route:record.flow?.route||'component',status:record.flow?.status||'active',current_step:record.flow?.current_step||6,current_title:record.flow?.current?.title||'Prep',project_id:'P1',subproject_id:'SUB1',open_exceptions:record.exceptions?.filter(x=>!x.closed_at).length||0,blockers:[],production_process:baseProcess()},{item_id:'OTHER-002',description:'Other project item',route:'assembly',status:'delivered',current_step:null,current_title:'',project_id:'P2',subproject_id:null,open_exceptions:0,blockers:[],production_process:null}]};
     if(url.startsWith('/api/flow/items/'))return detail();throw Error('Unexpected endpoint '+url);
   },
 };context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow-status.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/spool-qr.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/handoff.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow.js'),'utf8'),context);
 const html=()=>elements.get('flowContent').innerHTML,posts=()=>calls.filter(row=>row.method==='POST');
 const click=(name,id='')=>elements.get('flowContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{flowAction:name,flowId:id}})}});
+const clickSpool=id=>elements.get('flowContent').listeners.click({target:{closest:selector=>selector==='[data-flow-spool]'?{disabled:false,dataset:{flowSpool:id}}:null}});
+const processBoard=()=>html().slice(html().indexOf('<section class="fst-process-board"'),html().indexOf('<aside class="fst-legend"'));
+const processGroup=key=>processBoard().split('data-spool-process="'+key+'"')[1]?.split('data-spool-process=')[0]||'';
 const submitStep=async values=>{const form=elements.get('flowStepForm');assert.ok(form,'current-step form exists');form.values=values;await form.onsubmit({preventDefault(){},target:form})};
 const submitDialog=async values=>{const form=elements.get('flowDialogForm');form.values=values;await form.listeners.submit({preventDefault(){},target:form})};
 const check=number=>({['check_s'+number+'_1']:'on'});
@@ -72,7 +76,22 @@ const check=number=>({['check_s'+number+'_1']:'on'});
 (async()=>{
   await context.FabFlow.open();assert.equal(context.page,'flowPage');
   assert.match(html(),/24-step fabrication flow/);assert.equal((html().match(/class="ff-map-step /g)||[]).length,24);
-  assert.equal((html().match(/<li data-flow-stage=/g)||[]).length,11);assert.match(html(),/Flow progress/);assert.match(html(),/data-flow-id="ITM-001">ITM-001<\/button>/);assert.doesNotMatch(html(),/fst-color-[^"]+"[^>]*>ITM-001<\/span>/);assert.match(html(),/QA\/QC-004/);
+  assert.equal((html().match(/data-spool-process=/g)||[]).length,11);assert.match(html(),/Individual spools by process/);assert.match(html(),/data-flow-id="ITM-001">ITM-001<\/button>/);assert.doesNotMatch(html(),/fst-color-[^"]+"[^>]*>ITM-001<\/span>/);assert.match(html(),/QA\/QC-004/);
+  const inventoryCopy=(id,suffix)=>({item_id:id,route:'spool',spool_number:'643-777-PCW-03-01',qr_alias:'643-777-PCW-03-01-['+suffix+']',flow_stage:{key:'inventory',label:'Inventory'},project_id:'INVENTORY-PROJECT',subproject_id:'RECEIVING',status:'not_started',current_step:null,purchase_order:'PO-INDIVIDUAL',assembly_number:'ASM-PLAN'});
+  physicalCopies=[inventoryCopy('COPY-10','10'),inventoryCopy('COPY-2','2'),inventoryCopy('COPY-001','001'),{...inventoryCopy('COPY-WELD','011'),flow_stage:{key:'welding',label:'Process Welder'},project_id:'P1',subproject_id:'SUB1',status:'active',current_step:13}];
+  await context.FabFlow.open({project:'',resetFilters:true});
+  assert.deepEqual([...processBoard().matchAll(/data-spool-process="([^"]+)"/g)].map(m=>m[1]),['inventory','qa_001','preparation','qa_002','floor','welding','qa_003','testing','paint','qa_004','ready_to_ship']);
+  assert.deepEqual([...processGroup('inventory').matchAll(/data-process-spool="([^"]+)"/g)].map(m=>m[1]),['COPY-001','COPY-2','COPY-10']);
+  assert.deepEqual([...processGroup('welding').matchAll(/data-process-spool="([^"]+)"/g)].map(m=>m[1]),['COPY-WELD']);
+  assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,4);assert.doesNotMatch(processBoard(),/<details|data-flow-spool="ITM-001"/);
+  assert.match(processGroup('inventory'),/data-spool-id="COPY-001" class="fst-text fst-color-black"[^>]*>643-777-PCW-03-01-\[001\]/);
+  assert.match(html(),/<details class="ff-fold"><summary>Traveler records/);assert.match(html(),/<details class="ff-fold"><summary>The 24-step fabrication flow/);assert.match(html(),/<option value="INVENTORY-PROJECT"/);
+  elements.get('flowProject').value='INVENTORY-PROJECT';elements.get('flowProject').onchange();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,3);
+  elements.get('flowSearch').value='[2]';elements.get('flowSearch').oninput();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,1);assert.match(processBoard(),/data-flow-spool="COPY-2"/);
+  await context.FabFlow.open({project:'',resetFilters:true});elements.get('flowStatus').value='not_started';elements.get('flowStatus').onchange();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,3);
+  await context.FabFlow.open({project:'',resetFilters:true});elements.get('flowSearch').value='Process Welder';elements.get('flowSearch').oninput();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,1);assert.match(processBoard(),/data-flow-spool="COPY-WELD"/);
+  record={...detailAt(9),item:{...detailAt(9).item,id:'COPY-001'},flow:null,flow_stage:{key:'inventory'},suggested_route:'spool'};await clickSpool('COPY-001');assert.match(context.url,/item=COPY-001/);assert.ok(calls.some(c=>c.url==='/api/flow/items/COPY-001'));assert.match(html(),/Start a numbered process route/);
+  physicalCopies=[];record=detailAt(6);await context.FabFlow.open({project:'',resetFilters:true});
   record=detailAt(12);await context.FabFlow.open({resetFilters:true});assert.match(html(),/data-flow-id="ITM-001"><span data-spool-number="643-777-PCW-03-01" data-spool-id="ITM-001" class="fst-text fst-color-yellow"[^>]*>643-777-PCW-03-01-\[001\]<\/span>/);elements.get('flowSearch').value='643-777-PCW-03-01-[001]';elements.get('flowSearch').oninput();assert.match(html(),/1 matching records/);await click('item','ITM-001');assert.match(context.url,/item=ITM-001/);assert.match(html(),/<h1><span data-spool-number="643-777-PCW-03-01"[^>]*fst-color-yellow[^>]*>643-777-PCW-03-01-\[001\]<\/span><\/h1>/);record=detailAt(6);await context.FabFlow.open({resetFilters:true});
   elements.get('flowProject').value='P1';elements.get('flowProject').onchange();assert.doesNotMatch(html(),/Other project item/);
   await click('filter-step','6');assert.match(html(),/Showing step 6/);await click('clear-step');

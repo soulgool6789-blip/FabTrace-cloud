@@ -22,7 +22,7 @@
     {id:'paint',label:'Sandblast & paint',first:20,last:22},
     {id:'shipping',label:'Shipment',first:23,last:24},
   ];
-  const state={catalog:null,handoffOptions:null,handoffControl:null,board:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,saving:false,dialogAction:null,dialogStale:false,notice:''};
+  const state={catalog:null,handoffOptions:null,handoffControl:null,board:[],spools:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,saving:false,dialogAction:null,dialogStale:false,notice:''};
   const clocks=new WeakMap();
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
@@ -105,13 +105,15 @@
     node('flowContent').innerHTML='<div class="ff-state" role="status">Loading fabrication process records…</div>';
     node('flowContent').setAttribute('aria-busy','true');
     try{
-      const [catalog,board,detail,handoffOptions]=await Promise.all([
+      const [catalog,board,detail,handoffOptions,spools]=await Promise.all([
         state.catalog?Promise.resolve(state.catalog):api(ROOT+'/catalog'),
         api(ROOT+'/items'),state.item?api(ROOT+'/items/'+encode(state.item)):Promise.resolve(null),
         api('/api/transfers/options'),
+        state.item?Promise.resolve({items:state.spools}):api(ROOT+'/board'),
       ]);
       if(sequence!==state.sequence)return;
-      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=arr(board.items);state.detail=markTimes(detail);
+      if(!Array.isArray(spools?.items))throw Error('The individual spool board could not be verified. Refresh to load the current process positions.');
+      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=arr(board.items);state.spools=spools.items;state.detail=markTimes(detail);
       for(const row of state.board)markTimes(row);
       render();updateUrl();
     }catch(error){
@@ -126,14 +128,15 @@
   function lookup(){
     return '<form id="flowLookupForm" class="ff-lookup"><div class="field"><label for="flowLookup">Scan or enter item ID</label><input id="flowLookup" name="item" required autocomplete="off" placeholder="Component, spool, or assembly ID"></div><button type="submit" class="primary">Open record</button><p class="ff-help">Use a barcode scanner, type the ID, or paste a FabTrace QR link. A phone QR opens the item record, where Process flow is available.</p></form>';
   }
-  function visibleItems(ignoreStep=false){
+  function visibleItems(ignoreStep=false,source=state.board){
     const query=state.query.trim().toLowerCase();
-    return state.board.filter(row=>(!state.project||row.project_id===state.project)&&(!state.subproject||row.subproject_id===state.subproject)&&(!state.status||displayStatus(row)===state.status)&&(ignoreStep||!state.step||Number(row.current_step)===Number(state.step))&&(!query||[row.item_id,row.spool_number,row.google_part_number,row.qr_alias,row.display_code,row.current_title,row.project_id,row.subproject_id].some(value=>String(value||'').toLowerCase().includes(query))));
+    return source.filter(row=>(!state.project||row.project_id===state.project)&&(!state.subproject||row.subproject_id===state.subproject)&&(!state.status||displayStatus(row)===state.status)&&(ignoreStep||!state.step||Number(row.current_step)===Number(state.step))&&(!query||[row.item_id,row.spool_number,row.google_part_number,row.qr_alias,row.display_code,row.current_title,row.flow_stage?.label,row.project_id,row.subproject_id,row.purchase_order,row.assembly_id,row.assembly_number].some(value=>String(value||'').toLowerCase().includes(query))));
   }
   function filters(){
-    const projects=[...new Set(state.board.map(row=>row.project_id).filter(Boolean))].sort();
-    const subs=[...new Set(state.board.filter(row=>!state.project||row.project_id===state.project).map(row=>row.subproject_id).filter(Boolean))].sort();
-    return `<div class="ff-filters"><div class="field"><label for="flowProject">Project</label><select id="flowProject">${option('','All projects',state.project)}${projects.map(value=>option(value,value,state.project)).join('')}</select></div><div class="field"><label for="flowSubproject">Subproject</label><select id="flowSubproject">${option('','All subprojects',state.subproject)}${subs.map(value=>option(value,value,state.subproject)).join('')}</select></div><div class="field"><label for="flowStatus">Status</label><select id="flowStatus">${option('','All statuses',state.status)}${['active','rework','admin_released','completed','shipped','delivered'].map(value=>option(value,statusNames[value],state.status)).join('')}</select></div><div class="field ff-search"><label for="flowSearch">Find item or process</label><input id="flowSearch" type="search" value="${esc(state.query)}" placeholder="Spool number, ID or current step"></div></div>${state.step?`<div class="notice">Showing step ${esc(state.step)} · ${esc(definition(state.step)?.title||'')} ${action('clear-step','Clear step filter','','ff-link')}</div>`:''}`;
+    const records=[...state.spools,...state.board];
+    const projects=[...new Set([...records.map(row=>row.project_id),state.project].filter(Boolean))].sort();
+    const subs=[...new Set(records.filter(row=>!state.project||row.project_id===state.project).map(row=>row.subproject_id).filter(Boolean))].sort();
+    return `<div class="ff-filters"><div class="field"><label for="flowProject">Project</label><select id="flowProject">${option('','All projects',state.project)}${projects.map(value=>option(value,value,state.project)).join('')}</select></div><div class="field"><label for="flowSubproject">Subproject</label><select id="flowSubproject">${option('','All subprojects',state.subproject)}${subs.map(value=>option(value,value,state.subproject)).join('')}</select></div><div class="field"><label for="flowStatus">Status</label><select id="flowStatus">${option('','All statuses',state.status)}${['not_started','active','rework','admin_released','completed','shipped','delivered'].map(value=>option(value,statusNames[value],state.status)).join('')}</select></div><div class="field ff-search"><label for="flowSearch">Find spool or process</label><input id="flowSearch" type="search" value="${esc(state.query)}" placeholder="Spool number, process, P.O. or ID"></div></div>${state.step?`<div class="notice">Showing step ${esc(state.step)} · ${esc(definition(state.step)?.title||'')} ${action('clear-step','Clear step filter','','ff-link')}</div>`:''}`;
   }
   function counts(rows){
     const values=[['In progress',rows.filter(row=>row.status==='active').length,'Active component, spool, and assembly routes'],['Needs rework',rows.filter(row=>num(row.open_exceptions)>0).length,'Open process exceptions'],['Shipped',rows.filter(row=>row.status==='shipped').length,'Awaiting delivery receipt'],['Delivered',rows.filter(row=>row.status==='delivered').length,'Delivery recorded']];
@@ -145,11 +148,13 @@
     return clock(process,current.elapsed_seconds,['running','paused'].includes(process.status))+secondary(process.status==='paused'?'Paused':'Running');
   }
   function renderBoard(){
-    const rows=visibleItems();
-    let html=heading('Fabrication process flow','Follow each part from Inventory through Ready To Ship. Open a record to complete its production steps and QA/QC checks.')+(flowStatus()?.strip(state.catalog.stage_catalog)||'')+(flowStatus()?.legend()||'')+lookup()+filters()+counts(rows);
-    html+=`<section class="card"><div class="ff-section-head"><h2>Production board</h2><span class="muted">${rows.length} matching records</span></div>`;
+    const rows=visibleItems(),spools=visibleItems(false,state.spools);
+    let html=heading('Fabrication process flow','Each individual spool appears under its current process. Select its spool number to open the physical record and its production steps.')+filters();
+    html+=flowStatus()?.processBoard?.(spools,{attribute:'data-flow-spool',title:'Individual spools by process'})||empty('Individual spool board unavailable','Refresh to load the current spool positions.');
+    html+=(flowStatus()?.legend()||'')+lookup();
+    html+=`<section class="card"><details class="ff-fold"><summary>Traveler records · ${rows.length} matching records</summary>${counts(rows)}<div class="ff-section-head"><h2>Numbered route records</h2></div>`;
     html+=rows.length?table(`<table class="ff-table"><thead><tr><th>Item / route</th><th>Project</th><th>Flow status / current step</th><th>Time in process</th><th>Status</th><th>Attention</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${action('item',itemLabel(row),row.item_id,'ff-link',isSpool(row)?row:null)}${secondary(routeNames[row.route]||row.route)}</td><td>${esc(row.project_id||'Unassigned')}${secondary(row.subproject_id||'')}</td><td><div class="ff-stage-label">${stageBadge(row.flow_stage)}</div>${row.current_step?`<strong>${esc(row.current_step)} · ${esc(row.current_title)}</strong>`:'<span class="muted">Route finished</span>'}</td><td>${timingCell(row)}</td><td>${tag(displayStatus(row))}</td><td>${num(row.open_exceptions)?`${num(row.open_exceptions)} open exception${num(row.open_exceptions)===1?'':'s'}`:arr(row.blockers).length?esc(row.blockers[0]):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table>`):empty('No matching process records',state.board.length?'Clear the filters or choose another project.':'Open an existing item above. An administrator or supervisor can start its component, spool, or assembly route.');
-    html+='</section><section class="card"><div class="ff-section-head"><h2>The 24-step fabrication flow</h2><span class="muted">Select a step to filter the board</span></div><p class="ff-footer-note">Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Linked records connect the material history to the finished assembly.</p>'+renderMap(false)+'</section>';
+    html+='</details></section><section class="card"><details class="ff-fold"'+(state.step?' open':'')+'><summary>The 24-step fabrication flow</summary><p class="ff-footer-note">Select a numbered step to filter the board. Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Linked records connect the material history to the finished assembly.</p>'+renderMap(false)+'</details></section>';
     return html;
   }
   function stepState(step){
@@ -446,7 +451,7 @@
     if(name==='admin-controls'&&me?.role==='admin')return window.FabAdmin.open({item:id});
     if(name==='weld-record')return window.FabTracking.open({spool:id});
     if(name==='spool-parts')return window.FabParts.open({spool:id,project:state.project});
-    if(name==='filter-step'){state.step=id;state.item='';state.detail=null;render();updateUrl();return;}
+    if(name==='filter-step'){const leavingDetail=Boolean(state.item);state.step=id;state.item='';state.detail=null;if(leavingDetail)return load();render();updateUrl();return;}
     if(name==='clear-step'){state.step='';render();return;}
     if(name==='start')return startFlow();
     if(name==='fail')return failStep();
@@ -456,8 +461,9 @@
     if(name==='pause'||name==='resume')return pauseProcess(name);
   }
   node('flowContent').addEventListener('click',async event=>{
-    const button=event.target.closest('[data-flow-action]');if(!button||button.disabled||state.saving)return;
-    try{await act(button.dataset.flowAction,button.dataset.flowId)}catch(error){notify(errorText(error))}
+    const spool=event.target.closest('[data-flow-spool]');
+    const button=spool?.dataset.flowSpool!==undefined?spool:event.target.closest('[data-flow-action]');if(!button||button.disabled||state.saving)return;
+    try{await act(button.dataset.flowSpool!==undefined?'item':button.dataset.flowAction,button.dataset.flowSpool??button.dataset.flowId)}catch(error){notify(errorText(error))}
   });
   node('flowDialogForm').addEventListener('submit',async event=>{
     event.preventDefault();if(!state.dialogAction||state.saving||state.dialogStale||node('flowDialogSubmit').disabled)return;
