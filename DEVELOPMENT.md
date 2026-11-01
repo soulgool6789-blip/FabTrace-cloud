@@ -51,6 +51,28 @@ This guide describes the implemented tracking extension and the constraints that
 
 `main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, order_setup, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
 
+## Flow progress and part text colors
+
+Release `2026.11.01-flow-colors.1` uses `flow_stages.py` as the backend display catalog over the existing numbered traveler. The catalog version is `CLM-24-v3`; numeric step IDs, gate logic, database schema and prior event snapshots remain unchanged. `qa_code` retains the legacy integration code. New `display_qa_code` and `flow_stage_key` identify the current labels, including final QA/QC-004 at step 22. Step 19 remains the required assembly inspection in Testing; a display stage does not create a test result.
+
+| Flow stage | Existing steps | Text color |
+| --- | --- | --- |
+| Inventory | 1 | Black |
+| QA/QC-001 | 2–4: incoming inspection and put-away; incoming material approval before a spool route | Black |
+| Prep/Fabrication | 5–10 | Red |
+| QA/QC-002 | 11 | Red |
+| Floor | 12 | Yellow |
+| Process Welder | 13–14 | Blue |
+| QA/QC-003 | 15–16 | Blue |
+| Testing | 17–19 | Orange |
+| Paint | 20–21 | Pink |
+| QA/QC-004 | 22 | Pink |
+| Ready To Ship | 23–24 and actual shipment/delivery | Green |
+
+`flow_stage` is a read-only presentation object. An active own route determines the stage; completed children may follow a valid linked parent after their own current work is complete and with no hold, rework or administrative override. Generic release or route completion does not imply Ready To Ship. Production progress resolves inheritance from its preloaded tree so step accounting and query behavior stay separate from color. Numbered-step percentages continue to measure each item's own recorded work.
+
+The shared `FabFlowStatus` helper validates stage keys, escapes rendered text and supplies color classes, the legend and the ordered flow strip. Yellow text uses a dark backing for readability. Part identity, part number and description text are colored in production/flow, allocated parts, and physical BOM material views. A material piece without a current QA-001 Pass remains at QA/QC-001 even if other pieces passed. Material colors are added only by `_spool_detail`, and allocated-component colors only at the public parts view boundary; persisted material fields and dossier/evidence fingerprints do not include them. Both HTML shells load versioned shared assets before feature scripts.
+
 ## Result-specific inspection fields
 
 Version `2026.10.31-qa-pass-fields.1` makes supplementary `reference` and `notes` optional strings (default empty, maximum lengths 300/3000) for per-piece QA-001 Pass, PASS ALL and overall arrival Pass. Fail still requires an inspection reference of at least two characters and a failure reason of at least four characters after whitespace stripping. UI labels and validation follow the selected result; only Fail displays **Failure reason (required)**. Empty Pass text is stored as empty text, with no invented findings or report numbers. Each event still records the inspector, time, immutable decision ID and complete reviewed basis. The optional inspection reference describes a report/checklist number and is separate from the required piece MTR reference.

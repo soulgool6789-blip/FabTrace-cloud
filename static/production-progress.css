@@ -60,7 +60,7 @@
 #productionProgressPage .pp-context>summary{background:#f7f9fb}
 #productionProgressPage .pp-context>summary .pp-eyebrow{color:#76849a}
 #productionProgressPage .pp-stage-section{margin:18px 0}
-#productionProgressPage .pp-stage-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0;padding:0;list-style:none}
+#productionProgressPage .pp-stage-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0;padding:0;list-style:none;counter-reset:flowstage}
 #productionProgressPage .pp-stage{border:1px solid #dbe5ef;border-radius:9px;background:white;padding:11px;min-width:0}
 #productionProgressPage .pp-stage>div:first-child{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:10px}
 #productionProgressPage .pp-stage>div:first-child>strong{font-size:12px}
@@ -76,6 +76,14 @@
 #productionProgressPage .pp-stage-not_recorded{border-color:#e8cc8c}
 #productionProgressPage .pp-stage-scope_unknown{border-style:dashed;background:#fffaf0}
 #productionProgressPage .pp-stage-missing{display:block;color:#8b5700;font-size:10px;line-height:1.4;margin-top:7px}
+#productionProgressPage .pp-stage-sequence{display:inline-block;color:#587188;background:#eaf0f6;border-radius:50%;text-align:center;font-size:9px;line-height:17px;min-width:17px;margin-right:5px}
+#productionProgressPage .pp-stage-effective-current{border-color:#0f608a;box-shadow:inset 0 0 0 1px #0f608a}
+#productionProgressPage .pp-stage-effective-current>div:first-child>span{color:#0f608a;font-weight:700}
+#productionProgressPage .pp-shipping-note{display:block;color:#5b7287;font-size:10px;line-height:1.4;margin-top:7px}
+#productionProgressPage .pp-current-stage{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid #dce6ee;border-radius:8px;background:#f8fafc;margin-bottom:15px;font-size:12px}
+#productionProgressPage .pp-current-stage>span:first-child{color:#62748a;font-size:11px;font-weight:700}
+#productionProgressPage .pp-current-stage>small{color:#65768a;overflow-wrap:anywhere;font-size:10px}
+#productionProgressPage .pp-identity-stage{margin:5px 0;line-height:1.5}
 #productionProgressPage .pp-shipping{display:flex;align-items:center;flex-wrap:wrap;gap:8px 15px;border:1px dashed #c7d5e1;border-radius:8px;background:#f7f9fc;padding:10px 12px;margin-top:10px;font-size:12px;color:#64788d}
 #productionProgressPage .pp-shipping small{flex-basis:100%;font-size:11px}
 #productionProgressPage .pp-item-facts{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px;margin:0 0 15px}

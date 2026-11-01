@@ -185,7 +185,7 @@ QUALITY_REPORT_COLUMNS = (
     'last_reviewer', 'last_review_at', 'last_review_reference', 'as_of',
 )
 
-FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'qa_code', 'route', 'section', 'roles', 'checks',
+FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'qa_code', 'display_qa_code', 'flow_stage_key', 'route', 'section', 'roles', 'checks',
                      'requires_scan', 'requires_handoff', 'requires_reference', 'qa', 'return_steps')
 
 PROCESS_CONTEXT_COLUMNS = ('project_id', 'subproject_id', 'item_id', 'description')

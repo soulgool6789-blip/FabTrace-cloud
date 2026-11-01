@@ -77,6 +77,17 @@ def test_all_roles_read_one_or_all_pos_with_independent_choices_and_no_writes(ap
     assert database_state(api) == before
 
 
+def test_flow_catalog_matches_requested_stage_order_and_colors(api):
+    result = report(api)
+    assert [(stage['label'], stage['color']) for stage in result['stage_catalog']] == [
+        ('Inventory', 'black'), ('QA/QC-001', 'black'), ('Prep/Fabrication', 'red'),
+        ('QA/QC-002', 'red'), ('Floor', 'yellow'), ('Process Welder', 'blue'),
+        ('QA/QC-003', 'blue'), ('Testing', 'orange'), ('Paint', 'pink'),
+        ('QA/QC-004', 'pink'), ('Ready To Ship', 'green')]
+    assert sorted(number for stage in result['stage_catalog'] for number in stage['steps']) == list(range(1, 25))
+    assert result['stage_catalog'] == ok(api.get('/api/flow/catalog'))['stage_catalog']
+
+
 def test_empty_po_and_draft_gpn_have_unknown_scope_and_no_completion(api):
     project = new_order(api)['order']['project_id']
     empty = report(api, project)
@@ -125,15 +136,17 @@ def test_tree_counts_each_identity_once_and_keeps_missing_spools_and_bom_pieces(
     assert not order['summary']['scope_complete'] and not order['summary']['complete']
     assert assembly['required_spools'] == 2 and assembly['linked_spools'] == 1
     stages = {stage['key']: stage for stage in assembly['stages']}
-    assert stages['inventory']['total'] == 4 and stages['inventory']['missing_records'] == 2
-    assert stages['fit_up']['total'] == 4 and stages['fit_up']['missing_records'] == 1
-    assert stages['finish']['total'] == 3
-    assert stages['shipping']['total'] == 2 and stages['shipping']['separate']
+    assert stages['inventory']['total'] == 1 and stages['inventory']['missing_records'] == 2
+    assert stages['qa_001']['total'] == 3 and stages['qa_001']['missing_records'] == 2
+    assert stages['preparation']['total'] == 6 and stages['preparation']['missing_records'] == 3
+    assert stages['qa_002']['total'] == 1 and stages['qa_002']['missing_records'] == 1
+    assert stages['paint']['total'] == 2 and stages['qa_004']['total'] == 1
+    assert stages['ready_to_ship']['total'] == 2 and stages['ready_to_ship']['separate']
     assert rows[spool]['blockers'] and not rows[spool]['on_hold']
     assert all(not row['route_started'] for row in rows.values())
     assert rows[part]['location'] == 'Receiving'
     assert rows[part]['handler'] == BADGES['handler'] and rows[part]['handler_name']
-    assert next(s for s in rows[part]['stages'] if s['key'] == 'finish')['state'] == 'not_applicable'
+    assert next(s for s in rows[part]['stages'] if s['key'] == 'paint')['state'] == 'not_applicable'
 
 
 def test_shared_legacy_gpn_keeps_distinct_assembly_ids_without_double_counting(api):
@@ -154,9 +167,10 @@ def test_missing_spools_leave_their_unknown_material_stages_visible(api):
     assert row['summary']['undeclared_scope'] == 0
     assert row['summary']['missing_spools'] == 2
     stages = {stage['key']: stage for stage in row['stages']}
-    assert stages['inventory']['state'] == stages['preparation']['state'] == 'scope_unknown'
+    assert stages['inventory']['state'] == stages['qa_001']['state'] == 'scope_unknown'
     assert stages['inventory']['percent'] is None
-    assert stages['fit_up']['state'] == 'pending' and stages['fit_up']['missing_records'] == 2
+    assert stages['preparation']['state'] == 'pending' and stages['preparation']['missing_records'] == 2
+    assert stages['qa_002']['state'] == 'pending' and stages['qa_002']['missing_records'] == 2
 
 
 @pytest.mark.parametrize('incomplete', [
@@ -199,14 +213,21 @@ def test_late_baseline_remains_unrecorded_and_qa_finish_is_distinct_from_handoff
 
 
 def test_assembly_finish_stops_at_22_shipping_and_delivery_are_separate(api):
-    assembly = assembly_at_step(api, 23)
+    ok(api.post('/api/tracking/projects', {'id': PROJECT, 'name': 'Local shipping progress fixture'}), 201)
     enroll_project_as_order(api)
+    assembly = assembly_at_step(api, 23)
     before = report(api, PROJECT)
     row = flatten(before)[assembly]
-    assert row['fabrication_finished'] and row['progress']['percent'] == 100
+    assert row['fabrication_finished'] and row['progress']['percent'] == 100, row['blockers']
     assert row['progress']['total'] == 6 and row['progress']['completed'] == 6
+    assert row['flow_stage']['key'] == 'ready_to_ship'
+    assert row['flow_stage']['color'] == 'green'
+    children = row['children']
+    assert children and all(child['flow_stage']['key'] == 'ready_to_ship' for child in children)
+    assert all(child['flow_stage']['source_item_id'] == assembly and child['flow_stage']['inherited'] for child in children)
+    assert all(child['progress']['total'] == 8 for child in children)
     assert len(row['steps']) == 8
-    shipping = next(stage for stage in row['stages'] if stage['key'] == 'shipping')
+    shipping = next(stage for stage in row['stages'] if stage['key'] == 'ready_to_ship')
     assert shipping['current'] == 1 and shipping['completed'] == 0
     assert before['summary']['total_steps'] == 14
     advance(api, assembly)
@@ -239,9 +260,37 @@ def test_quality_failure_resets_downstream_steps_and_marks_actual_exception(api)
     row = node(api, assembly)
     assert row['progress']['completed'] == 1 and row['progress']['percent'] == 16.7
     assert row['current_step'] == 18 and row['steps'][1]['state'] == 'current'
+    assert row['flow_stage']['key'] == 'testing' and row['flow_stage']['color'] == 'orange'
+    assert row['flow_stage']['blocked']
+    assert all(child['flow_stage']['color'] != 'green' for child in row['children'])
     assert all(step['state'] == 'pending' for step in row['steps'][2:])
     assert row['on_hold'] and row['hold_reasons'] and not row['fabrication_finished']
     assert report(api)['summary']['on_hold'] >= 1
+
+
+def test_shipping_document_gate_prevents_green_in_both_flow_and_progress(api, monkeypatch):
+    from test_quality import workspace, create_requirement
+    ok(api.post('/api/tracking/projects', {'id': PROJECT, 'name': 'Local shipping color fixture'}), 201)
+    enroll_project_as_order(api)
+    assembly = assembly_at_step(api, 23)
+    before = node(api, assembly)
+    assert before['flow_stage']['color'] == 'green'
+    quality = workspace(api, project_id=PROJECT)['workspace']['id']
+    create_requirement(api, quality, gate='shipment')
+    module = importlib.import_module('production_progress')
+    original, checked = module.flow_stage_for_item, []
+
+    def counted(session, item, **kwargs):
+        checked.append(item.id)
+        return original(session, item, **kwargs)
+
+    monkeypatch.setattr(module, 'flow_stage_for_item', counted)
+    current = node(api, assembly)
+    assert checked == [assembly], 'Only the candidate shipping assembly needs extra gate reads'
+    assert current['flow_stage']['key'] == 'qa_004' and current['flow_stage']['blocked']
+    assert flow_detail(api, assembly)['flow_stage'] == current['flow_stage']
+    assert all(child['flow_stage']['color'] != 'green' for child in current['children'])
+    assert current['progress'] == before['progress']
 
 
 @pytest.mark.parametrize('action', ['fail', 'reopen', 'admin_return_to_work'])
@@ -270,6 +319,7 @@ def test_admin_release_and_numeric_position_do_not_supply_work_evidence(api):
     after = node(api, spool)
     assert after['administrative_release']
     assert after['progress']['completed'] == 0 and not after['fabrication_finished']
+    assert after['flow_stage']['key'] != 'ready_to_ship' and after['flow_stage']['color'] != 'green'
 
 
 def test_legacy_part_with_structured_spool_plan_uses_its_actual_scope(api):
@@ -290,7 +340,8 @@ def test_scope_uses_canonical_plan_and_component_parent_over_stale_item_labels(a
     spool = create_item(api, 'SCOPE-SPOOL', kind='Spool', project=first)
     part = create_item(api, 'SCOPE-PART', project=first)
     other = create_item(api, 'SCOPE-OTHER', project=second)
-    enroll(api, spool, 'spool', expected_children=1)
+    # Model legacy labels before receipt approval. Once MTR/arrival evidence
+    # exists its purchase-order identity is protected by the receiving guard.
     enroll(api, part, 'component', start_step=5)
     assign_component(api, part, spool)
     with api.session_factory() as session:

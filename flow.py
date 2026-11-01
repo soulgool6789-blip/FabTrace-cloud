@@ -19,10 +19,11 @@ from permissions import flow_step_roles
 from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
     _production_complete, _requirement_satisfied, _reset_requirements,
     tracking_release_errors)
+from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES, position_stage, inherit_stage
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
-VERSION = 'CLM-24-v2'
+VERSION = 'CLM-24-v3'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
@@ -38,8 +39,9 @@ QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 19: 'QA-004', 22: 'QA-005'}
 def _step(number, title, section, checks):
     route = 'component' if number <= 8 else 'spool' if number <= 16 else 'assembly'
     return {
-        'number': number, 'title': (QA_CODES[number] + '-' + title if number in QA_CODES else title),
-        'qa_code': QA_CODES.get(number), 'route': route, 'section': section,
+        'number': number, 'title': (QA_DISPLAY_CODES[number] + ' · ' + title if number in QA_DISPLAY_CODES else title),
+        'qa_code': QA_CODES.get(number), 'display_qa_code': QA_DISPLAY_CODES.get(number),
+        'flow_stage_key': STAGE_BY_STEP[number], 'route': route, 'section': section,
         'roles': list(flow_step_roles(number)),
         'checks': [{'id': f's{number}_{index}', 'label': label} for index, label in enumerate(checks, 1)],
         'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 20, 23, 24),
@@ -550,6 +552,64 @@ def _step_states(s, plan):
     return list(states.values())
 
 
+def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None):
+    """Read-only status for boards, parts and material registers.
+
+This helper deliberately does not call parts/project projections: those views
+also use it. Completed children can follow only a valid, active parent chain.
+"""
+    from administration import release_summary
+    from order_spools import effective_parent_id
+    from removals import item_is_removed
+    from spool_receiving import receiving_summary
+
+    seen = set(seen or ())
+    plan = plan if plan is not None else s.get(FlowPlan, item.id)
+    route = plan.route if plan else ('assembly' if item.kind == 'Assembly' else
+            'spool' if item.kind == 'Spool' or s.get(SpoolPlan, item.id) else 'component')
+    arrival = receiving if receiving is not None else receiving_summary(s, item)
+    override = release_summary(s, item)['active_override']
+    blocked = bool(_physical_hold_errors(s, item)
+                   or _exceptions(s, item.id, True) or override
+                   or arrival.get('required') and not arrival.get('can_proceed'))
+    if plan and plan.current_step in (23, 24) and not item.released:
+        blocked = True
+    if plan and route == 'assembly' and (plan.current_step in (23, 24)
+                                        or plan.status in ('shipped', 'delivered')):
+        # A late defect on a prepared part does not necessarily rewrite the
+        # ancestor's release flag. Use the real descendant gates before showing
+        # green, including on completed children that inherit this status.
+        blocked = blocked or bool(_assembly_errors(s, item, plan) or tracking_release_errors(s, item))
+        if not blocked and plan.status == 'active':
+            blocked = bool(_step_errors(s, item, plan, quality_for_update=False))
+    own = position_stage(item.id, route, plan.current_step if plan else None,
+                         plan.status if plan else 'not_started', arrival, blocked=blocked)
+    if item.id in seen or blocked or not plan or plan.status != 'completed':
+        return own
+    seen.add(item.id)
+    if route == 'component':
+        completed = {step['number'] for step in _step_states(s, plan) if step['status'] == 'completed'}
+        if not {7, 8}.issubset(completed):
+            return own
+        link = s.get(ComponentLink, item.id)
+        parent_id = link.spool_id if link else None
+        expected_route = 'spool'
+    elif route == 'spool' and item.released:
+        parent_id = effective_parent_id(s, item.id)
+        expected_route = 'assembly'
+    else:
+        return own
+    parent = s.get(Item, parent_id) if parent_id and parent_id not in seen else None
+    parent_plan = s.get(FlowPlan, parent.id) if parent else None
+    if (not parent or not parent_plan or parent_plan.route != expected_route
+            or parent_plan.status not in ('active', 'completed', 'shipped', 'delivered')
+            or item_is_removed(s, parent.id) or _project(s, parent)[0] != _project(s, item)[0]):
+        return own
+    if route == 'component' and item.project != _project(s, parent)[0]:
+        return own
+    return inherit_stage(own, flow_stage_for_item(s, parent, plan=parent_plan, seen=seen), eligible=True)
+
+
 def _summary(s, item, plan=None):
     from production import compact_process_summary, process_snapshot
     plan = plan if plan is not None else s.get(FlowPlan, item.id)
@@ -558,6 +618,7 @@ def _summary(s, item, plan=None):
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
         'current_title': STEP_BY_NUMBER[plan.current_step]['title'] if plan and plan.current_step else '',
+        'flow_stage': flow_stage_for_item(s, item, plan=plan),
         'step_entered_at': _utc(plan.step_entered_at).isoformat() if plan and plan.step_entered_at else None,
         'version': plan.version if plan else 0, 'project_id': project_id, 'subproject_id': subproject_id,
         'released': bool(item.released), 'open_exceptions': len(_exceptions(s, item.id, True)) if plan else 0,
@@ -611,6 +672,7 @@ def detail(s, item, user):
     return {
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'receiving': receiving_summary(s, item, user),
+        'flow_stage': flow_stage_for_item(s, item, plan=plan),
         **({'parts': parts} if parts else {}),
         'order_scope': order_scope(s, item.id),
         'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
@@ -634,7 +696,7 @@ def detail(s, item, user):
 
 @router.get('/catalog')
 def catalog(u: Employee = Depends(auth)):
-    return {'version': VERSION, 'steps': STEPS, 'routes': ROUTES}
+    return {'version': VERSION, 'steps': STEPS, 'routes': ROUTES, 'stage_catalog': STAGES}
 
 
 @router.get('/items')

@@ -13,24 +13,15 @@ from sqlalchemy.orm import Session
 
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import SpoolPlan, TrackingHold
-from flow import FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER
+from flow import FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER, flow_stage_for_item
 from orders import PurchaseOrder, OrderGpn, OrderAssembly, read_snapshot
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
 from order_setup import requirements_by_gpn
+from flow_stages import STAGES, STAGE_BY_STEP, position_stage, inherit_stage
 
 
 router = APIRouter(prefix='/api/progress', tags=['P.O. production progress'])
-STAGES = (
-    {'key': 'inventory', 'label': 'Inventory', 'steps': list(range(1, 5))},
-    {'key': 'preparation', 'label': 'Prep', 'steps': list(range(5, 9))},
-    {'key': 'fit_up', 'label': 'Fit-up', 'steps': list(range(9, 13))},
-    {'key': 'welding', 'label': 'Welding', 'steps': list(range(13, 17))},
-    {'key': 'assembly', 'label': 'Assembly', 'steps': list(range(17, 20))},
-    {'key': 'finish', 'label': 'Finish', 'steps': list(range(20, 23))},
-    {'key': 'shipping', 'label': 'Shipping', 'steps': [23, 24], 'separate': True},
-)
-STAGE_BY_STEP = {number: stage['key'] for stage in STAGES for number in stage['steps']}
 DEFINITIONS = {
     'recorded_progress': 'Current recorded fabrication steps through step 22, weighted by each unique physical item. Shipping steps 23–24 and delivery are separate.',
     'expected_steps': 'Parts and spools each have eight applicable fabrication steps; assemblies have six through final inspection. A route that has not started contributes no completed steps.',
@@ -39,6 +30,8 @@ DEFINITIONS = {
     'baseline': 'Earlier steps adopted with a historical baseline remain not recorded. Rework and return events reset downstream recorded steps.',
     'holds': 'Hold indicators describe current item holds, tracking holds, open rework or process exceptions. Other readiness warnings are shown separately.',
     'routes': 'A part follows preparation, a spool follows fabrication, and an assembly follows final assembly/finish. Parent work is not credited to a child’s own route.',
+    'flow_colors': 'Text colors show current work position. A completed child can follow its linked parent; its own recorded-step percentage and quality history stay separate. QA checkpoints retain the preceding work-stage color.',
+    'testing': 'Testing includes assembly collection and dimensional inspection, with the existing required test/evidence gates retained before coating.',
 }
 COUNT_KEYS = ('items', 'parts', 'spools', 'assemblies', 'finished', 'wip', 'on_hold',
               'planning_needed', 'completed_steps', 'total_steps', 'not_recorded_steps',
@@ -111,9 +104,12 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
         total = len(selected)
         completed = sum(step['state'] == 'completed' for step in selected)
         current = sum(step['state'] == 'current' for step in selected)
-        missing = summary['missing_parts'] if stage['key'] in ('inventory', 'preparation') else (
-            summary['missing_spools'] if stage['key'] in ('fit_up', 'welding') else (
-                summary['missing_assemblies'] if stage['key'] in ('assembly', 'finish') else 0))
+        # Prep/Fabrication spans component preparation and spool fit-up, so both
+        # missing physical scopes must remain visible in the combined stage.
+        missing = (summary['missing_parts'] if stage['key'] in ('inventory', 'qa_001') else
+                   summary['missing_parts'] + summary['missing_spools'] if stage['key'] == 'preparation' else
+                   summary['missing_spools'] if stage['key'] in ('qa_002', 'floor', 'welding', 'qa_003') else
+                   summary['missing_assemblies'] if stage['key'] in ('testing', 'paint', 'qa_004') else 0)
         unrecorded = sum(step['state'] == 'not_recorded' for step in selected)
         unknown = bool((summary['undeclared_scope'] or summary['missing_spools'] or not summary['items'])
                        and stage['steps'][0] <= last_applicable_step)
@@ -121,9 +117,10 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
                  'current' if current else 'not_recorded' if total and unrecorded == total else
                  'pending' if total or missing else 'scope_unknown' if unknown else 'not_applicable')
         result.append({'key': stage['key'], 'label': stage['label'], 'completed': completed,
+            'color': stage['color'], 'color_label': stage['color_label'], 'qa': stage['qa'],
             'total': total, 'not_recorded': unrecorded, 'current': current,
             'state': state, 'percent': round(completed / total * 100, 1) if total else None,
-            'missing_records': missing, 'separate': stage['key'] == 'shipping'})
+            'missing_records': missing, 'separate': stage['separate']})
     return result
 
 
@@ -188,6 +185,11 @@ def _tree(s, selected_project_id=''):
             'parent_id': row['parent_id'], 'location': item.location, 'handler': item.handler,
             'handler_name': staff.get(item.handler, item.handler),
             'current_step': row['current_step'], 'current_title': row['current_title'],
+            'flow_stage': position_stage(identifier, route, row['current_step'], row['flow_status'],
+                row.get('receiving'), blocked=bool(reasons
+                    or row['administrative_release'] or (row.get('receiving') or {}).get('required')
+                    and not (row.get('receiving') or {}).get('can_proceed')
+                    or row['current_step'] in (23, 24) and not row['fabrication_finished'])),
             'status': row['status'], 'fabrication_finished': row['fabrication_finished'],
             'on_hold': bool(reasons), 'hold_reasons': reasons, 'blockers': row['blockers'],
             'receiving': row.get('receiving'),
@@ -206,6 +208,13 @@ def _tree(s, selected_project_id=''):
                 'total_steps': len(fabrication), 'not_recorded_steps': unrecorded,
                 'shipped': int(row['flow_status'] in ('shipped', 'delivered')),
                 'delivered': int(row['flow_status'] == 'delivered')}}
+        if route == 'assembly' and (row['current_step'] in (23, 24)
+                                    or row['flow_status'] in ('shipped', 'delivered')):
+            # Check authoritative shipping readiness once per candidate assembly,
+            # not once per descendant part. Optional project/packet gates and a
+            # late child defect must give the same color in every workspace.
+            nodes[identifier]['flow_stage'] = flow_stage_for_item(
+                s, item, plan=flow, receiving=row.get('receiving'))
 
     # Keep every physical ID in exactly one tree. Contradictory/cyclic legacy
     # links are displayed as unassigned scope warnings rather than duplicated.
@@ -231,6 +240,30 @@ def _tree(s, selected_project_id=''):
         nodes[identifier]['_counts']['undeclared_scope'] += 1
     for identifier, parent_id in parents.items():
         nodes[parent_id]['children'].append(nodes[identifier])
+
+    # Resolve parent colors from the already-loaded tree. No per-node reads and
+    # no credit to child step counts, timestamps or approvals are introduced.
+    resolved_stages = set()
+
+    def resolve_stage(identifier):
+        node = nodes[identifier]
+        if identifier in resolved_stages:
+            return node['flow_stage']
+        resolved_stages.add(identifier)
+        parent = nodes.get(parents.get(identifier))
+        expected = 'spool' if node['route'] == 'component' else 'assembly' if node['route'] == 'spool' else None
+        completed = {step['number'] for step in node['steps'] if step['state'] == 'completed'}
+        eligible = bool(parent and parent['route'] == expected
+            and node['flow_status'] == 'completed' and node['fabrication_finished']
+            and not node['administrative_release'] and not node['on_hold']
+            and (node['route'] != 'component' or {7, 8}.issubset(completed))
+            and parent['flow_status'] in ('active', 'completed', 'shipped', 'delivered'))
+        if eligible:
+            node['flow_stage'] = inherit_stage(node['flow_stage'], resolve_stage(parent['id']), eligible=True)
+        return node['flow_stage']
+
+    for identifier in nodes:
+        resolve_stage(identifier)
     for identifier, node in nodes.items():
         node['children'].sort(key=lambda child: (child['route'], child['id']))
         plan, flow = plans.get(identifier), flows.get(identifier)

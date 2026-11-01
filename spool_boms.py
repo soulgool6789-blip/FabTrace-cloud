@@ -433,10 +433,19 @@ def _spool(s, item_id):
 
 def _spool_detail(s, item_id, user):
     from spool_receiving import _physical_summary, mtr_detail, material_qa_states
+    from flow import flow_stage_for_item
+    from flow_stages import stage_status
     state = physical_bom_state(s, item_id)
     item, trace, definition, context = (state[key] for key in ('item', 'trace', 'definition', 'context'))
     qa = material_qa_states(s, state, user)
-    materials = [{**row, 'qa001': qa[row['piece_key']]} for row in state['materials']]
+    arrival = _physical_summary(s, item, user, history=True)
+    flow_stage = flow_stage_for_item(s, item, receiving=arrival)
+    # Presentation only: saved material/evidence fingerprints remain independent
+    # of production movement. Each piece keeps its own incoming QA status.
+    materials = [{**row, 'qa001': qa[row['piece_key']],
+                  'flow_stage': (dict(flow_stage) if qa[row['piece_key']]['can_proceed']
+                                 else stage_status('qa_001', item.id))}
+                 for row in state['materials']]
     from order_spools import spool_qr_identity
     qr = spool_qr_identity(s, item.id)
     display_context = {**context, 'qr_alias': qr.display_code if qr else None,
@@ -449,7 +458,8 @@ def _spool_detail(s, item_id, user):
     base = definition or {'spool_number': context['spool_number'], 'revision': '', 'lines': [],
                            'line_count': 0, 'total_pieces': None, 'traceable': False}
     return {**base, 'context': display_context, 'bom_available': definition is not None,
-        'source_status': source_status, 'arrival': _physical_summary(s, item, user, history=True),
+        'flow_stage': flow_stage,
+        'source_status': source_status, 'arrival': arrival,
         'mtr_documents': mtr_detail(s, item, user), 'traceability': {
         'configured': trace is not None, 'version': trace.version if trace else 0,
         'editable': bool(_can_edit(user) and not locked and definition and definition.get('traceable', True)

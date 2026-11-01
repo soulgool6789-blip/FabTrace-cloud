@@ -315,6 +315,7 @@ def parts_basis(s, spool_id):
 
 def _detail(s, item, spool_plan, user):
     from removals import item_is_removed, item_not_removed, removal_summary
+    from flow import flow_stage_for_item
     active = not item_is_removed(s, item.id)
     cfg = s.get(SpoolPartsPlan, item.id)
     project = s.get(Project, spool_plan.project_id)
@@ -339,10 +340,25 @@ def _detail(s, item, spool_plan, user):
         for line in snapshot.get('lines', []):
             for component in line.get('components', []):
                 component['can_remove'] = False
+    # Add live colors at the UI boundary only; quantities, release checks and
+    # material/dossier evidence must not depend on a changing display stage.
+    stage_cache = {}
+
+    def with_stage(component):
+        identifier = component['id']
+        if identifier not in stage_cache:
+            stage_cache[identifier] = flow_stage_for_item(s, s.get(Item, identifier))
+        return {**component, 'flow_stage': stage_cache[identifier]}
+
+    presentation = {**snapshot,
+        'lines': [{**line, 'components': [with_stage(c) for c in line.get('components', [])]}
+                  for line in snapshot.get('lines', [])],
+        'unallocated_components': [with_stage(c) for c in snapshot.get('unallocated_components', [])]}
     return {'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'item': {'id': item.id, 'description': item.description, 'google_part_number': item.google_part_number,
+                    'flow_stage': flow_stage_for_item(s, item),
                     'project_id': spool_plan.project_id, 'project_name': project.name if project else '', 'subproject_id': spool_plan.subproject_id},
-        **snapshot, 'permissions': {'can_manage': active and has_capability(user, 'manage_production'),
+        **presentation, 'permissions': {'can_manage': active and has_capability(user, 'manage_production'),
                                   'can_allocate': active and has_capability(user, 'allocate_parts'), 'can_mutate': active},
         'candidates': candidates, 'definitions': DEFINITIONS,
         'events': [_row(event) for event in s.scalars(select(PartEvent).where(PartEvent.spool_id == item.id).order_by(PartEvent.sequence.desc()).limit(100))] if cfg else []}
@@ -394,6 +410,7 @@ def _commit(s):
 
 @router.get('/spools')
 def list_spools(project_id: str = Query('', max_length=80), user: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import flow_stage_for_item
     from removals import item_not_removed, project_not_removed
     query = select(Item, SpoolPlan).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(
         Item.kind != 'Assembly', item_not_removed(), project_not_removed(SpoolPlan.project_id))
@@ -405,6 +422,7 @@ def list_spools(project_id: str = Query('', max_length=80), user: Employee = Dep
         snapshot = parts_snapshot(s, item.id)
         reason = _edit_reason(s, item, plan)
         items.append({'item_id': item.id, 'description': item.description, 'project_id': plan.project_id,
+            'flow_stage': flow_stage_for_item(s, item),
             'project_name': project.name if project else '', 'subproject_id': plan.subproject_id,
             'configured': bool(snapshot), 'version': snapshot['version'] if snapshot else 0,
             'totals': snapshot['totals'] if snapshot else _counts(), 'editable': not reason, 'locked_reason': reason})

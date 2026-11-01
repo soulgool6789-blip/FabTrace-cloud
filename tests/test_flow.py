@@ -131,13 +131,13 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     steps = definition["steps"]
     assert [row["number"] for row in steps] == list(range(1, 25))
     assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 19, 22}
-    assert definition['version'] == 'CLM-24-v2'
+    assert definition['version'] == 'CLM-24-v3'
     assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
-        (2, 'QA-001', 'QA-001-Check Dimensions'),
-        (11, 'QA-002', 'QA-002-Check Dimensions'),
-        (15, 'QA-003', 'QA-003-Inspect Welds'),
-        (19, 'QA-004', 'QA-004-Assembly Inspection'),
-        (22, 'QA-005', 'QA-005-Final Inspection'),
+        (2, 'QA-001', 'QA/QC-001 · Check Dimensions'),
+        (11, 'QA-002', 'QA/QC-002 · Check Dimensions'),
+        (15, 'QA-003', 'QA/QC-003 · Inspect Welds'),
+        (19, 'QA-004', 'Assembly Inspection'),
+        (22, 'QA-005', 'QA/QC-004 · Final Inspection'),
     ]
     assert all(row['qa_code'] is None for row in steps if not row['qa'])
     assert [(row["id"], row["first_step"], row["last_step"]) for row in definition["routes"]] == [
@@ -168,11 +168,11 @@ def test_numbered_qa_titles_do_not_rewrite_historical_definitions(api, monkeypat
     assert retained[0]['data']['step_definition']['title'] == 'Check Dimensions'
     current = detail(api, item_id)
     assert current['events'] == retained
-    assert current['flow']['current']['title'] == 'QA-001-Check Dimensions'
+    assert current['flow']['current']['title'] == 'QA/QC-001 · Check Dimensions'
     assert current['flow']['current']['checks'] == legacy['checks']
     progressed = advance(api, item_id, role='inspector')
     newer = next(row for row in progressed['events'] if row['action'] == 'advance')
-    assert newer['data']['definition_version'] == 'CLM-24-v2'
+    assert newer['data']['definition_version'] == 'CLM-24-v3'
     assert newer['data']['step_definition']['qa_code'] == 'QA-001'
     assert next(row for row in progressed['events'] if row['sequence'] == retained[0]['sequence']) == retained[0]
 
@@ -201,9 +201,27 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
     enroll(api, component, "component")
     enroll(api, spool_id, "spool", expected_children=1)
     enroll(api, assembly, "assembly", expected_children=1)
+    expected_stages = {
+        1: ('inventory', 'black'), 2: ('qa_001', 'black'),
+        3: ('qa_001', 'black'), 4: ('qa_001', 'black'),
+        **{n: ('preparation', 'red') for n in range(5, 11)},
+        11: ('qa_002', 'red'), 12: ('floor', 'yellow'),
+        13: ('welding', 'blue'), 14: ('welding', 'blue'),
+        15: ('qa_003', 'blue'), 16: ('qa_003', 'blue'),
+        **{n: ('testing', 'orange') for n in (17, 18, 19)},
+        20: ('paint', 'pink'), 21: ('paint', 'pink'), 22: ('qa_004', 'pink'),
+        23: ('ready_to_ship', 'green'), 24: ('ready_to_ship', 'green'),
+    }
+
+    def assert_stage(item_id, step, source=None):
+        value = detail(api, item_id)['flow_stage']
+        assert (value['key'], value['color']) == expected_stages[step]
+        assert value['source_item_id'] == (source or item_id), value
+        assert value['inherited'] is bool(source)
 
     for step in range(1, 9):
         assert_current(detail(api, component), step)
+        assert_stage(component, step)
         if step == 5:
             assign_component(api, component, spool_id)
         advance(api, component, role="inspector" if step == 2 else "admin", **({"target_spool_id": spool_id} if step == 5 else {}))
@@ -213,6 +231,8 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
 
     for step in range(9, 17):
         assert_current(detail(api, spool_id), step)
+        assert_stage(spool_id, step)
+        assert_stage(component, step, spool_id)
         if step == 10:
             ready_to_weld(api, spool_id, weld["id"])
         if step == 11:
@@ -229,10 +249,15 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
     assert spool_done["item"]["id"] == spool_id
     assert len(spool_done["components"]) == 1
     assert spool_done["components"][0]["item_id"] == component
+    assert spool_done['flow_stage']['key'] == 'qa_003'
+    assert spool_done['flow_stage']['color'] == 'blue'
 
     link_spool(api, assembly, spool_id)
     for step in range(17, 25):
         assert_current(detail(api, assembly), step)
+        assert_stage(assembly, step)
+        assert_stage(spool_id, step, assembly)
+        assert_stage(component, step, assembly)
         if step in (19, 22):
             inspect_dimensions(api, assembly)
         advance(api, assembly, role="inspector" if step in (19, 22) else "admin")
@@ -685,6 +710,8 @@ def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shi
     before = detail(api, assembly)
     assert_current(before, 24)
     assert before["item"]["released"] is True
+    assert before['flow_stage']['key'] == 'ready_to_ship', before['flow']['blockers']
+    assert detail(api, spool_id)['flow_stage']['color'] == 'green'
     opened = api.post(f"/api/items/{component}/rework", {
         "kind": "Material", "reason": "Late material nonconformance identified before shipment",
         "assigned": BADGES["welder"],
@@ -697,6 +724,9 @@ def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shi
         assert_current(after, 24)
         assert after["flow"]["shipped_at"] is None
         assert after["events"] == before["events"]
+        assert after['flow_stage']['key'] == 'qa_004' and after['flow_stage']['blocked']
+        assert detail(api, spool_id)['flow_stage']['color'] != 'green'
+        assert detail(api, component)['flow_stage']['color'] != 'green'
 
 
 def test_scope_correction_is_versioned_audited_and_cannot_remove_linked_children_or_restart_time(api):

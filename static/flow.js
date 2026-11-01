@@ -5,6 +5,8 @@
   const arr=value=>Array.isArray(value)?value:[], num=value=>Number.isFinite(Number(value))?Number(value):0;
   const stamp=value=>value?new Date(value).toLocaleString():'—';
   const roles={admin:'Administrator',supervisor:'Supervisor',handler:'Material coordinator',welder:'Welder',fitup_welder:'Fit-up welder',process_welder:'Process welder',inspector:'QA/QC',painter:'Painter',finisher:'Finisher',misc:'Miscellaneous / support'};
+  const flowStatus=()=>window.FabFlowStatus;
+  const stageBadge=value=>flowStatus()?.badge(value)||'';
   const routeNames={component:'Component',spool:'Spool',assembly:'Assembly'};
   const statusNames={admin_released:'Administrative release',not_started:'Not started',active:'In progress',completed:'Route complete',shipped:'Shipped',delivered:'Delivered',rework:'Needs rework'};
   const stepStatusNames={pending:'Upcoming',current:'Current step',completed:'Completed',not_recorded:'Not recorded',rework:'Needs reinspection',other_route:'Linked record'};
@@ -22,7 +24,7 @@
   let clockTimer=null;
   const removed=()=>state.detail?.removal?.removed===true||state.detail?.item?.removal?.removed===true;
   const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action);
-  const action=(name,label,id='',className='')=>`<button type="button" class="${esc(className)}" data-flow-action="${esc(name)}"${id?` data-flow-id="${esc(id)}"`:''}>${esc(label)}</button>`;
+  const action=(name,label,id='',className='',stage=null)=>`<button type="button" class="${esc(className)}" data-flow-action="${esc(name)}"${id?` data-flow-id="${esc(id)}"`:''}>${stage&&flowStatus()?flowStatus().text(stage,label):esc(label)}</button>`;
   const option=(value,label,selected='')=>`<option value="${esc(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
   const secondary=text=>`<span class="ff-secondary">${esc(text)}</span>`;
   const tag=(status,label='')=>`<span class="ff-tag ${esc(status)}">${esc(label||statusNames[status]||status)}</span>`;
@@ -114,8 +116,8 @@
     }finally{if(sequence===state.sequence)node('flowContent').setAttribute('aria-busy','false')}
   }
   async function refresh(){await load()}
-  function heading(title,description,controls=''){
-    return `<div class="ff-head"><div><div class="ff-eyebrow">CLM fabrication · Track. Verify. Build. Deliver.</div><h1>${esc(title)}</h1><p>${esc(description)}</p></div><div class="actions">${controls}${action('refresh','Refresh')}</div></div>`;
+  function heading(title,description,controls='',stage=null){
+    return `<div class="ff-head"><div><div class="ff-eyebrow">CLM fabrication · Track. Verify. Build. Deliver.</div><h1>${stage&&flowStatus()?flowStatus().text(stage,title):esc(title)}</h1><p>${esc(description)}</p></div><div class="actions">${controls}${action('refresh','Refresh')}</div></div>`;
   }
   function lookup(){
     return '<form id="flowLookupForm" class="ff-lookup"><div class="field"><label for="flowLookup">Scan or enter item ID</label><input id="flowLookup" name="item" required autocomplete="off" placeholder="Component, spool, or assembly ID"></div><button type="submit" class="primary">Open record</button><p class="ff-help">Use a barcode scanner, type the ID, or paste a FabTrace QR link. A phone QR opens the item record, where Process flow is available.</p></form>';
@@ -140,9 +142,9 @@
   }
   function renderBoard(){
     const rows=visibleItems();
-    let html=heading('Fabrication process flow','Follow the 24 steps from received material through delivery. Each physical component, spool, and assembly keeps its own record.')+lookup()+filters()+counts(rows);
+    let html=heading('Fabrication process flow','Follow each part from Inventory through Ready To Ship. Open a record to complete its production steps and QA/QC checks.')+(flowStatus()?.strip(state.catalog.stage_catalog)||'')+(flowStatus()?.legend()||'')+lookup()+filters()+counts(rows);
     html+=`<section class="card"><div class="ff-section-head"><h2>Production board</h2><span class="muted">${rows.length} matching records</span></div>`;
-    html+=rows.length?table(`<table class="ff-table"><thead><tr><th>Item / route</th><th>Project</th><th>Current step</th><th>Time in process</th><th>Status</th><th>Attention</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${action('item',row.item_id,row.item_id,'ff-link')}${secondary(routeNames[row.route]||row.route)}</td><td>${esc(row.project_id||'Unassigned')}${secondary(row.subproject_id||'')}</td><td>${row.current_step?`<strong>${esc(row.current_step)} · ${esc(row.current_title)}</strong>`:'<span class="muted">Route finished</span>'}</td><td>${timingCell(row)}</td><td>${tag(displayStatus(row))}</td><td>${num(row.open_exceptions)?`${num(row.open_exceptions)} open exception${num(row.open_exceptions)===1?'':'s'}`:arr(row.blockers).length?esc(row.blockers[0]):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table>`):empty('No matching process records',state.board.length?'Clear the filters or choose another project.':'Open an existing item above. An administrator or supervisor can start its component, spool, or assembly route.');
+    html+=rows.length?table(`<table class="ff-table"><thead><tr><th>Item / route</th><th>Project</th><th>Flow status / current step</th><th>Time in process</th><th>Status</th><th>Attention</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${action('item',row.item_id,row.item_id,'ff-link',row.flow_stage)}${secondary(routeNames[row.route]||row.route)}</td><td>${esc(row.project_id||'Unassigned')}${secondary(row.subproject_id||'')}</td><td><div class="ff-stage-label">${stageBadge(row.flow_stage)}</div>${row.current_step?`<strong>${esc(row.current_step)} · ${esc(row.current_title)}</strong>`:'<span class="muted">Route finished</span>'}</td><td>${timingCell(row)}</td><td>${tag(displayStatus(row))}</td><td>${num(row.open_exceptions)?`${num(row.open_exceptions)} open exception${num(row.open_exceptions)===1?'':'s'}`:arr(row.blockers).length?esc(row.blockers[0]):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table>`):empty('No matching process records',state.board.length?'Clear the filters or choose another project.':'Open an existing item above. An administrator or supervisor can start its component, spool, or assembly route.');
     html+='</section><section class="card"><div class="ff-section-head"><h2>The 24-step fabrication flow</h2><span class="muted">Select a step to filter the board</span></div><p class="ff-footer-note">Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Linked records connect the material history to the finished assembly.</p>'+renderMap(false)+'</section>';
     return html;
   }
@@ -220,7 +222,7 @@
     return html+'</section>';
   }
   function childCard(child){
-    return `<div class="ff-family">${action('item',child.item_id,child.item_id,'ff-link')}${tag(displayStatus(child))}${child.current_step?`<p>${esc(child.current_step)} · ${esc(child.current_title)}</p>`:''}</div>`;
+    return `<div class="ff-family">${action('item',child.item_id,child.item_id,'ff-link',child.flow_stage)}${stageBadge(child.flow_stage)}${tag(displayStatus(child))}${child.current_step?`<p>${esc(child.current_step)} · ${esc(child.current_title)}</p>`:''}</div>`;
   }
   function family(){
     const detail=state.detail,flow=detail.flow,components=arr(detail.components),spools=arr(detail.spools),orderedAssembly=flow.route==='assembly'&&detail.order_scope?.assembly_id===detail.item.id;
@@ -255,7 +257,7 @@
     if(me?.role==='admin'&&!removed())controls+=action('admin-controls','Admin controls',item.id);
     if(['spool','assembly'].includes(flow?.route||detail.suggested_route)||['Spool','Assembly'].includes(item.kind))controls+=action('weld-record','Individual welds',item.id);
     if((flow?.route||detail.suggested_route)==='spool'||item.kind==='Spool')controls+=action('spool-parts','Spool parts',item.id);
-    let html=heading(item.id,item.kind||'Fabrication item',controls)+lookup();
+    let html=heading(item.id,item.kind||'Fabrication item',controls,detail.flow_stage)+(flowStatus()?.strip(state.catalog.stage_catalog,detail.flow_stage)||'')+(flowStatus()?.legend()||'')+lookup();
     if(removed())html+='<div class="fr-removed-notice"><strong>Removed record · History only</strong><p>Its process route, checks and timing are retained. Open Item &amp; QR record to review or restore its removed group.</p></div>';
     if(state.notice)html+=`<div class="ff-error" role="alert">${esc(state.notice)}</div>`;
     if(!flow){

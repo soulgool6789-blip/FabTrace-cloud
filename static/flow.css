@@ -28,6 +28,8 @@
 #flowPage .ff-link:hover{text-decoration:underline;filter:none}
 #flowPage .ff-table th{white-space:nowrap}
 #flowPage .ff-table td{vertical-align:middle}
+#flowPage .ff-stage-label{margin:0 0 5px}
+#flowPage .ff-family>.fst-stage{margin:4px 6px}
 #flowPage .ff-table{min-width:800px}
 #flowPage .ff-clock{font-variant-numeric:tabular-nums;white-space:nowrap}
 #flowPage .ff-empty{padding:25px 18px;border:1px dashed #bfced9;border-radius:9px;background:#f8fbfd;color:var(--ff-muted);text-align:center}
