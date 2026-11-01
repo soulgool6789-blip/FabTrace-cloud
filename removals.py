@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from read_projection import read_cached
 
 from main import Audit, Base, Employee, Item, audit, auth, db, permit, utcnow
 from tracking import Project, SpoolPlan, new_id
@@ -75,6 +76,7 @@ def _values(row):
             for column in row.__table__.columns for value in (getattr(row, column.name),)}
 
 
+@read_cached(lambda s, kind, record_id: (kind, record_id))
 def _state(s, kind, record_id):
     return s.scalar(select(RecordRemoval).where(RecordRemoval.kind == kind,
         RecordRemoval.record_id == record_id).execution_options(populate_existing=True))
@@ -123,6 +125,7 @@ def gpn_is_removed(s, gpn_id):
     return bool(state and state.removed)
 
 
+@read_cached(lambda s, item_id: item_id)
 def _parents(s, item_id):
     from parts import PartAllocation, PartLine
     from order_spools import registered_spool
@@ -179,6 +182,7 @@ def require_active_gpn(s, gpn_id):
         require_active_project(s, group.project_id)
 
 
+@read_cached(lambda s, item_id: item_id)
 def require_active_item(s, item_id):
     seen, pending = set(), [item_id]
     while pending:

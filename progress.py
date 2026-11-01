@@ -11,6 +11,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from read_projection import read_response
 
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import (Project, Subproject, SpoolPlan, Weld, WeldRequirement,
@@ -286,6 +287,7 @@ def _configured(s):
 
 
 @router.get('/projects')
+@read_response
 def projects(user: Employee = Depends(auth), s: Session = Depends(db)):
     from removals import item_not_removed, project_not_removed
     projects = s.scalars(select(Project).where(project_not_removed(Project.id)).order_by(Project.id)).all()
@@ -297,6 +299,7 @@ def projects(user: Employee = Depends(auth), s: Session = Depends(db)):
 
 
 @router.get('/projects/{project_id}')
+@read_response
 def project_progress(project_id: str,
     status: Literal['all', 'wip', 'finished', 'shipped', 'delivered'] = 'all',
     subproject_id: str = '', kind: Literal['all', 'component', 'spool', 'assembly', 'unplanned'] = 'all',

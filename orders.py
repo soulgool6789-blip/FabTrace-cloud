@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from read_projection import read_projection
 
 from main import Audit, Base, Employee, Item, audit, auth, db, lock_item, permit, utcnow
 from tracking import Project, SpoolPlan, new_id
@@ -197,7 +198,8 @@ def read_snapshot(s):
             elif connection.dialect.name == 'sqlite':
                 connection.exec_driver_sql('BEGIN')
             with Session(bind=connection, autoflush=False, expire_on_commit=False) as snapshot:
-                yield snapshot
+                with read_projection(snapshot):
+                    yield snapshot
 
 
 def _locked(s, project_id, expected_version, user):

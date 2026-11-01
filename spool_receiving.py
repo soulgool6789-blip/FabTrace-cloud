@@ -16,6 +16,7 @@ from pydantic import Field, model_validator
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
 from sqlalchemy.orm import Session, deferred
+from read_projection import read_cached, reader_role
 
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
 from orders import Input, _commit, _key, read_snapshot
@@ -261,6 +262,7 @@ def _locked_reason(s, item):
     return material_locked(s, item)
 
 
+@read_cached(lambda s, item_id: item_id)
 def _latest(s, item_id):
     return s.scalar(select(SpoolArrivalInspection).where(SpoolArrivalInspection.spool_id == item_id)
         .order_by(SpoolArrivalInspection.version.desc()).limit(1))
@@ -283,6 +285,7 @@ def _mtr_view(row, urls=True):
     return value
 
 
+@read_cached(lambda s, item_id: item_id)
 def _current_mtrs(s, item_id):
     latest = select(SpoolMtrDocument.reference_key,
         func.max(SpoolMtrDocument.version).label('version')).where(SpoolMtrDocument.spool_id == item_id)
@@ -322,6 +325,7 @@ def _material_inspection_view(row):
         'check_code', 'result', 'actor', 'reference', 'notes', 'basis_sha256')} | {'at': _stamp(row.at)}
 
 
+@read_cached(lambda s, item_id: item_id)
 def _current_material_inspections(s, item_id):
     latest = select(SpoolMaterialInspection.piece_key,
         func.max(SpoolMaterialInspection.version).label('version')).where(
@@ -389,6 +393,7 @@ def material_qa_states(s, state, user=None, *, bases=None):
     return result
 
 
+@read_cached(lambda s, item: item.id)
 def _basis(s, item):
     from spool_boms import physical_bom_state, spool_bom_basis
     from spool_documents import spool_document_scope_basis
@@ -432,6 +437,7 @@ def _basis(s, item):
     return evidence, list(dict.fromkeys(blockers))
 
 
+@read_cached(lambda s, item, user=None, history=False: (item.id, reader_role(user), history))
 def _physical_summary(s, item, user=None, history=False):
     from removals import require_active_item
     try:

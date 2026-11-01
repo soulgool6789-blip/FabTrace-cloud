@@ -1,5 +1,11 @@
 # FabTrace Cloud
 
+## Faster screen loading
+
+Release `2026.11.01-loading-performance.1` reduces repeated receiving, BOM and document calculations while building purchase-order, inventory, process and weld-tracking screens. Each read reuses its own calculated evidence only for that response; later requests and all inspection, transfer and release actions validate current records again. No database migration is required.
+
+Opening an individual process record loads that record directly. Opening a spool or weld in tracking loads its focused details and the small supporting catalogs without first building the shop overview. Navigating away cancels these pending screen reads, and a timed-out read offers a clear retry message.
+
 ## Individual spool stations and P.O. colors
 
 Release `2026.11.01-station-transfers-po-colors.1` keeps each individual spool in **Inventory** until a recorded station transfer or explicit location capture moves it. Pending arrival inspection, an approved inspection, a numbered traveler step, and opening a QR record do not move a spool. **Scan & transfer** offers the exact eleven destinations, including separate **QA/QC-001**, **QA/QC-002**, **QA/QC-003**, and **QA/QC-004** choices. A confirmed transfer updates only that physical copy; production and release checks remain separate.

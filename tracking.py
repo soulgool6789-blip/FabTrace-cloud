@@ -22,6 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from read_projection import read_projection
 
 from main import (
     Audit, Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item,
@@ -1039,10 +1040,11 @@ def create_template(data: TemplateIn, u: Employee = Depends(auth), s: Session = 
 
 @router.get('/spools/{item_id}')
 def get_spool(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db)):
-    item = s.get(Item, item_id)
-    if not item:
-        raise HTTPException(404, 'Item not found')
-    return spool_dict(s, item, u)
+    with read_projection(s):
+        item = s.get(Item, item_id)
+        if not item:
+            raise HTTPException(404, 'Item not found')
+        return spool_dict(s, item, u)
 
 
 @router.post('/spools/{item_id}/plan')
@@ -1146,10 +1148,11 @@ def create_weld(item_id: str, data: WeldIn, u: Employee = Depends(auth), s: Sess
 
 @router.get('/welds/{weld_id}')
 def get_weld(weld_id: str, u: Employee = Depends(auth), s: Session = Depends(db)):
-    weld = s.get(Weld, weld_id)
-    if not weld:
-        raise HTTPException(404, 'Weld not found')
-    return weld_dict(s, weld, u)
+    with read_projection(s):
+        weld = s.get(Weld, weld_id)
+        if not weld:
+            raise HTTPException(404, 'Weld not found')
+        return weld_dict(s, weld, u)
 
 
 @router.patch('/welds/{weld_id}')
@@ -1447,25 +1450,26 @@ def _filtered_items(s, project_id='', subproject_id=''):
 
 @router.get('/overview')
 def overview(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
-    rows = _filtered_items(s, project_id, subproject_id)
-    from spool_presentation import item_presentations
-    displays = item_presentations(s, rows)
-    spools = [{**tracking_summary(s, item), **displays[item.id]} for item in rows]
-    return {
-        'projects': get_projects(u, s),
-        'subprojects': get_subprojects('', u, s),
-        'templates': get_templates(u, s),
-        'spools': spools,
-        'metrics': {
-            'spools': len(spools),
-            'welds_planned': sum(r['planned_welds'] for r in spools),
-            'welds_defined': sum(r['welds_defined'] for r in spools),
-            'production_complete': sum(r['production_complete'] for r in spools),
-            'qa_accepted': sum(r['qa_accepted'] for r in spools),
-            'ready_to_release': sum(r['ready_to_release'] and not r['released'] for r in spools),
-            'released': sum(r['released'] for r in spools),
-        },
-    }
+    with read_projection(s):
+        rows = _filtered_items(s, project_id, subproject_id)
+        from spool_presentation import item_presentations
+        displays = item_presentations(s, rows)
+        spools = [{**tracking_summary(s, item), **displays[item.id]} for item in rows]
+        return {
+            'projects': get_projects(u, s),
+            'subprojects': get_subprojects('', u, s),
+            'templates': get_templates(u, s),
+            'spools': spools,
+            'metrics': {
+                'spools': len(spools),
+                'welds_planned': sum(r['planned_welds'] for r in spools),
+                'welds_defined': sum(r['welds_defined'] for r in spools),
+                'production_complete': sum(r['production_complete'] for r in spools),
+                'qa_accepted': sum(r['qa_accepted'] for r in spools),
+                'ready_to_release': sum(r['ready_to_release'] and not r['released'] for r in spools),
+                'released': sum(r['released'] for r in spools),
+            },
+        }
 
 
 @_snapshot_response
@@ -1503,11 +1507,12 @@ def _item_exceptions(s, item):
 
 @router.get('/exceptions')
 def exceptions(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
-    result = []
-    rows = _filtered_items(s, project_id, subproject_id)
-    from spool_presentation import item_presentations
-    displays = item_presentations(s, rows)
-    for item in rows:
-        result.extend({**row, **displays[item.id]} for row in _item_exceptions(s, item))
-    return {'exceptions': result}
+    with read_projection(s):
+        result = []
+        rows = _filtered_items(s, project_id, subproject_id)
+        from spool_presentation import item_presentations
+        displays = item_presentations(s, rows)
+        for item in rows:
+            result.extend({**row, **displays[item.id]} for row in _item_exceptions(s, item))
+        return {'exceptions': result}
 

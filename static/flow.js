@@ -22,7 +22,7 @@
     {id:'paint',label:'Sandblast & paint',first:20,last:22},
     {id:'shipping',label:'Shipment',first:23,last:24},
   ];
-  const state={catalog:null,handoffOptions:null,handoffControl:null,board:[],spools:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,saving:false,dialogAction:null,dialogStale:false,notice:''};
+  const state={catalog:null,handoffOptions:null,handoffControl:null,board:[],spools:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,read:null,saving:false,dialogAction:null,dialogStale:false,notice:''};
   const clocks=new WeakMap();
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
@@ -101,26 +101,33 @@
     await load();
   }
   async function load(){
-    const sequence=++state.sequence;stopClocks();state.handoffControl?.destroy();state.handoffControl=null;
+    const sequence=++state.sequence,item=state.item;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null;
+    const pending={controller:new AbortController(),timer:null,timedOut:false};state.read=pending;
+    pending.timer=setTimeout(()=>{pending.timedOut=true;pending.controller.abort();},30000);
+    const read=url=>api(url,{signal:pending.controller.signal});
     node('flowContent').innerHTML='<div class="ff-state" role="status">Loading fabrication process records…</div>';
     node('flowContent').setAttribute('aria-busy','true');
     try{
       const [catalog,board,detail,handoffOptions,spools]=await Promise.all([
-        state.catalog?Promise.resolve(state.catalog):api(ROOT+'/catalog'),
-        api(ROOT+'/items'),state.item?api(ROOT+'/items/'+encode(state.item)):Promise.resolve(null),
-        api('/api/transfers/options'),
-        state.item?Promise.resolve({items:state.spools}):api(ROOT+'/board'),
+        state.catalog?Promise.resolve(state.catalog):read(ROOT+'/catalog'),
+        item?Promise.resolve(null):read(ROOT+'/items'),
+        item?read(ROOT+'/items/'+encode(item)):Promise.resolve(null),
+        item?read('/api/transfers/options'):Promise.resolve(null),
+        item?Promise.resolve(null):read(ROOT+'/board'),
       ]);
       if(sequence!==state.sequence)return;
-      if(!Array.isArray(spools?.items))throw Error('The individual spool board could not be verified. Refresh to load the current process positions.');
-      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=arr(board.items);state.spools=spools.items;state.detail=markTimes(detail);
+      if(item&&detail?.item?.id!==item)throw Error('The process record does not match the selected item. Reopen it and try again.');
+      if(!item&&(!Array.isArray(board?.items)||!Array.isArray(spools?.items)))throw Error('The individual spool board could not be verified. Refresh to load the current process positions.');
+      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=item?[]:board.items;if(!item)state.spools=spools.items;state.detail=markTimes(detail);
       for(const row of state.board)markTimes(row);
       render();updateUrl();
     }catch(error){
       if(sequence!==state.sequence)return;
-      node('flowContent').innerHTML=`<div class="ff-state ff-error" role="alert"><strong>Process records could not be loaded.</strong><p>${esc(errorText(error))}</p><div class="actions">${action('refresh','Try again')}${action('board','Back to process board')}</div></div>`;
-    }finally{if(sequence===state.sequence)node('flowContent').setAttribute('aria-busy','false')}
+      const message=pending.timedOut?'This request took too long. Try again to load the current process record.':errorText(error);
+      node('flowContent').innerHTML=`<div class="ff-state ff-error" role="alert"><strong>Process records could not be loaded.</strong><p>${esc(message)}</p><div class="actions">${action('refresh','Try again')}${action('board','Back to process board')}</div></div>`;
+    }finally{clearTimeout(pending.timer);pending.controller.abort();if(state.read===pending)state.read=null;if(sequence===state.sequence)node('flowContent').setAttribute('aria-busy','false')}
   }
+  function cancelRead(){const pending=state.read;if(!pending)return;state.read=null;clearTimeout(pending.timer);pending.controller.abort();}
   async function refresh(){await load()}
   function heading(title,description,controls='',spool=null){
     return `<div class="ff-head"><div><div class="ff-eyebrow">CLM fabrication · Track. Verify. Build. Deliver.</div><h1>${spool?spoolText(spool,title):esc(title)}</h1><p>${esc(description)}</p></div><div class="actions">${controls}${action('refresh','Refresh')}</div></div>`;
@@ -276,8 +283,7 @@
     }
     html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${route(flow.route)?.first_step}–${route(flow.route)?.last_step}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
     if(detail.parts?.configured){const t=detail.parts.totals||{},required=num(t.required_qty),prepared=num(t.prepared_qty);html+=`<section class="card"><div class="ff-section-head"><h2>Required component pieces</h2>${action('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${num(t.assigned_qty)} assigned · ${num(t.received_qty)} receipt recorded · ${num(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}</section>`;}
-    const boardRow=state.board.find(row=>row.item_id===item.id);
-    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',boardRow?.project_id||flow.project_id||item.project],['Subproject',boardRow?.subproject_id||flow.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
+    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',detail.project_id||item.project],['Subproject',detail.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
     html+=`<section class="card"><details class="ff-fold"><summary>View the complete 24-step flow</summary><p class="ff-footer-note">Highlighted steps belong to this ${esc(routeNames[flow.route].toLowerCase())}. Other stages belong to its linked component, spool, or assembly records.</p>${renderMap(true)}</details></section>`;
     return html+timingHistory()+eventHistory();
   }
@@ -476,5 +482,5 @@
   node('flowDialogCancel').onclick=()=>node('flowDialog').close();
   node('navFlow').onclick=()=>open();
   node('itemFlowBtn').onclick=()=>{if(current)open({item:current.id})};
-  window.FabFlow={open,refresh,cancelPending(){state.sequence++;stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
+  window.FabFlow={open,refresh,cancelPending(){state.sequence++;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
 })();

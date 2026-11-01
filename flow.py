@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from read_projection import read_response, read_cached
 
 from main import Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item, permit, utcnow
 from permissions import flow_step_roles
@@ -313,6 +314,7 @@ def _lock_children(s, item, plan):
     return ids
 
 
+@read_cached(lambda s, item: item.id)
 def _project(s, item):
     plan = s.get(SpoolPlan, item.id)
     if plan:
@@ -381,6 +383,7 @@ def _assembly_errors(s, item, plan):
     return errors
 
 
+@read_cached(lambda s, item: item.id)
 def _physical_hold_errors(s, item):
     from tracking import TrackingHold
     errors = ['Item is on hold'] if item.on_hold else []
@@ -621,6 +624,7 @@ def detail(s, item, user):
     from orders import order_scope
     from spool_receiving import receiving_errors, receiving_summary
     from spool_presentation import item_presentation
+    project_id, subproject_id = _project(s, item)
     arrival_blockers = receiving_errors(s, item)
     parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
@@ -665,6 +669,7 @@ def detail(s, item, user):
     display = item_presentation(s, item, plan=plan, receiving=arrival,
                                 stations=stations, stage_cache=stage_cache)
     return {
+        'project_id': project_id, 'subproject_id': subproject_id,
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'receiving': arrival,
         'flow_stage': display['flow_stage'],
@@ -697,6 +702,7 @@ def catalog(u: Employee = Depends(auth)):
 
 
 @router.get('/items')
+@read_response
 def items(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
     from removals import item_not_removed
     from spool_presentation import item_presentations
@@ -721,6 +727,7 @@ def board(project_id: str = Query('', max_length=80), subproject_id: str = Query
 
 
 @router.get('/items/{item_id}')
+@read_response
 def get_item(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db)):
     item = s.get(Item, item_id)
     if not item:

@@ -4,7 +4,7 @@
   const ROOT = '/api/tracking';
   const node = id => document.getElementById(id);
   const encode = encodeURIComponent;
-  const state = {view:'overview', project:'', subproject:'', query:'', status:'', processFilter:'', overview:null, spool:null, weld:null, routeSpool:'', routeWeld:'', exceptions:[], sequence:0, dialogAction:null, dialogStale:false, processCatalog:null, processDialogLoading:false};
+  const state = {view:'overview', project:'', subproject:'', query:'', status:'', processFilter:'', overview:null, spool:null, weld:null, routeSpool:'', routeWeld:'', exceptions:[], sequence:0, read:null, dialogAction:null, dialogStale:false, processCatalog:null, processDialogLoading:false};
   const role = () => me?.role || '';
   const capability = name => window.FabPermissions?.can(name)===true;
   const manage = () => capability('manage_production');
@@ -134,7 +134,13 @@
     if(!['overview','spool','weld'].includes(state.view)) q.set('view',state.view);
     history.replaceState(null,'','/?'+q.toString());
   }
-  async function getOverview() { return api(ROOT+'/overview'+filtersQuery()); }
+  async function getOverview(read,detailOnly=false) {
+    if(!detailOnly)return read(ROOT+'/overview'+filtersQuery());
+    // Detail forms need the planning catalogs, not summaries of every other spool.
+    const [projects,subprojects,templates]=await Promise.all([read(ROOT+'/projects'),read(ROOT+'/subprojects'),read(ROOT+'/templates')]);
+    if(![projects,subprojects,templates].every(Array.isArray))throw Error('The planning choices could not be verified. Refresh to try again.');
+    return {projects,subprojects,templates,spools:[]};
+  }
   async function open(options={}) {
     if(!me) return;
     show('trackingPage');
@@ -150,47 +156,48 @@
     await load({spool:options.spool,weld:options.weld});
   }
   async function load(target={}) {
-    const sequence = ++state.sequence;
+    const sequence=++state.sequence,view=state.view,detailOnly=['spool','weld'].includes(view);
+    const spoolId=detailOnly?(target.spool||state.spool?.item?.id||''):'',weldId=detailOnly?(target.weld||state.weld?.id||''):'';
+    cancelRead();
+    const pending={controller:new AbortController(),timer:null,timedOut:false};state.read=pending;
+    pending.timer=setTimeout(()=>{pending.timedOut=true;pending.controller.abort();},30000);
+    const read=url=>api(url,{signal:pending.controller.signal});
     stopProcessClock();
     node('trackingContent').innerHTML='<div class="ft-state" role="status">Loading project and weld records…</div>';
     node('trackingContent').setAttribute('aria-busy','true');
     try {
-      const overview=await getOverview();
-      if(sequence!==state.sequence) return;
-      state.overview=overview;
-      for(const spool of arr(overview.spools))markProcessClock(spool.production_process);
-      if(target.spool || state.spool?.item?.id) {
-        const id=target.spool||state.spool.item.id;
-        const spool=await api(ROOT+'/spools/'+encode(id));
-        if(sequence!==state.sequence)return;
-        state.spool=spool;
-        markProcessClock(spool.production_process);
-      }
-      if(sequence!==state.sequence) return;
-      const weldId=target.weld||state.weld?.id;
-      if(weldId) {
-        const weld=arr(state.spool?.welds).find(w=>String(w.id)===String(weldId)) || await api(ROOT+'/welds/'+encode(weldId));
-        if(sequence!==state.sequence)return;
-        state.weld=weld;
-        if(!state.spool || state.spool.item.id!==weld.item_id) {
-          const spool=await api(ROOT+'/spools/'+encode(weld.item_id));
-          if(sequence!==state.sequence)return;
-          state.spool=spool;
-          markProcessClock(spool.production_process);
+      const detail=async()=>{
+        let spool=spoolId?await read(ROOT+'/spools/'+encode(spoolId)):null,weld=null;
+        if(sequence!==state.sequence)return null;
+        if(spoolId&&spool?.item?.id!==spoolId)throw Error('The spool record does not match the selected item. Reopen it and try again.');
+        if(weldId){
+          weld=arr(spool?.welds).find(w=>String(w.id)===String(weldId))||await read(ROOT+'/welds/'+encode(weldId));
+          if(sequence!==state.sequence)return null;
+          if(String(weld?.id)!==String(weldId)||!weld?.item_id)throw Error('The weld record does not match the selected joint. Reopen it and try again.');
+          if(!spool||spool.item.id!==weld.item_id){
+            spool=await read(ROOT+'/spools/'+encode(weld.item_id));
+            if(sequence!==state.sequence)return null;
+            if(spool?.item?.id!==weld.item_id)throw Error('The weld and spool records could not be matched. Reopen the spool and try again.');
+          }
         }
-      }
-      if(state.view==='exceptions') {
-        const exceptions=await api(ROOT+'/exceptions'+filtersQuery());
-        if(sequence!==state.sequence)return;
-        state.exceptions=arr(exceptions.exceptions);
-      }
+        return {spool,weld};
+      };
+      const [overview,records,exceptions]=await Promise.all([
+        getOverview(read,detailOnly),detail(),view==='exceptions'?read(ROOT+'/exceptions'+filtersQuery()):Promise.resolve(null),
+      ]);
       if(sequence!==state.sequence) return;
+      state.overview=overview;state.spool=records.spool;state.weld=records.weld;
+      for(const spool of arr(overview.spools))markProcessClock(spool.production_process);
+      if(state.spool)markProcessClock(state.spool.production_process);
+      if(view==='exceptions')state.exceptions=arr(exceptions.exceptions);
       render(); updateUrl();
     } catch(error) {
       if(sequence!==state.sequence) return;
-      node('trackingContent').innerHTML=`<div class="ft-state ft-error" role="alert"><strong>Tracking records could not be loaded.</strong><p>${esc(errorText(error))}</p><div class="actions">${btn('retry','Try again')}${btn('overview','Back to projects')}</div></div>`;
-    } finally { if(sequence===state.sequence) node('trackingContent').setAttribute('aria-busy','false'); }
+      const message=pending.timedOut?'This request took too long. Try again to load the current tracking record.':errorText(error);
+      node('trackingContent').innerHTML=`<div class="ft-state ft-error" role="alert"><strong>Tracking records could not be loaded.</strong><p>${esc(message)}</p><div class="actions">${btn('retry','Try again')}${btn('overview','Back to projects')}</div></div>`;
+    } finally {clearTimeout(pending.timer);pending.controller.abort();if(state.read===pending)state.read=null;if(sequence===state.sequence)node('trackingContent').setAttribute('aria-busy','false');}
   }
+  function cancelRead(){const pending=state.read;if(!pending)return;state.read=null;clearTimeout(pending.timer);pending.controller.abort();}
   async function refresh() {
     await load({spool:state.spool?.item?.id||state.routeSpool,weld:state.weld?.id||state.routeWeld});
   }
@@ -660,5 +667,5 @@
     if(options.project&&state.spool?.plan?.project_id&&state.spool.plan.project_id!==options.project)throw Error('This spool belongs to a different project.');
     return planSpool({project:options.project,assembly_id:options.assembly_id});
   }
-  window.FabTracking={open,openPlan,refresh,cancelPending(){state.sequence++;stopProcessClock()}};
+  window.FabTracking={open,openPlan,refresh,cancelPending(){state.sequence++;cancelRead();stopProcessClock()}};
 })();

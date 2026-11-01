@@ -10,6 +10,7 @@ from collections import defaultdict
 from fastapi import HTTPException
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         String, UniqueConstraint, and_, exists, func, or_, select, text)
+from read_projection import read_cached
 
 from main import Base, Item, audit, utcnow
 from tracking import SpoolPlan
@@ -158,10 +159,12 @@ def backfill_spool_qr_identities(s, actor='system:spool-qr-backfill'):
     return {'created': created, 'missing_spool_number': missing_number}
 
 
+@read_cached(lambda s, item_id: item_id)
 def registered_spool(s, item_id):
     return s.get(OrderSpool, item_id)
 
 
+@read_cached(lambda s, item_id: item_id)
 def effective_parent_id(s, item_id):
     registration = registered_spool(s, item_id)
     if registration:
@@ -198,6 +201,7 @@ def effective_children_by_assembly(s, assembly_ids, *, include_removed=True):
     return {parent_id: list(rows.values()) for parent_id, rows in children.items()}
 
 
+@read_cached(lambda s, assembly_id, *, include_removed=True: (assembly_id, include_removed))
 def effective_children(s, assembly_id, *, include_removed=True):
     return effective_children_by_assembly(s, [assembly_id],
         include_removed=include_removed).get(assembly_id, [])

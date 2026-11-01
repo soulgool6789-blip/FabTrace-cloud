@@ -24,6 +24,7 @@ from pypdf import PdfReader, PdfWriter
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
 from sqlalchemy.orm import Session, deferred
+from read_projection import read_cached
 from sqlalchemy.exc import IntegrityError
 
 from isometric_ocr import ImageNormalizationError, normalize_image_pdf
@@ -179,6 +180,7 @@ def guard_document_requirement_identity(s, group, *, gpn=None, spool_numbers=Non
                   'can still be edited before physical registration.', 409)
 
 
+@read_cached(lambda s, scope, identity: (scope, identity))
 def _target(s, scope, identity):
     if scope not in ('requirements', 'spools'):
         _fail('Choose an order spool requirement or a physical spool.', 404)
@@ -271,6 +273,7 @@ def _metadata(document, doc_set, inherited=False, include_bom=True):
             'source_files': document.source_files, 'bom': bom}
 
 
+@read_cached(lambda s, doc_set, inherited=False: (doc_set.id if doc_set else None, inherited))
 def _documents(s, doc_set, inherited=False):
     if doc_set is None:
         return []
@@ -288,6 +291,7 @@ def _documents(s, doc_set, inherited=False):
     return [(_metadata(row, doc_set, inherited), row) for row in rows]
 
 
+@read_cached(lambda s, scope, identity, requirement=None: (scope, identity, requirement.id if requirement else None))
 def _effective(s, scope, identity, requirement=None):
     local = _set_for(s, scope, identity)
     inherited = (_set_for(s, 'requirements', requirement.id)
@@ -843,6 +847,7 @@ def _physical_documents(s, item_id):
     return [(item.id, active[kind], rows[kind]) for kind in ('bom', 'isometric') if active[kind]]
 
 
+@read_cached(lambda s, item_id: item_id)
 def spool_document_scope_basis(s, item_id):
     """Exact effective uploaded versions for quality and Job Packet fingerprints."""
     keys = ('kind', 'scope_kind', 'scope_id', 'version', 'sha256', 'revision',

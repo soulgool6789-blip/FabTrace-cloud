@@ -51,6 +51,12 @@ This guide describes the implemented tracking extension and the constraints that
 
 `main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, order_setup, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
 
+## Read performance
+
+Release `2026.11.01-loading-performance.1` introduces `read_projection.py` for explicitly opted-in read responses. Receiving/BOM/document helpers reuse their calculated results only inside the current Session's read scope. Mutable response containers are copied, user-dependent projections retain their role/history keys, and the outer scope always removes cached values and listeners. Flushes, mutations and transaction boundaries disable reuse; mutation routes do not enter this scope. Consistent P.O. snapshots opt their separate read Session in directly. Keep approval fingerprints, mandatory holds and writer-side revalidation authoritative.
+
+Individual Process Flow screens omit full board/list queries. Individual tracking screens load focused spool/weld details and project/subproject/template catalogs instead of the full overview. The two screen modules cancel pending reads on navigation and bound read waiting time; mutations retain their existing request semantics. Both HTML shells reference the updated asset versions.
+
 ## Flow progress and spool number colors
 
 Release `2026.11.01-individual-spool-processes.1` adds the shared `FabFlowStatus.processBoard` projection: eleven ordered process buckets, one entry per internal physical-spool ID, natural alias sorting, independently colored copy labels and exact-ID process navigation. Process flow reads `/api/flow/board`, which includes active physical spools with no traveler; Production Progress flattens its existing validated P.O. tree within the current filters. Both use the existing authoritative `flow_stage`. The read-only board does not change a spool’s recorded process.

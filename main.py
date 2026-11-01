@@ -14,6 +14,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from pwdlib import PasswordHash
 from permissions import Role, role_catalog, role_label, user_permissions, has_capability, require_capability
 from upload_limits import SpoolDocumentUploadLimit
+from read_projection import read_projection
 
 DATABASE_URL=os.environ.get('DATABASE_URL','')
 # Render PostgreSQL supplies postgresql://, but SQLAlchemy must use the
@@ -39,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.01-station-transfers-po-colors.1'
+APP_VERSION='2026.11.01-loading-performance.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -290,22 +291,23 @@ def employee_create(data:EmployeeIn,u:Employee=Depends(auth),s:Session=Depends(d
     return {'badge':data.badge,'name':data.name,'role':data.role}
 @app.get('/api/items')
 def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Session=Depends(db)):
-    from removals import item_not_removed
-    limit=min(max(limit,1),500);offset=max(offset,0)
-    q=select(Item).where(item_not_removed())
-    if search:
-        needle='%'+search[:180]+'%'
-        q=q.where((Item.id.ilike(needle))|(Item.description.ilike(needle))|(Item.project.ilike(needle))|(Item.google_part_number.ilike(needle))|
-                  Item.id.in_(select(SpoolQrIdentity.item_id).where(SpoolQrIdentity.display_code.ilike(needle))))
-    count=s.scalar(select(func.count()).select_from(q.subquery()))
-    rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
-    tracked_ids=set(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.item_id.in_([r.id for r in rows])))) if rows else set()
-    from administration import release_summary
-    from spool_presentation import item_presentations
-    displays=item_presentations(s,rows)
-    return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids,
-        **displays[r.id],
-        'release_control':release_summary(s,r)} for r in rows]}
+    with read_projection(s):
+        from removals import item_not_removed
+        limit=min(max(limit,1),500);offset=max(offset,0)
+        q=select(Item).where(item_not_removed())
+        if search:
+            needle='%'+search[:180]+'%'
+            q=q.where((Item.id.ilike(needle))|(Item.description.ilike(needle))|(Item.project.ilike(needle))|(Item.google_part_number.ilike(needle))|
+                      Item.id.in_(select(SpoolQrIdentity.item_id).where(SpoolQrIdentity.display_code.ilike(needle))))
+        count=s.scalar(select(func.count()).select_from(q.subquery()))
+        rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
+        tracked_ids=set(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.item_id.in_([r.id for r in rows])))) if rows else set()
+        from administration import release_summary
+        from spool_presentation import item_presentations
+        displays=item_presentations(s,rows)
+        return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids,
+            **displays[r.id],
+            'release_control':release_summary(s,r)} for r in rows]}
 class ItemIn(BaseModel):
     id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')
     description:str=Field(default='',max_length=300)
@@ -440,9 +442,10 @@ def scan_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
 
 @app.get('/api/items/{item_id}')
 def get_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
-    r=s.get(Item,item_id)
-    if not r:raise HTTPException(404,'Item not found')
-    return item_dict(s,r,u)
+    with read_projection(s):
+        r=s.get(Item,item_id)
+        if not r:raise HTTPException(404,'Item not found')
+        return item_dict(s,r,u)
 class WeldEvent(BaseModel):
     count:int=Field(ge=1,le=10000)
     weld_ids:str=Field(min_length=1,max_length=1000)

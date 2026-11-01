@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import Field, field_validator, model_validator
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, or_, select
 from sqlalchemy.orm import Session
+from read_projection import read_cached
 
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
 from orders import Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _key, read_snapshot
@@ -232,6 +233,7 @@ def _document_source(document):
         'download_url': '/api/spool-documents/files/' + quote(document.id, safe='') + '?download=1'}
 
 
+@read_cached(lambda s, item_id: item_id)
 def physical_bom_state(s, item_id):
     """Current/pinned source and physical rows without receiving projection recursion."""
     from spool_documents import _target, _effective
@@ -375,6 +377,7 @@ def backfill_material_piece_records(s, actor=BACKFILL_ACTOR, *, batch_size=100):
     return result
 
 
+@read_cached(lambda s, spool_id: spool_id)
 def spool_bom_basis(s, spool_id):
     """Stable, saved physical trace basis for packet fingerprints; no writes."""
     trace = s.get(SpoolBomTrace, spool_id)

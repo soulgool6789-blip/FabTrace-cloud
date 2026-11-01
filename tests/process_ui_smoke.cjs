@@ -66,7 +66,7 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;
 const context={
   document:{getElementById:id=>elements.get(id)||null},
   me:{badge:'TEST-ADMIN',name:'Test admin',role:'admin'},current:null,
-  URL,URLSearchParams,Date,console,esc,
+  URL,URLSearchParams,Date,console,esc,AbortController,setTimeout,clearTimeout,
   performance:{now:()=>now},setInterval:fn=>{const id=++timerSequence;timers.set(id,fn);return id},clearInterval:id=>timers.delete(id),
   history:{replaceState(){}},show(){},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(){},
   FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
@@ -78,6 +78,8 @@ const context={
       return scopedProcess();
     }
     if(url==='/api/tracking/processes')return [{key:'fit_up',label:'Fit-up'},{key:'welding',label:'Welding'},{key:'nde',label:'NDE / testing'}];
+    if(url==='/api/tracking/projects')return [{id:'P1',name:'Plant One'}];
+    if(url==='/api/tracking/subprojects'||url==='/api/tracking/templates')return [];
     if(url.startsWith('/api/tracking/overview'))return {projects:[{id:'P1',name:'Plant One'}],subprojects:[],templates:[],spools:[{...summary,production_process:scopedProcess()},{...summary,item_id:'S2',description:'Untimed spool',production_process:emptyProcess()}]};
     if(url==='/api/tracking/spools/S1')return {item:{id:'S1',description:'Spool One',released},plan:{item_id:'S1',project_id:'P1',planned_welds:0,drawing_revision:'A',version:1},summary,welds:[],requirements:[],holds:[],history:[],production_process:scopedProcess()};
     throw Error('Unexpected endpoint '+url);

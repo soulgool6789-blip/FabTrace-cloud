@@ -35,8 +35,8 @@ function detailAt(number,extra={}){
   const identity=step.route==='spool'?{spool_number:'643-777-PCW-03-01',google_part_number:'643-777-PCW-03-01',qr_alias:'643-777-PCW-03-01-[001]',display_code:'643-777-PCW-03-01-[001]'}:{};
   return {flow_stage:{key:({1:'inventory',2:'qa_001',3:'qa_001',4:'qa_001',5:'preparation',6:'preparation',7:'preparation',8:'preparation',9:'preparation',10:'preparation',11:'qa_002',12:'floor',13:'welding',14:'welding',15:'qa_003',16:'qa_003',17:'testing',18:'testing',19:'testing',20:'paint',21:'paint',22:'qa_004',23:'ready_to_ship',24:'ready_to_ship'})[number],source_item_id:'ITM-001',inherited:false},transfer,item:{...identity,id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24].includes(number)},flow:{item_id:'ITM-001',route:step.route,current_step:number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:catalog.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
 }
-let record=detailAt(6),physicalCopies=[],allowedOverride=null,fail=null,hold=null,now=10000,timerId=0;
-const calls=[],messages=[],timers=new Map();
+let record=detailAt(6),physicalCopies=[],allowedOverride=null,fail=null,hold=null,readHook=null,now=10000,timerId=0,timeoutId=0;
+const calls=[],messages=[],timers=new Map(),readTimeouts=new Map();
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function allowed(){
   if(allowedOverride!==null)return allowedOverride;
@@ -48,13 +48,15 @@ function allowed(){
 }
 function detail(){return {...structuredClone(record),allowed_actions:[...allowed()]}}
 let aliasHold=null;
-const context={location:{origin:'https://fabtrace-cloud.onrender.com'},qrStatus:{public_base_url:'https://fabtrace-cloud.onrender.com'},document:{getElementById:id=>elements.get(id)||null},me:{role:'admin',badge:'ADMIN'},current:null,URL,URLSearchParams,Date,console,esc,
+const context={location:{origin:'https://fabtrace-cloud.onrender.com'},qrStatus:{public_base_url:'https://fabtrace-cloud.onrender.com'},document:{getElementById:id=>elements.get(id)||null},me:{role:'admin',badge:'ADMIN'},current:null,URL,URLSearchParams,Date,console,esc,AbortController,
+  setTimeout:(fn,delay)=>{readTimeouts.set(++timeoutId,{fn,delay});return timeoutId},clearTimeout:id=>readTimeouts.delete(id),
   performance:{now:()=>now},setInterval:fn=>{timers.set(++timerId,fn);return timerId},clearInterval:id=>timers.delete(id),
   history:{replaceState(_a,_b,url){context.url=url}},show(page){context.page=page},stopCloudCamera(){},notify:message=>messages.push(message),async openItem(id){context.openedItem=id},FabTracking:{async open(value){context.openedWelds=value}},FabParts:{async open(value){context.openedParts=value}},FabAdmin:{async open(value){context.openedAdmin=value}},
   qrId(value,kind){const text=String(value||'').trim();if(kind==='badge')return text.startsWith('FABTRACE:EMP:')?text.slice(13):text;try{return new URL(text).searchParams.get('item')||''}catch(_){}return text.startsWith('FABTRACE:ITEM:')?text.slice(14):/^[A-Za-z0-9_-]{3,60}$/.test(text)?text:''},
   FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
   api:async(url,options={})=>{
     calls.push({url,...options});if(options.method){if(hold)await hold;if(fail)throw fail;return detail()}
+    if(readHook){const pending=readHook(url,options);if(pending!==undefined)return pending;}
     if(url.startsWith('/api/spool-qr/resolve?')){if(aliasHold)await aliasHold;const alias=new URL(url,context.location.origin).searchParams.get('code');const item_id=({'643-777-PCW-03-01-[001]':'ITM-001','643-777-PCW-03-01-[002]':'SPL-002','643-777-PCW-03-01-[003]':'SPL-003'})[alias];if(!item_id)throw Error('Unknown spool label');return {item_id,qr_alias:alias}}
     if(url==='/api/transfers/options')return structuredClone(handoffOptions);
     if(url==='/api/employees/directory')return [{badge:'SHOP1',name:'Sender One',role:'welder',active:true},{badge:'SHOP2',name:'Receiver Two',role:'handler',active:true},{badge:'OLD1',name:'Former worker',role:'handler',active:false}];
@@ -213,8 +215,44 @@ const check=number=>({['check_s'+number+'_1']:'on'});
   const beforeLateRead=calls.length;releaseAlias();await lateLookup;aliasHold=null;
   assert.equal(calls.length,beforeLateRead,'a late resolved lookup cannot reopen a departed flow screen');
   context.FabFlow.cancelPending();assert.equal(timers.size,0);
+
+  // A selected record must not recalculate every route or physical spool.
+  record=detailAt(9);record.project_id='P1';record.subproject_id='SUB1';
+  const focusedStart=calls.length;await context.FabFlow.open({item:'ITM-001',project:'P1'});
+  const focusedCalls=calls.slice(focusedStart);
+  assert.ok(focusedCalls.some(row=>row.url==='/api/flow/items/ITM-001'));
+  assert.ok(focusedCalls.some(row=>row.url==='/api/transfers/options'));
+  assert.ok(!focusedCalls.some(row=>['/api/flow/items','/api/flow/board'].includes(row.url)),'detail omits both broad lists');
+  assert.match(html(),/fst-color-red[^>]*>643-777-PCW-03-01-\[001\]/);
+  assert.match(html(),/<dt>Subproject<\/dt><dd>SUB1<\/dd>/);
+  assert.equal((html().match(/class="ff-map-step /g)||[]).length,24);
+  const boardStart=calls.length;await click('board');
+  assert.ok(calls.slice(boardStart).some(row=>row.url==='/api/flow/items'));
+  assert.ok(calls.slice(boardStart).some(row=>row.url==='/api/flow/board'));
+  assert.match(html(),/<option value="P2"/,'returning to the board retains all project options');
+  assert.match(context.url,/project=P1/,'the selected project survives detail-to-board navigation');
+
+  // Navigation aborts GETs and their timers; a late read cannot overwrite a destination.
+  let signal;
+  readHook=(url,options)=>url==='/api/flow/items/ITM-001'?new Promise((_resolve,reject)=>{
+    signal=options.signal;signal.addEventListener('abort',()=>reject(Object.assign(Error('Read aborted'),{name:'AbortError'})),{once:true});
+  }):undefined;
+  const cancelledOpen=context.FabFlow.open({item:'ITM-001'});
+  assert.ok(signal&&!signal.aborted);assert.equal(readTimeouts.size,1);
+  context.FabFlow.cancelPending();elements.get('flowContent').innerHTML='<p>Destination screen</p>';
+  await cancelledOpen;assert.equal(signal.aborted,true);assert.equal(html(),'<p>Destination screen</p>');assert.equal(readTimeouts.size,0);
+
+  // A stalled GET exits the spinner and offers a safe read retry; no write is retried.
+  const writesBefore=posts().length,timedOpen=context.FabFlow.open({item:'ITM-001'});
+  assert.equal(readTimeouts.size,1);const timeout=[...readTimeouts.values()][0];assert.equal(timeout.delay,30000);timeout.fn();
+  await timedOpen;assert.match(html(),/request took too long/);assert.match(html(),/Try again/);assert.equal(elements.get('flowContent').attributes['aria-busy'],'false');assert.equal(readTimeouts.size,0);assert.equal(posts().length,writesBefore);
+  readHook=null;await click('refresh');assert.match(html(),/Spool route/);
+
+  readHook=(url)=>url==='/api/flow/items/ITM-001'?Promise.resolve({...detail(),item:{...record.item,id:'OTHER-COPY'}}):undefined;
+  await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/does not match the selected item/);assert.doesNotMatch(html(),/id="flowStepForm"/);
+  readHook=null;context.FabFlow.cancelPending();assert.equal(readTimeouts.size,0);assert.equal(timers.size,0);
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
   assert.match(index,/params\.has\('flow'\)[\s\S]*FabFlow\.open/);assert.match(index,/id="itemFlowBtn"/);assert.match(index,/id="navFlow"/);assert.match(index,/FabFlow\.cancelPending/);
   assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));
-  console.log('PASS: neutral station labels, colored physical spool numbers, escaped unknown-station notices, retained blocked Ready To Ship, 24-step map, entity-specific routes, filters, QR/manual IDs, location/handoff payloads, catalog checks and roles, QA failure/reinspection, hierarchy links, child verification, shipment/delivery, documented baselines, clocks, duplicate writes, conflicts, and navigation.');
+  console.log('PASS: neutral station labels, colored physical spool numbers, escaped unknown-station notices, retained blocked Ready To Ship, 24-step map, entity-specific routes, filters, QR/manual IDs, location/handoff payloads, catalog checks and roles, QA failure/reinspection, hierarchy links, child verification, shipment/delivery, documented baselines, clocks, duplicate writes, conflicts, focused record reads, cancellation, bounded loading, and navigation.');
 })().catch(error=>{console.error(error);process.exitCode=1});

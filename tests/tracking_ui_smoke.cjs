@@ -36,15 +36,16 @@ const summary={item_id:'S1',description:'Spool <one>',project_id:'P1',project_na
 const released={...summary,item_id:'S2',description:'Released spool',planned_welds:1,production_complete:1,qa_accepted:1,ready_to_release:true,released:true,blockers:[]};
 const spool={item:{id:'S1',description:'Spool <one>',kind:'Spool',location:'Bay 1',handler:'W1',released:false,on_hold:false,dimensional:'Pending'},plan:{item_id:'S1',project_id:'P1',subproject_id:'SUB1',assembly_id:null,planned_welds:1,drawing_revision:'A',version:1,notes:''},summary,welds:[weld],requirements:[],holds:[],history:[]};
 const overview={projects:[{id:'P1',name:'Plant One'}],subprojects:[{id:'SUB1',project_id:'P1',name:'Package One'}],templates:[],spools:[summary,released]};
-let failSpool=false, rejectMutation=false;
-const calls=[],messages=[];
+let failSpool=false,rejectMutation=false,readHook=null,timeoutId=0;
+const calls=[],messages=[],readTimeouts=new Map();
 function scopedWeld(){const row=structuredClone(weld),p=require('./ui_permissions_fixture.cjs').policy(context.me.role);row.allowed_operations=p.weld_operations||[];for(const r of row.requirements)r.permissions={can_submit_evidence:['admin','supervisor','inspector'].includes(context.me.role)||r.owner_role===context.me.role,can_review:['admin','inspector'].includes(context.me.role)};return row;}
 function scopedSpool(){const row=structuredClone(spool);row.welds=[scopedWeld()];return row;}
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const context={
   document:{getElementById:id=>elements.get(id)||null},
   me:{badge:'ADMIN',name:'Administrator',role:'admin'},current:null,
-  URL,URLSearchParams,Date,console,esc,
+  URL,URLSearchParams,Date,console,esc,AbortController,
+  setTimeout:(fn,delay)=>{readTimeouts.set(++timeoutId,{fn,delay});return timeoutId},clearTimeout:id=>readTimeouts.delete(id),
   history:{replaceState(_a,_b,url){context.lastUrl=url}},
   show(name){context.lastPage=name},stopCloudCamera(){},notify(message){messages.push(message)},
   async openItem(id){context.lastItem=id},FabParts:{open:options=>{context.openedParts=options;}},
@@ -52,7 +53,11 @@ const context={
   api:async(url,options={})=>{
     calls.push({url,...options});
     if(options.method){if(rejectMutation)throw Error('Record changed; refresh and try again.');return requirement;}
+    if(readHook){const pending=readHook(url,options);if(pending!==undefined)return pending;}
     if(url.startsWith('/api/tracking/overview'))return structuredClone(overview);
+    if(url==='/api/tracking/projects')return structuredClone(overview.projects);
+    if(url==='/api/tracking/subprojects')return structuredClone(overview.subprojects);
+    if(url==='/api/tracking/templates')return structuredClone(overview.templates);
     if(url==='/api/tracking/spools/S1'){if(failSpool){failSpool=false;throw Error('Temporary unavailable')}return scopedSpool()}
     if(url==='/api/tracking/welds/WLD1')return scopedWeld();
     if(url.startsWith('/api/tracking/exceptions'))return {exceptions:[]};
@@ -138,5 +143,39 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   assert.match(html(),/Tracking records could not be loaded/);
   await click('retry');
   assert.match(html(),/Individual weld matrix/,'retry must preserve the originally requested spool');
-  console.log('PASS: routes, metrics, role actions, configured production stages, evidence escaping, safe links, optimistic-write payload, failed-write recovery, and deep-link retry.');
+
+  // Catalogs remain available to forms while detail reads avoid the full spool overview.
+  context.me.role='admin';let releaseProjects;
+  readHook=url=>url==='/api/tracking/projects'?new Promise(resolve=>{releaseProjects=()=>resolve(structuredClone(overview.projects))}):undefined;
+  const focusedStart=calls.length,focusedOpen=context.FabTracking.open({spool:'S1',weld:'WLD1'});
+  assert.ok(calls.slice(focusedStart).some(row=>row.url==='/api/tracking/spools/S1'),'spool read starts without waiting for catalogs');
+  assert.ok(!calls.slice(focusedStart).some(row=>row.url.startsWith('/api/tracking/overview')));
+  releaseProjects();await focusedOpen;readHook=null;
+  assert.ok(!calls.slice(focusedStart).some(row=>row.url==='/api/tracking/welds/WLD1'),'the weld included with the spool is reused');
+  assert.match(html(),/Joint &lt;one&gt;/);
+  await click('back-spool');await click('edit-plan');
+  assert.match(elements.get('trackingDialogFields').innerHTML,/Plant One/);assert.match(elements.get('trackingDialogFields').innerHTML,/Package One/);
+  elements.get('trackingDialog').close();
+  const weldStart=calls.length;await context.FabTracking.open({weld:'WLD1'});
+  assert.ok(calls.slice(weldStart).some(row=>row.url==='/api/tracking/welds/WLD1'));
+  assert.equal(calls.slice(weldStart).filter(row=>row.url==='/api/tracking/spools/S1').length,1);
+  assert.ok(!calls.slice(weldStart).some(row=>row.url.startsWith('/api/tracking/overview')));assert.match(html(),/Joint &lt;one&gt;/);
+  const overviewStart=calls.length;await click('overview');assert.ok(calls.slice(overviewStart).some(row=>row.url.startsWith('/api/tracking/overview')));assert.match(html(),/0 \/ 2/);
+
+  let signal;
+  readHook=(url,options)=>url==='/api/tracking/spools/S1'?new Promise((_resolve,reject)=>{
+    signal=options.signal;signal.addEventListener('abort',()=>reject(Object.assign(Error('Read aborted'),{name:'AbortError'})),{once:true});
+  }):undefined;
+  const cancelledOpen=context.FabTracking.open({spool:'S1'});assert.ok(signal&&!signal.aborted);assert.equal(readTimeouts.size,1);
+  context.FabTracking.cancelPending();elements.get('trackingContent').innerHTML='<p>Destination screen</p>';
+  await cancelledOpen;assert.equal(signal.aborted,true);assert.equal(html(),'<p>Destination screen</p>');assert.equal(readTimeouts.size,0);
+
+  const writesBefore=calls.filter(row=>row.method).length,timedOpen=context.FabTracking.open({spool:'S1'});
+  assert.equal(readTimeouts.size,1);const timeout=[...readTimeouts.values()][0];assert.equal(timeout.delay,30000);timeout.fn();
+  await timedOpen;assert.match(html(),/request took too long/);assert.match(html(),/Try again/);assert.equal(elements.get('trackingContent').attributes['aria-busy'],'false');assert.equal(readTimeouts.size,0);assert.equal(calls.filter(row=>row.method).length,writesBefore);
+  readHook=null;await click('retry');assert.match(html(),/Individual weld matrix/);
+  readHook=url=>url==='/api/tracking/spools/S1'?Promise.resolve({...scopedSpool(),item:{...spool.item,id:'OTHER-COPY'}}):undefined;
+  await context.FabTracking.open({spool:'S1'});assert.match(html(),/does not match the selected item/);assert.doesNotMatch(html(),/data-ft-action="release"/);
+  readHook=null;context.FabTracking.cancelPending();assert.equal(readTimeouts.size,0);
+  console.log('PASS: routes, metrics, role actions, configured production stages, evidence escaping, safe links, optimistic-write payload, failed-write recovery, focused spool/weld reads with planning catalogs, cancellation, bounded loading, exact-copy identity, and deep-link retry.');
 })().catch(error=>{console.error(error);process.exitCode=1});
