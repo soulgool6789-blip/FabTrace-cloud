@@ -7,7 +7,8 @@
   const roleTitle={sender:'Sending employee',receiver:'Receiving employee'};
   const statusNames={queued:'Queued',in_progress:'In progress',awaiting_inspection:'Awaiting inspection',waiting_material:'Waiting for material',paused:'Paused',ready_next_operation:'Ready for next operation'};
   const state={active:false,epoch:0,itemSequence:0,item:null,options:null,control:null,saving:false,managing:false,incoming:null};
-  let camera=null,cameraRequest=0;
+  let camera=null,cameraLoading=null,cameraRequest=0,scannerLoad=null;
+  const scannerSource='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
   const text=value=>String(value??'');
   const badgeId=value=>typeof qrId==='function'?qrId(value,'badge'):text(value).trim();
   const itemId=value=>typeof qrId==='function'?qrId(value,'item'):text(value).trim();
@@ -95,7 +96,7 @@
       if(status){status.innerHTML=statusOptions(value,priorStatus);status.value=rows(value?.statuses).some(row=>row.id===priorStatus)?priorStatus:''}
       changed();
     };
-    control.destroy=()=>{control.alive=false;control.sequence.sender++;control.sequence.receiver++;if(camera?.prefix===prefix)stopCamera()};
+    control.destroy=()=>{control.alive=false;control.sequence.sender++;control.sequence.receiver++;if(camera?.prefix===prefix||cameraLoading?.prefix===prefix)stopCamera()};
     for(const role of ['sender','receiver']){
       const input=element(role);if(!input)continue;
       input.oninput=()=>control.invalidate(role);
@@ -114,21 +115,46 @@
     try{if(active.started)await active.reader.stop()}catch(_){}
     try{await active.reader.clear()}catch(_){}
   }
+  function ensureScanner(){
+    if(typeof window.Html5Qrcode==='function')return Promise.resolve(window.Html5Qrcode);
+    if(scannerLoad)return scannerLoad;
+    // Camera support is optional. Ordinary navigation and manual scans never wait for this script.
+    const pending=new Promise((resolve,reject)=>{
+      const script=document.createElement('script');script.src=scannerSource;script.async=true;
+      let finished=false;
+      const finish=error=>{
+        if(finished)return;finished=true;clearTimeout(timer);script.onload=null;script.onerror=null;
+        if(error){script.remove();reject(error);}else resolve(window.Html5Qrcode);
+      };
+      const timer=setTimeout(()=>finish(Error('The camera scanner did not load in time')),15000);
+      script.onload=()=>finish(typeof window.Html5Qrcode==='function'?null:Error('The camera scanner could not be initialized'));
+      script.onerror=()=>finish(Error('The camera scanner could not be downloaded'));
+      try{document.head.appendChild(script);}catch(error){finish(error);}
+    });
+    const shared=pending.finally(()=>{if(scannerLoad===shared)scannerLoad=null;});scannerLoad=shared;return shared;
+  }
   async function stopCamera(){
-    const request=++cameraRequest,active=camera;camera=null;if(!active)return request;
-    active.cancelled=true;
-    const status=node(active.prefix+'CameraStatus'),panel=node(active.prefix+'CameraPanel');
+    const request=++cameraRequest,active=camera,loading=cameraLoading;camera=null;cameraLoading=null;
+    const prefix=active?.prefix||loading?.prefix;if(!prefix)return request;
+    if(active)active.cancelled=true;
+    const status=node(prefix+'CameraStatus'),panel=node(prefix+'CameraPanel');
     if(status)status.textContent='Camera stopped. Handheld scanner and manual entry still work.';
     if(panel)panel.dataset.active='false';
-    if(active.started)await cleanupCamera(active);return request;
+    if(active?.started)await cleanupCamera(active);return request;
   }
   async function scanCamera({prefix,kind,label,isCurrent=()=>true,onValue}){
     const request=await stopCamera();
     if(request!==cameraRequest||!isCurrent())return;
     const status=node(prefix+'CameraStatus'),panel=node(prefix+'CameraPanel');
     if(!status)return;
-    if(!window.Html5Qrcode){status.textContent='Camera scanner unavailable. Use a handheld scanner or enter the QR value manually.';return}
-    const active={reader:new Html5Qrcode(prefix+'Camera'),prefix,started:false,cancelled:false,cleaned:false,handling:false};camera=active;
+    cameraLoading={request,prefix};
+    if(typeof window.Html5Qrcode!=='function'){if(panel)panel.dataset.active='true';status.textContent='Loading camera scanner… Handheld scanner and manual entry still work.';}
+    let Reader;
+    try{Reader=await ensureScanner();}
+    catch(error){if(request===cameraRequest&&isCurrent()){status.textContent='Camera scanner unavailable: '+errorText(error)+'. Try the scan button again, or use a handheld scanner/manual entry.';if(panel)panel.dataset.active='false';}return;}
+    finally{if(cameraLoading?.request===request)cameraLoading=null;}
+    if(request!==cameraRequest||!isCurrent())return;
+    const active={reader:new Reader(prefix+'Camera'),prefix,started:false,cancelled:false,cleaned:false,handling:false};camera=active;
     if(panel)panel.dataset.active='true';status.textContent='Point the camera at the '+label+'.';
     try{
       await active.reader.start({facingMode:'environment'},{fps:10,qrbox:{width:210,height:210}},async decoded=>{

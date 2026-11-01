@@ -6,16 +6,20 @@ evidence. Mutable response containers are copied; SQLAlchemy row identities are
 retained only inside this session and are never deep-copied.
 """
 from contextlib import contextmanager
+from collections import defaultdict
 from functools import wraps
 from inspect import signature
 
-from sqlalchemy import event
+from sqlalchemy import event, select
 
 
 _KEY = 'fabtrace_read_projection'
+PROJECTION_MISSING = object()
 
 
 def _copy(value):
+    if isinstance(value, defaultdict):
+        return defaultdict(value.default_factory, {key: _copy(item) for key, item in value.items()})
     if isinstance(value, dict):
         return {key: _copy(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -100,6 +104,65 @@ def read_cached(key):
 def reader_role(user):
     """Receiving permission projections depend on the passed role, not auth."""
     return getattr(user, 'role', user)
+
+
+def projection_enabled(s):
+    return _state(s) is not None
+
+
+def projection_get(s, namespace, key):
+    """Return a request-local batch value, including an explicit None miss."""
+    state = _state(s)
+    if state is None:
+        return PROJECTION_MISSING
+    return _copy(state['values'].get(('batch', namespace, key), PROJECTION_MISSING))
+
+
+def projection_put(s, namespace, key, value):
+    state = _state(s)
+    if state is not None:
+        state['values']['batch', namespace, key] = _copy(value)
+
+
+def read_get(s, model, ident, **kwargs):
+    """Reuse primed PK rows/misses only in a clean, explicit read scope.
+
+    Locking, refresh, options and other specialized reads always retain the
+    exact Session.get behavior. Mutating routes do not have a projection scope.
+    """
+    if kwargs or not projection_enabled(s):
+        return s.get(model, ident, **kwargs)
+    key = tuple(ident) if isinstance(ident, list) else ident
+    if isinstance(key, dict):
+        return s.get(model, ident, **kwargs)
+    cached = projection_get(s, ('row', model), key)
+    if cached is not PROJECTION_MISSING:
+        return cached
+    row = s.get(model, ident)
+    projection_put(s, ('row', model), key, row)
+    return row
+
+
+def prime_rows(s, model, column, identities, *, options=()):
+    """Load only the requested single-column PKs, in bounded SQL batches."""
+    if not projection_enabled(s):
+        return {}
+    wanted = set(identities) - {None}
+    missing = [key for key in wanted if projection_get(s, ('row', model), key) is PROJECTION_MISSING]
+    for start in range(0, len(missing), 400):
+        batch = missing[start:start + 400]
+        rows = list(s.scalars(select(model).where(column.in_(batch)).options(*options)))
+        found = {getattr(row, column.key): row for row in rows}
+        for key in batch:
+            projection_put(s, ('row', model), key, found.get(key))
+    return {key: projection_get(s, ('row', model), key) for key in wanted}
+
+
+def prime_projection(s, items):
+    """Prime only a visible record set and relationships its summaries need."""
+    if projection_enabled(s):
+        from projection_batches import prime_projection as prime
+        prime(s, items)
 
 
 def read_response(function):

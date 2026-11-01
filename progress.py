@@ -11,7 +11,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
-from read_projection import read_response
+from read_projection import prime_projection, read_response
 
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import (Project, Subproject, SpoolPlan, Weld, WeldRequirement,
@@ -109,6 +109,7 @@ def project_rows(s, project_id=None):
             if scope[0] in project_ids:
                 scopes[item.id] = scope
         items = [item for item in items if item.id in scopes]
+        prime_projection(s, items)
         ids = [item.id for item in items]
         if not ids:
             return []

@@ -7,6 +7,7 @@ from collections import defaultdict
 import re
 
 from sqlalchemy import func, or_, select
+from read_projection import prime_projection
 
 _UNSET = object()
 
@@ -40,6 +41,7 @@ def item_presentations(s, items):
     from order_spools import SpoolQrIdentity
     from flow_stations import station_positions
     items = list(items)
+    prime_projection(s, items)
     ids = {item.id for item in items}
     if not ids:
         return {}
@@ -93,6 +95,7 @@ def physical_spool_board(s, project_id='', subproject_id=''):
     if subproject_id:
         query = query.where(SpoolPlan.subproject_id == subproject_id)
     rows = list(s.execute(query))
+    prime_projection(s, [row[0] for row in rows])
     stations = station_positions(s, [row[0] for row in rows],
         flows={row[0].id: row[1] for row in rows if row[1]},
         plans={row[0].id: row[2] for row in rows if row[2]})

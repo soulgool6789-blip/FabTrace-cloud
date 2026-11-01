@@ -22,7 +22,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from read_projection import read_projection
+from read_projection import (PROJECTION_MISSING, prime_projection, prime_rows,
+    projection_enabled, projection_get, projection_put, read_get, read_projection)
 
 from main import (
     Audit, Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item,
@@ -387,7 +388,7 @@ def _commit(s):
 
 
 def _require_plan(s, item):
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     if not plan:
         raise HTTPException(409, 'Enroll this item with a project and spool plan first')
     return plan
@@ -395,7 +396,61 @@ def _require_plan(s, item):
 
 def is_tracked(s, item):
     item_id = item if isinstance(item, str) else item.id
-    return s.get(SpoolPlan, item_id) is not None
+    return read_get(s, SpoolPlan, item_id) is not None
+
+
+_TRACKING_SNAPSHOT_NAMESPACE = 'tracking.read_snapshot'
+
+
+def prime_tracking_read_snapshots(s, item_ids):
+    """Load selected-spool histories together without changing QA calculations.
+
+    Every entry, including an empty history, belongs to the current clean read
+    projection. A mutation or transaction boundary invalidates it through that
+    scope. Writers do not enter this path and retain their flush-and-read gate.
+    """
+    if not projection_enabled(s):
+        return
+    missing = [item_id for item_id in dict.fromkeys(item_ids)
+               if projection_get(s, _TRACKING_SNAPSHOT_NAMESPACE, item_id) is PROJECTION_MISSING]
+    from production import prime_process_read_events, process_snapshot
+    for offset in range(0, len(missing), 400):
+        batch = missing[offset:offset + 400]
+        plans = prime_rows(s, SpoolPlan, SpoolPlan.item_id, batch)
+        prime_rows(s, Project, Project.id, (plan.project_id for plan in plans.values() if plan))
+        prime_rows(s, Subproject, Subproject.id,
+                   (plan.subproject_id for plan in plans.values() if plan and plan.subproject_id))
+        snapshots = {item_id: {
+            'item_id': item_id, 'welds': [], 'requirements': [], 'holds': [],
+            'evidence': {}, 'reviews': {}, 'work': {}, 'repairs': {},
+            'open_rework': False,
+        } for item_id in batch}
+        for row in s.scalars(select(Weld).where(Weld.item_id.in_(batch)).order_by(Weld.number)):
+            snapshots[row.item_id]['welds'].append(row)
+            projection_put(s, ('row', Weld), row.id, row)
+        for row in s.scalars(select(WeldRequirement).where(
+                WeldRequirement.item_id.in_(batch)).order_by(WeldRequirement.id)):
+            snapshots[row.item_id]['requirements'].append(row)
+        for row in s.scalars(select(TrackingHold).where(
+                TrackingHold.item_id.in_(batch)).order_by(TrackingHold.id.desc())):
+            snapshots[row.item_id]['holds'].append(row)
+        for model, key in ((RequirementEvidence, 'evidence'), (RequirementReview, 'reviews')):
+            for row, item_id in s.execute(select(model, WeldRequirement.item_id).join(
+                    WeldRequirement, WeldRequirement.id == model.requirement_id).where(
+                    WeldRequirement.item_id.in_(batch)).order_by(model.id.desc())):
+                snapshots[item_id][key].setdefault(row.requirement_id, []).append(row)
+        for model, key in ((WeldWork, 'work'), (WeldRepair, 'repairs')):
+            for row, item_id in s.execute(select(model, Weld.item_id).join(
+                    Weld, Weld.id == model.weld_id).where(
+                    Weld.item_id.in_(batch)).order_by(model.id.desc())):
+                snapshots[item_id][key].setdefault(row.weld_id, []).append(row)
+        for item_id in s.scalars(select(Rework.item_id).where(
+                Rework.item_id.in_(batch), Rework.closed_at.is_(None)).distinct()):
+            snapshots[item_id]['open_rework'] = True
+        prime_process_read_events(s, batch)
+        for item_id, snapshot in snapshots.items():
+            snapshot['production_process'] = process_snapshot(s, item_id)
+            projection_put(s, _TRACKING_SNAPSHOT_NAMESPACE, item_id, snapshot)
 
 
 @contextmanager
@@ -407,49 +462,57 @@ def _read_snapshot(s, item_id):
     Release callers already hold the owning Item lock.
     """
     previous = s.info.get('tracking_read_snapshot')
-    if previous and previous['item_id'] == item_id:
+    previous_projection = s.info.get('tracking_read_snapshot_projection', False)
+    if previous and previous['item_id'] == item_id and (
+            not previous_projection or projection_enabled(s)):
         yield previous
         return
     # Imported lazily because the process extension shares these tracking
     # definitions. One event preload serves both summary and detail output.
     from production import process_snapshot
     s.flush()
-    welds = s.scalars(select(Weld).where(Weld.item_id == item_id).order_by(Weld.number)).all()
-    requirements = s.scalars(select(WeldRequirement).where(
-        WeldRequirement.item_id == item_id).order_by(WeldRequirement.id)).all()
-    holds = s.scalars(select(TrackingHold).where(
-        TrackingHold.item_id == item_id).order_by(TrackingHold.id.desc())).all()
-    evidence = s.scalars(select(RequirementEvidence).join(WeldRequirement,
-        WeldRequirement.id == RequirementEvidence.requirement_id).where(
-        WeldRequirement.item_id == item_id).order_by(RequirementEvidence.id.desc())).all()
-    reviews = s.scalars(select(RequirementReview).join(WeldRequirement,
-        WeldRequirement.id == RequirementReview.requirement_id).where(
-        WeldRequirement.item_id == item_id).order_by(RequirementReview.id.desc())).all()
-    work = s.scalars(select(WeldWork).join(Weld, Weld.id == WeldWork.weld_id).where(
-        Weld.item_id == item_id).order_by(WeldWork.id.desc())).all()
-    repairs = s.scalars(select(WeldRepair).join(Weld, Weld.id == WeldRepair.weld_id).where(
-        Weld.item_id == item_id).order_by(WeldRepair.id.desc())).all()
-    def group(rows, attr):
-        grouped = {}
-        for row in rows:
-            grouped.setdefault(getattr(row, attr), []).append(row)
-        return grouped
-    snapshot = {
-        'item_id': item_id, 'welds': welds, 'requirements': requirements, 'holds': holds,
-        'evidence': group(evidence, 'requirement_id'), 'reviews': group(reviews, 'requirement_id'),
-        'work': group(work, 'weld_id'), 'repairs': group(repairs, 'weld_id'),
-        'production_process': process_snapshot(s, item_id),
-        'open_rework': bool(s.scalar(select(Rework.id).where(
-            Rework.item_id == item_id, Rework.closed_at.is_(None)).limit(1))),
-    }
+    snapshot = projection_get(s, _TRACKING_SNAPSHOT_NAMESPACE, item_id)
+    if snapshot is PROJECTION_MISSING:
+        welds = s.scalars(select(Weld).where(Weld.item_id == item_id).order_by(Weld.number)).all()
+        requirements = s.scalars(select(WeldRequirement).where(
+            WeldRequirement.item_id == item_id).order_by(WeldRequirement.id)).all()
+        holds = s.scalars(select(TrackingHold).where(
+            TrackingHold.item_id == item_id).order_by(TrackingHold.id.desc())).all()
+        evidence = s.scalars(select(RequirementEvidence).join(WeldRequirement,
+            WeldRequirement.id == RequirementEvidence.requirement_id).where(
+            WeldRequirement.item_id == item_id).order_by(RequirementEvidence.id.desc())).all()
+        reviews = s.scalars(select(RequirementReview).join(WeldRequirement,
+            WeldRequirement.id == RequirementReview.requirement_id).where(
+            WeldRequirement.item_id == item_id).order_by(RequirementReview.id.desc())).all()
+        work = s.scalars(select(WeldWork).join(Weld, Weld.id == WeldWork.weld_id).where(
+            Weld.item_id == item_id).order_by(WeldWork.id.desc())).all()
+        repairs = s.scalars(select(WeldRepair).join(Weld, Weld.id == WeldRepair.weld_id).where(
+            Weld.item_id == item_id).order_by(WeldRepair.id.desc())).all()
+        def group(rows, attr):
+            grouped = {}
+            for row in rows:
+                grouped.setdefault(getattr(row, attr), []).append(row)
+            return grouped
+        snapshot = {
+            'item_id': item_id, 'welds': welds, 'requirements': requirements, 'holds': holds,
+            'evidence': group(evidence, 'requirement_id'), 'reviews': group(reviews, 'requirement_id'),
+            'work': group(work, 'weld_id'), 'repairs': group(repairs, 'weld_id'),
+            'production_process': process_snapshot(s, item_id),
+            'open_rework': bool(s.scalar(select(Rework.id).where(
+                Rework.item_id == item_id, Rework.closed_at.is_(None)).limit(1))),
+        }
+        projection_put(s, _TRACKING_SNAPSHOT_NAMESPACE, item_id, snapshot)
     s.info['tracking_read_snapshot'] = snapshot
+    s.info['tracking_read_snapshot_projection'] = projection_enabled(s)
     try:
         yield snapshot
     finally:
         if previous is None:
             s.info.pop('tracking_read_snapshot', None)
+            s.info.pop('tracking_read_snapshot_projection', None)
         else:
             s.info['tracking_read_snapshot'] = previous
+            s.info['tracking_read_snapshot_projection'] = previous_projection
 
 
 def _snapshot_response(function):
@@ -462,6 +525,8 @@ def _snapshot_response(function):
 
 
 def _snapshot(s, item_id):
+    if s.info.get('tracking_read_snapshot_projection') and not projection_enabled(s):
+        return None
     value = s.info.get('tracking_read_snapshot')
     return value if value and value['item_id'] == item_id else None
 
@@ -603,7 +668,7 @@ def _check_errors(s, req, weld=None):
     if req.check_kind == 'none':
         return []
     if weld is None and req.weld_id:
-        weld = s.get(Weld, req.weld_id)
+        weld = read_get(s, Weld, req.weld_id)
     if req.check_kind in ('materials', 'procedure') and weld is None:
         return ['This check requires an individual weld record']
     if req.check_kind == 'materials':
@@ -614,7 +679,7 @@ def _check_errors(s, req, weld=None):
     if req.check_kind == 'welding_complete':
         if weld is not None:
             return [] if _production_complete(s, weld) else ['Configured welding operations are not complete']
-        plan = s.get(SpoolPlan, req.item_id)
+        plan = read_get(s, SpoolPlan, req.item_id)
         welds = _welds(s, req.item_id)
         if not plan or len(welds) != plan.planned_welds or any(not _production_complete(s, w) for w in welds):
             return ['Spool weld scope or configured welding operations are incomplete']
@@ -697,11 +762,11 @@ def _assembly_errors(s, item_id, project_id, assembly_id):
             errors.append('Assembly links cannot form a cycle')
             break
         seen.add(parent_id)
-        parent = s.get(Item, parent_id)
+        parent = read_get(s, Item, parent_id)
         if not parent or parent.kind != 'Assembly':
             errors.append('Assembly link must identify an existing Assembly item')
             break
-        parent_plan = s.get(SpoolPlan, parent_id)
+        parent_plan = read_get(s, SpoolPlan, parent_id)
         if parent_plan and parent_plan.project_id != project_id:
             errors.append('Linked assembly belongs to a different project')
             break
@@ -719,15 +784,15 @@ def tracking_release_errors(s, item):
     Legacy aggregate Weld inspections cannot satisfy individual requirements.
     Dimensional inspection and legacy rework still apply at the spool level.
     """
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     if not plan:
         return ['Item is not enrolled in weld tracking']
     errors = _arrival_errors(s, item)
-    project = s.get(Project, plan.project_id)
+    project = read_get(s, Project, plan.project_id)
     if not project:
         errors.append('Project assignment missing')
     if plan.subproject_id:
-        sub = s.get(Subproject, plan.subproject_id)
+        sub = read_get(s, Subproject, plan.subproject_id)
         if not sub or sub.project_id != plan.project_id:
             errors.append('Subproject does not belong to assigned project')
     errors.extend(_assembly_errors(s, item.id, plan.project_id, plan.assembly_id))
@@ -771,12 +836,12 @@ def _sync_legacy_counts(s, item):
 def tracking_summary(s, item):
     from production import compact_process_summary
     from administration import release_summary
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     if not plan:
         return None
     welds = _welds(s, item.id)
-    project = s.get(Project, plan.project_id)
-    sub = s.get(Subproject, plan.subproject_id) if plan.subproject_id else None
+    project = read_get(s, Project, plan.project_id)
+    sub = read_get(s, Subproject, plan.subproject_id) if plan.subproject_id else None
     blockers = tracking_release_errors(s, item)
     from parts import parts_summary
     parts = parts_summary(s, item.id)
@@ -821,7 +886,7 @@ def requirement_dict(s, req, user=None):
 @_snapshot_response
 def weld_dict(s, weld, user=None):
     out = asdict(weld, WELD_KEYS)
-    arrival_blockers = _arrival_errors(s, s.get(Item, weld.item_id))
+    arrival_blockers = _arrival_errors(s, read_get(s, Item, weld.item_id))
     if user is not None:
         from removals import item_is_removed, removal_summary
         active = not item_is_removed(s, weld.item_id)
@@ -847,7 +912,7 @@ def template_dict(row):
 
 @_snapshot_response
 def spool_dict(s, item, user=None):
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     from parts import parts_summary
     from administration import release_summary
     from production import with_process_permissions
@@ -1041,7 +1106,7 @@ def create_template(data: TemplateIn, u: Employee = Depends(auth), s: Session = 
 @router.get('/spools/{item_id}')
 def get_spool(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db)):
     with read_projection(s):
-        item = s.get(Item, item_id)
+        item = read_get(s, Item, item_id)
         if not item:
             raise HTTPException(404, 'Item not found')
         return spool_dict(s, item, u)
@@ -1149,7 +1214,7 @@ def create_weld(item_id: str, data: WeldIn, u: Employee = Depends(auth), s: Sess
 @router.get('/welds/{weld_id}')
 def get_weld(weld_id: str, u: Employee = Depends(auth), s: Session = Depends(db)):
     with read_projection(s):
-        weld = s.get(Weld, weld_id)
+        weld = read_get(s, Weld, weld_id)
         if not weld:
             raise HTTPException(404, 'Weld not found')
         return weld_dict(s, weld, u)
@@ -1452,6 +1517,8 @@ def _filtered_items(s, project_id='', subproject_id=''):
 def overview(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
     with read_projection(s):
         rows = _filtered_items(s, project_id, subproject_id)
+        prime_projection(s, rows)
+        prime_tracking_read_snapshots(s, (item.id for item in rows))
         from spool_presentation import item_presentations
         displays = item_presentations(s, rows)
         spools = [{**tracking_summary(s, item), **displays[item.id]} for item in rows]
@@ -1477,7 +1544,7 @@ def _item_exceptions(s, item):
     result = []
     welds = _welds(s, item.id)
     weld_by_id = {w.id: w for w in welds}
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     base = {'item_id': item.id, 'weld_id': None, 'weld_number': None, 'requirement_id': None}
     if len(welds) != plan.planned_welds:
         result.append({**base, 'type': 'scope', 'label': f'{len(welds)} of {plan.planned_welds} welds defined', 'status': 'pending', 'owner_role': 'supervisor'})
@@ -1510,6 +1577,8 @@ def exceptions(project_id: str = '', subproject_id: str = '', u: Employee = Depe
     with read_projection(s):
         result = []
         rows = _filtered_items(s, project_id, subproject_id)
+        prime_projection(s, rows)
+        prime_tracking_read_snapshots(s, (item.id for item in rows))
         from spool_presentation import item_presentations
         displays = item_presentations(s, rows)
         for item in rows:

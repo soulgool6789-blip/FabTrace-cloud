@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import Field, field_validator, model_validator
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, or_, select
 from sqlalchemy.orm import Session
-from read_projection import read_cached
+from read_projection import read_cached, read_get, projection_get, PROJECTION_MISSING
 
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
 from orders import Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _key, read_snapshot
@@ -156,7 +156,7 @@ def item_bom_summary(item, s=None):
         return None
     from order_spools import spool_qr_identity
     qr = spool_qr_identity(s, item.id)
-    trace = s.get(SpoolBomTrace, item.id)
+    trace = read_get(s, SpoolBomTrace, item.id)
     return {'api_url': '/api/spool-boms/spools/' + quote(item.id, safe=''),
         'item_id': item.id, 'spool_number': physical_spool_number(s, item),
         'qr_alias': qr.display_code if qr else None, 'display_code': qr.display_code if qr else item.id,
@@ -167,7 +167,7 @@ def item_bom_summary(item, s=None):
 
 def guard_spool_bom_identity(s, item, values=None):
     from spool_receiving import is_physical_spool, physical_spool_number
-    trace = s.get(SpoolBomTrace, item.id)
+    trace = read_get(s, SpoolBomTrace, item.id)
     if trace and (not is_physical_spool(s, item) or _key(physical_spool_number(s, item, values)) != _key(trace.spool_number)):
         raise HTTPException(409, 'This spool has recorded material traceability. Its saved BOM spool number must be retained.')
 
@@ -238,7 +238,7 @@ def physical_bom_state(s, item_id):
     """Current/pinned source and physical rows without receiving projection recursion."""
     from spool_documents import _target, _effective
     context, item, requirement = _target(s, 'spools', item_id)
-    trace = s.get(SpoolBomTrace, item.id)
+    trace = read_get(s, SpoolBomTrace, item.id)
     _, _, _, documents, _, _ = _effective(s, 'spools', item.id, requirement)
     document = documents.get('bom')
     current_definition = _uploaded_definition(document, context) if document else _definition(context['spool_number'])
@@ -271,8 +271,10 @@ def _stamp(value):
 
 
 def _materials(s, spool_id, definition):
-    saved = {row.piece_key: row for row in s.scalars(
-        select(SpoolBomMaterial).where(SpoolBomMaterial.spool_id == spool_id))}
+    rows = projection_get(s, 'bom_materials', spool_id)
+    if rows is PROJECTION_MISSING:
+        rows = s.scalars(select(SpoolBomMaterial).where(SpoolBomMaterial.spool_id == spool_id))
+    saved = {row.piece_key: row for row in rows}
     result = []
     source = (definition or {}).get('_source') or {
         'kind': 'catalog', 'sha256': ((definition or {}).get('source_workbook') or {}).get('sha256'),
@@ -293,7 +295,7 @@ BACKFILL_ACTOR = 'system:material-piece-backfill'
 
 def ensure_system_backfill_actor(s):
     """Attribute automatic blank-record creation without changing human accounts."""
-    actor = s.get(Employee, BACKFILL_ACTOR)
+    actor = read_get(s, Employee, BACKFILL_ACTOR)
     if actor is None:
         from main import password_hash
         actor = Employee(badge=BACKFILL_ACTOR, name='Automatic material record setup',
@@ -312,8 +314,8 @@ def ensure_material_piece_records(s, item_or_id, actor, reason, *, uploaded_only
     continue through the explicit adoption workflow, which keeps old history.
     """
     from spool_receiving import is_physical_spool
-    item = s.get(Item, item_or_id) if isinstance(item_or_id, str) else item_or_id
-    if not is_physical_spool(s, item) or s.get(SpoolBomTrace, item.id) is not None:
+    item = read_get(s, Item, item_or_id) if isinstance(item_or_id, str) else item_or_id
+    if not is_physical_spool(s, item) or read_get(s, SpoolBomTrace, item.id) is not None:
         return 0
     state = physical_bom_state(s, item.id)
     definition, source = state['current_definition'], state['source_status']['current']
@@ -380,7 +382,7 @@ def backfill_material_piece_records(s, actor=BACKFILL_ACTOR, *, batch_size=100):
 @read_cached(lambda s, spool_id: spool_id)
 def spool_bom_basis(s, spool_id):
     """Stable, saved physical trace basis for packet fingerprints; no writes."""
-    trace = s.get(SpoolBomTrace, spool_id)
+    trace = read_get(s, SpoolBomTrace, spool_id)
     if trace is None:
         return None
     return {'catalog_id': trace.catalog_id, 'spool_number': trace.spool_number,
@@ -400,7 +402,7 @@ def spool_bom_scope_basis(s, item_id, seen=None):
     if item_id in seen:
         return []
     seen.add(item_id)
-    item = s.get(Item, item_id)
+    item = read_get(s, Item, item_id)
     if item is None:
         return []
     from spool_receiving import is_physical_spool
@@ -423,7 +425,7 @@ def _locked_reason(s, item):
     if item.released:
         return 'This spool is released. Return it to work before changing its material traceability.'
     parent_id = effective_parent_id(s, item.id)
-    parent = s.get(Item, parent_id) if parent_id else None
+    parent = read_get(s, Item, parent_id) if parent_id else None
     if parent and parent.released:
         return 'The parent assembly is released. Return it to work before changing child material traceability.'
     return ''
@@ -581,7 +583,7 @@ def save_traceability(item_id: str, data: TraceabilityIn,
         trace.version += 1
         trace.updated_by, trace.updated_at = user.badge, now
         for change in changes:
-            row = s.get(SpoolBomMaterial, (item.id, change['piece_key']))
+            row = read_get(s, SpoolBomMaterial, (item.id, change['piece_key']))
             if row is None:
                 raise HTTPException(409, 'The saved material register is incomplete. Contact an administrator before changing it.')
             for field, value in change['after'].items():
@@ -653,7 +655,7 @@ def adopt_bom(item_id: str, data: AdoptBomIn, user: Employee = Depends(auth), s:
 @router.get('/spools/{item_id}/history/{version}')
 def trace_history(item_id: str, version: int, user: Employee = Depends(auth), s: Session = Depends(db)):
     _spool(s, item_id)
-    event = s.get(SpoolBomEvent, (item_id, version))
+    event = read_get(s, SpoolBomEvent, (item_id, version))
     if event is None:
         raise HTTPException(404, 'Material history revision not found.')
     return {'spool_id': item_id, 'version': event.version, 'actor': event.actor,

@@ -2,9 +2,11 @@
 
 ## Faster screen loading
 
-Release `2026.11.01-loading-performance.1` reduces repeated receiving, BOM and document calculations while building purchase-order, inventory, process and weld-tracking screens. Each read reuses its own calculated evidence only for that response; later requests and all inspection, transfer and release actions validate current records again. No database migration is required.
+Release `2026.11.01-loading-performance.2` batches receiving, BOM, document, hierarchy and weld-history reads for the physical records a screen needs. Each read reuses its own calculated evidence only for that response; later requests and all inspection, transfer and release actions validate current records again. No database migration is required.
 
 Opening an individual process record loads that record directly. Opening a spool or weld in tracking loads its focused details and the small supporting catalogs without first building the shop overview. Navigating away cancels these pending screen reads, and a timed-out read offers a clear retry message.
+
+Project Progress filters and sorting use the current screen's complete result, without repeating the project calculation. Entering a screen and pressing Refresh still fetch current records. Startup checks run together, public release-versioned scripts and styles can be reused by the browser, and the camera library downloads only when a camera scan is requested. Authenticated records, drawings and HTML remain uncached.
 
 ## Individual spool stations and P.O. colors
 

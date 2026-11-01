@@ -5,14 +5,15 @@ GPN groups organize its physical assemblies, and each assembly declares its chil
 spool count. These records never manufacture work, QA acceptance or a receipt.
 """
 import datetime as dt
+from collections import defaultdict
 from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from read_projection import read_projection
+from read_projection import prime_projection, read_get, read_projection
 
 from main import Audit, Base, Employee, Item, audit, auth, db, lock_item, permit, utcnow
 from tracking import Project, SpoolPlan, new_id
@@ -365,21 +366,22 @@ def _validate_assembly_scope(s, order, item, required_spools):
         raise HTTPException(409, 'Required spool count must match the existing assembly traveler; the order does not rewrite established production scope')
 
 
-def _assembly_detail(s, mapping, group, progress_rows, *, presentation=False):
+def _assembly_detail(s, mapping, group, progress_rows, *, presentation=False, presentations=None):
     from removals import removal_summary
     from spool_boms import item_bom_summary
-    item = s.get(Item, mapping.item_id)
+    item = read_get(s, Item, mapping.item_id)
     item_removal = removal_summary(s, 'item', item.id)
-    plan = s.get(SpoolPlan, item.id)
-    flow = s.get(FlowPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
+    flow = read_get(s, FlowPlan, item.id)
     spools = []
     blockers = []
     linked_rows = _linked(s, item.id, include_removed=bool(item_removal and item_removal['removed']))
     from spool_presentation import item_presentations
-    displays = item_presentations(s, [child for child, _ in linked_rows]) if presentation else {}
+    displays = (presentations if presentations is not None else
+                item_presentations(s, [child for child, _ in linked_rows])) if presentation else {}
     for child, child_plan in linked_rows:
         child_removal = removal_summary(s, 'item', child.id)
-        child_flow = s.get(FlowPlan, child.id)
+        child_flow = read_get(s, FlowPlan, child.id)
         row = progress_rows.get(child.id, {})
         errors = list(row.get('blockers', []))
         child_project = child_plan.project_id if child_plan else child.project
@@ -428,14 +430,16 @@ def order_summary(s, order):
     groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id == order.project_id, gpn_not_removed(OrderGpn.id))).all()
     ids = [group.id for group in groups]
     mappings = s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id.in_(ids), item_not_removed(OrderAssembly.item_id))).all() if ids else []
-    linked = sum(len(_linked(s, row.item_id, include_removed=False)) for row in mappings)
+    prime_projection(s, [row.item_id for row in mappings])
+    linked_counts = {row.item_id: len(_linked(s, row.item_id, include_removed=False)) for row in mappings}
+    linked = sum(linked_counts.values())
     required = sum(row.required_spools for row in mappings)
     setup_needed = len(groups) - len({row.gpn_id for row in mappings})
     return {**_row(order, ORDER_FIELDS), 'project_name': project.name,
             'removal': removal_summary(s, 'order', order.project_id),
             'gpn_count': len(groups), 'assembly_count': len(mappings),
             'combined_count': len(mappings) + setup_needed, 'setup_needed_count': setup_needed, 'required_spools': required,
-            'linked_spools': linked, 'missing_spools': sum(max(0, row.required_spools - len(_linked(s, row.item_id, include_removed=False))) for row in mappings)}
+            'linked_spools': linked, 'missing_spools': sum(max(0, row.required_spools - linked_counts[row.item_id]) for row in mappings)}
 
 
 def order_detail(s, project_id, user=None):
@@ -460,17 +464,36 @@ def order_detail(s, project_id, user=None):
             {**line, **displays.get(line['id'], {})} for line in plan['spools']]}
             for identifier, plan in quantity_plans.items()}
     progress_rows = {row['id']: row for row in project_rows(s, project_id)}
+    group_ids = [group.id for group in groups]
+    mapping_query = select(OrderAssembly).where(OrderAssembly.gpn_id.in_(group_ids))
+    if not removed:
+        mapping_query = mapping_query.where(item_not_removed(OrderAssembly.item_id))
+    by_group = defaultdict(list)
+    for mapping in s.scalars(mapping_query.order_by(OrderAssembly.item_id)) if group_ids else ():
+        by_group[mapping.gpn_id].append(mapping)
+    physical_counts = dict(s.execute(select(OrderAssembly.gpn_id, func.count())
+        .where(OrderAssembly.gpn_id.in_(group_ids)).group_by(OrderAssembly.gpn_id)).all()) if group_ids else {}
+    # All assembly rows share the same live physical-copy display calculation.
+    # Computing station history per assembly creates another N+1 on large P.O.s.
+    assembly_presentations = None
+    if user is not None:
+        from spool_presentation import item_presentations
+        visible_children = {}
+        for mappings in by_group.values():
+            for mapping in mappings:
+                state = removal_summary(s, 'item', mapping.item_id)
+                for child, _ in _linked(s, mapping.item_id, include_removed=bool(state and state['removed'])):
+                    visible_children[child.id] = child
+        assembly_presentations = item_presentations(s, visible_children.values())
     gpns, assemblies = [], []
     for group in groups:
-        mapping_query = select(OrderAssembly).where(OrderAssembly.gpn_id == group.id)
-        if not removed:
-            mapping_query = mapping_query.where(item_not_removed(OrderAssembly.item_id))
-        mappings = s.scalars(mapping_query.order_by(OrderAssembly.item_id)).all()
+        mappings = by_group[group.id]
         children = [_assembly_detail(s, mapping, group, progress_rows,
-                                    presentation=user is not None) for mapping in mappings]
+                                    presentation=user is not None,
+                                    presentations=assembly_presentations) for mapping in mappings]
         # A removed physical instance still owns its retained identity. Do not
         # offer a shared-number correction that would rewrite its history.
-        physical_count = len(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id)).all())
+        physical_count = physical_counts.get(group.id, 0)
         for child in children:
             child['count_editable'] = child['count_editable'] and not removed and group.id not in quantity_plans
             child['number_editable'] = child['count_editable'] and physical_count == 1
@@ -480,14 +503,15 @@ def order_detail(s, project_id, user=None):
                      'removal': removal_summary(s, 'gpn', group.id),
                      **{key: sum(child[key] for child in children) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools')}})
         assemblies.extend(children)
-    assigned_ids = set(s.scalars(select(OrderAssembly.item_id)).all())
     available = []
-    for item in s.scalars(select(Item).where(Item.kind == 'Assembly', item_not_removed(Item.id)).order_by(Item.id)):
-        if item.id in assigned_ids:
-            continue
-        plan = s.get(SpoolPlan, item.id)
-        if (plan.project_id if plan else item.project) != project_id:
-            continue
+    available_query = (select(Item, SpoolPlan)
+        .outerjoin(SpoolPlan, SpoolPlan.item_id == Item.id)
+        .outerjoin(OrderAssembly, OrderAssembly.item_id == Item.id)
+        .where(Item.kind == 'Assembly', item_not_removed(Item.id), OrderAssembly.item_id.is_(None),
+               or_(SpoolPlan.project_id == project_id,
+                   and_(SpoolPlan.item_id.is_(None), Item.project == project_id)))
+        .order_by(Item.id))
+    for item, plan in s.execute(available_query) if not removed else ():
         available.append({'item_id': item.id, 'description': item.description, 'google_part_number': item.google_part_number,
                           'drawing': item.drawing, 'planned_welds': plan.planned_welds if plan else item.welds_required,
                           'planning_needed': plan is None})

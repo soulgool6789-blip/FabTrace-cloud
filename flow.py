@@ -13,7 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from read_projection import read_response, read_cached
+from read_projection import (PROJECTION_MISSING, prime_projection, prime_rows, projection_get,
+                             read_get, read_response, read_cached)
 
 from main import Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item, permit, utcnow
 from permissions import flow_step_roles
@@ -287,6 +288,10 @@ def _sync(s, item, actor, step, at, notes):
 
 
 def _exceptions(s, item_id, open_only=False):
+    if open_only:
+        cached = projection_get(s, 'flow_open_exceptions', item_id)
+        if cached is not PROJECTION_MISSING:
+            return cached
     query = select(FlowException).where(FlowException.item_id == item_id)
     if open_only:
         query = query.where(FlowException.closed_at.is_(None))
@@ -294,6 +299,9 @@ def _exceptions(s, item_id, open_only=False):
 
 
 def _component_ids(s, spool_id):
+    cached = projection_get(s, 'component_ids', spool_id)
+    if cached is not PROJECTION_MISSING:
+        return cached
     return list(s.scalars(select(ComponentLink.component_id).where(ComponentLink.spool_id == spool_id).order_by(ComponentLink.component_id)))
 
 
@@ -316,19 +324,19 @@ def _lock_children(s, item, plan):
 
 @read_cached(lambda s, item: item.id)
 def _project(s, item):
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     if plan:
         return plan.project_id, plan.subproject_id
     from order_spools import registered_spool
     registration = registered_spool(s, item.id)
     if registration:
         from orders import OrderAssembly, OrderGpn
-        assembly = s.get(OrderAssembly, registration.assembly_id)
-        group = s.get(OrderGpn, assembly.gpn_id) if assembly else None
+        assembly = read_get(s, OrderAssembly, registration.assembly_id)
+        group = read_get(s, OrderGpn, assembly.gpn_id) if assembly else None
         if group:
             return group.project_id, None
-    link = s.get(ComponentLink, item.id)
-    parent = s.get(SpoolPlan, link.spool_id) if link else None
+    link = read_get(s, ComponentLink, item.id)
+    parent = read_get(s, SpoolPlan, link.spool_id) if link else None
     return (parent.project_id, parent.subproject_id) if parent else (item.project or '', None)
 
 
@@ -387,9 +395,15 @@ def _assembly_errors(s, item, plan):
 def _physical_hold_errors(s, item):
     from tracking import TrackingHold
     errors = ['Item is on hold'] if item.on_hold else []
-    errors.extend('Open hold: ' + row.reason for row in s.scalars(select(TrackingHold).where(
-        TrackingHold.item_id == item.id, TrackingHold.closed_at.is_(None))))
-    if s.scalar(select(Rework.id).where(Rework.item_id == item.id, Rework.closed_at.is_(None)).limit(1)):
+    cached = projection_get(s, 'physical_holds', item.id)
+    if cached is PROJECTION_MISSING:
+        holds = s.scalars(select(TrackingHold).where(
+            TrackingHold.item_id == item.id, TrackingHold.closed_at.is_(None)))
+        has_rework = s.scalar(select(Rework.id).where(Rework.item_id == item.id, Rework.closed_at.is_(None)).limit(1))
+    else:
+        holds, has_rework = cached['tracking'], cached['rework']
+    errors.extend('Open hold: ' + row.reason for row in holds)
+    if has_rework:
         errors.append('Open item rework must be resolved')
     return errors
 
@@ -564,9 +578,9 @@ def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, statio
     if stage_cache is not None and item.id in stage_cache:
         return stage_cache[item.id]
     seen = set(seen or ())
-    plan = plan if plan is not None else s.get(FlowPlan, item.id)
+    plan = plan if plan is not None else read_get(s, FlowPlan, item.id)
     route = plan.route if plan else ('assembly' if item.kind == 'Assembly' else
-            'spool' if item.kind == 'Spool' or s.get(SpoolPlan, item.id) else 'component')
+            'spool' if item.kind == 'Spool' or read_get(s, SpoolPlan, item.id) else 'component')
     if stations is None or item.id not in stations:
         stations = station_positions(s, [item])
     own = dict(stations[item.id])
@@ -600,7 +614,7 @@ def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, statio
 def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cache=None):
     from production import compact_process_summary, process_snapshot
     from spool_presentation import item_presentation
-    plan = plan if plan is not None else s.get(FlowPlan, item.id)
+    plan = plan if plan is not None else read_get(s, FlowPlan, item.id)
     project_id, subproject_id = _project(s, item)
     return {
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
@@ -707,11 +721,15 @@ def items(project_id: str = '', subproject_id: str = '', u: Employee = Depends(a
     from removals import item_not_removed
     from spool_presentation import item_presentations
     selected = []
-    for item, plan in s.execute(select(Item, FlowPlan).join(FlowPlan, FlowPlan.item_id == Item.id).where(item_not_removed()).order_by(Item.id)):
+    rows = list(s.execute(select(Item, FlowPlan).join(FlowPlan, FlowPlan.item_id == Item.id).where(item_not_removed()).order_by(Item.id)))
+    prime_rows(s, SpoolPlan, SpoolPlan.item_id, [item.id for item, _ in rows])
+    for item, plan in rows:
         project, subproject = _project(s, item)
         if project_id and project != project_id or subproject_id and subproject != subproject_id:
             continue
         selected.append((item, plan))
+    from production import prime_process_read_events
+    prime_process_read_events(s, [item.id for item, _ in selected])
     displays = item_presentations(s, [item for item, _ in selected])
     return {'items': [_summary(s, item, plan, presentation=displays[item.id]) for item, plan in selected]}
 
@@ -732,6 +750,7 @@ def get_item(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db)
     item = s.get(Item, item_id)
     if not item:
         raise HTTPException(404, 'Item not found')
+    prime_projection(s, [item])
     return detail(s, item, u)
 
 

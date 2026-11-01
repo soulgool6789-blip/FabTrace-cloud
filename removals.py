@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from read_projection import read_cached
+from read_projection import read_cached, read_get, projection_get, PROJECTION_MISSING
 
 from main import Audit, Base, Employee, Item, audit, auth, db, permit, utcnow
 from tracking import Project, SpoolPlan, new_id
@@ -78,6 +78,9 @@ def _values(row):
 
 @read_cached(lambda s, kind, record_id: (kind, record_id))
 def _state(s, kind, record_id):
+    cached = projection_get(s, 'removal_state', (kind, record_id))
+    if cached is not PROJECTION_MISSING:
+        return cached
     return s.scalar(select(RecordRemoval).where(RecordRemoval.kind == kind,
         RecordRemoval.record_id == record_id).execution_options(populate_existing=True))
 
@@ -130,18 +133,18 @@ def _parents(s, item_id):
     from parts import PartAllocation, PartLine
     from order_spools import registered_spool
     result = set()
-    plan = s.get(SpoolPlan, item_id)
+    plan = read_get(s, SpoolPlan, item_id)
     if plan and plan.assembly_id:
         result.add(plan.assembly_id)
     registration = registered_spool(s, item_id)
     if registration:
         result.add(registration.assembly_id)
-    link = s.get(ComponentLink, item_id)
+    link = read_get(s, ComponentLink, item_id)
     if link:
         result.add(link.spool_id)
-    allocation = s.get(PartAllocation, item_id)
+    allocation = read_get(s, PartAllocation, item_id)
     if allocation:
-        line = s.get(PartLine, allocation.line_id)
+        line = read_get(s, PartLine, allocation.line_id)
         if line:
             result.add(line.spool_id)
     return result
@@ -153,19 +156,19 @@ def _project_id(s, item_id, visited=None):
     if item_id in visited:
         return None
     visited.add(item_id)
-    plan = s.get(SpoolPlan, item_id)
+    plan = read_get(s, SpoolPlan, item_id)
     if plan:
         return plan.project_id
     for parent in sorted(_parents(s, item_id)):
         project_id = _project_id(s, parent, visited)
         if project_id:
             return project_id
-    mapping = s.get(OrderAssembly, item_id)
+    mapping = read_get(s, OrderAssembly, item_id)
     if mapping:
-        group = s.get(OrderGpn, mapping.gpn_id)
+        group = read_get(s, OrderGpn, mapping.gpn_id)
         if group:
             return group.project_id
-    item = s.get(Item, item_id)
+    item = read_get(s, Item, item_id)
     return item.project if item else None
 
 
@@ -177,7 +180,7 @@ def require_active_project(s, project_id):
 def require_active_gpn(s, gpn_id):
     if gpn_is_removed(s, gpn_id):
         raise HTTPException(409, 'This GPN / Assembly has been removed. An administrator must restore it from Removed records before making changes.')
-    group = s.get(OrderGpn, gpn_id)
+    group = read_get(s, OrderGpn, gpn_id)
     if group:
         require_active_project(s, group.project_id)
 
@@ -192,7 +195,7 @@ def require_active_item(s, item_id):
         seen.add(current)
         if item_is_removed(s, current):
             raise HTTPException(409, 'This item or its parent has been removed. An administrator must restore it from Removed records before work, transfers or changes.')
-        mapping = s.get(OrderAssembly, current)
+        mapping = read_get(s, OrderAssembly, current)
         if mapping:
             require_active_gpn(s, mapping.gpn_id)
         pending.extend(_parents(s, current))
@@ -201,7 +204,7 @@ def require_active_item(s, item_id):
 
 def _record(s, kind, record_id):
     model = {'order': PurchaseOrder, 'gpn': OrderGpn, 'item': Item}[kind]
-    row = s.get(model, record_id)
+    row = read_get(s, model, record_id)
     if row is None:
         raise HTTPException(404, 'Record not found')
     return row
@@ -262,7 +265,7 @@ def _scope(s, kind, record_id):
     for mapping in s.scalars(select(OrderAssembly).where(OrderAssembly.item_id.in_(items))).all() if items else []:
         siblings = set(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == mapping.gpn_id)))
         active_siblings = {value for value in siblings if not item_is_removed(s, value)}
-        if active_siblings.issubset(items) and s.get(OrderAssemblyRequirement, mapping.gpn_id) is None:
+        if active_siblings.issubset(items) and read_get(s, OrderAssemblyRequirement, mapping.gpn_id) is None:
             groups.add(mapping.gpn_id)
     return sorted([('order', value) for value in orders] + [('gpn', value) for value in groups] + [('item', value) for value in items])
 
@@ -291,7 +294,7 @@ def _project_ids(s, keys):
             result.add(_record(s, kind, record_id).project_id)
         else:
             value = _project_id(s, record_id)
-            if value and s.get(PurchaseOrder, value):
+            if value and read_get(s, PurchaseOrder, value):
                 result.add(value)
     return result
 
@@ -316,9 +319,9 @@ def _blockers(s, kind, record_id, action, state, scope):
                 if ('item', parent) not in scope_set:
                     registration = registered_spool(s, item_id)
                     if (registration and parent == registration.assembly_id
-                            and s.get(SpoolPlan, item_id) is None
-                            and s.get(ComponentLink, item_id) is None
-                            and s.get(PartAllocation, item_id) is None):
+                            and read_get(s, SpoolPlan, item_id) is None
+                            and read_get(s, ComponentLink, item_id) is None
+                            and read_get(s, PartAllocation, item_id) is None):
                         # A registration reserves identity and parent only. It
                         # can be removed/replaced without inventing an unlink
                         # or altering the saved demand. Keep its fixed parent
@@ -334,7 +337,7 @@ def _blockers(s, kind, record_id, action, state, scope):
             latest = s.scalar(select(SpoolProcessEvent).where(SpoolProcessEvent.item_id == item_id)
                 .order_by(SpoolProcessEvent.sequence.desc()).limit(1))
             if latest and latest.event not in ('finish', 'release'):
-                if s.get(FlowPlan, item_id):
+                if read_get(s, FlowPlan, item_id):
                     blockers.append(f'{item_id} has an open numbered-process timer. Complete or close its route through Process flow before removal; removal cannot complete production or QA.')
                 else:
                     blockers.append(f'{item_id} has an open process timer. Use Finish timer before removal; finishing a timer does not approve fabrication or QA.')
@@ -353,7 +356,7 @@ def _blockers(s, kind, record_id, action, state, scope):
                 for parent in _parents(s, item_id):
                     if ('item', parent) not in scope_set and item_is_removed(s, parent):
                         blockers.append(f'Restore parent item {parent} before restoring {item_id}.')
-                mapping = s.get(OrderAssembly, item_id)
+                mapping = read_get(s, OrderAssembly, item_id)
                 if mapping and ('gpn', mapping.gpn_id) not in scope_set and gpn_is_removed(s, mapping.gpn_id):
                     blockers.append('Restore the parent GPN / Assembly before restoring this item.')
         # Removing an actual assembly frees active capacity for a replacement.
@@ -365,27 +368,27 @@ def _blockers(s, kind, record_id, action, state, scope):
         restored_mappings = s.scalars(select(OrderAssembly).where(
             OrderAssembly.item_id.in_(restored_ids))).all() if restored_ids else []
         for gpn_id in sorted({mapping.gpn_id for mapping in restored_mappings}):
-            required = s.get(OrderAssemblyRequirement, gpn_id)
+            required = read_get(s, OrderAssemblyRequirement, gpn_id)
             if required is None:
                 continue
             mappings = set(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == gpn_id)))
             active = set(s.scalars(select(Item.id).where(Item.id.in_(mappings), item_not_removed(Item.id))))
             if len(active | (restored_ids & mappings)) > required.assembly_quantity:
-                group = s.get(OrderGpn, gpn_id)
+                group = read_get(s, OrderGpn, gpn_id)
                 blockers.append(f'Restoring these records would exceed the {required.assembly_quantity} planned assembly quantity for {group.gpn}. Remove the replacement assembly before restoring its original identity.')
         # Count the registered/planned union once, including retained legacy
         # children. A restored spool must fit both its parent's total and the
         # declared quantity of that spool number.
         parent_ids = {parent for item_id in restored_ids for parent in _parents(s, item_id)}
         for parent_id in sorted(parent_ids):
-            mapping = s.get(OrderAssembly, parent_id)
+            mapping = read_get(s, OrderAssembly, parent_id)
             if mapping is None:
                 continue
             children = [(item, plan) for item, plan in effective_children(s, parent_id)
                         if item.id in restored_ids or not item_is_removed(s, item.id)]
             if len(children) > mapping.required_spools:
                 blockers.append(f'Restoring these records would exceed the {mapping.required_spools} required spools for assembly {parent_id}. Remove the replacement scope before restoring its original identities.')
-            required = s.get(OrderAssemblyRequirement, mapping.gpn_id)
+            required = read_get(s, OrderAssemblyRequirement, mapping.gpn_id)
             if required is None:
                 continue
             limits = {row.normalized_number: row for row in s.scalars(select(OrderSpoolRequirement)
@@ -422,13 +425,13 @@ def _preview(s, kind, record_id, action):
         detail = {'kind': target_kind, 'record': _values(_record(s, target_kind, value)),
                   'removal': _values(_state(s, target_kind, value))}
         if target_kind == 'item':
-            detail.update(plan=_values(s.get(SpoolPlan, value)), flow=_values(s.get(FlowPlan, value)),
-                parts=_values(s.get(SpoolPartsPlan, value)), transfer=_values(s.get(ItemTransferState, value)),
-                mapping=_values(s.get(OrderAssembly, value)),
-                spool_registration=_values(s.get(OrderSpool, value)), parents=sorted(_parents(s, value)))
+            detail.update(plan=_values(read_get(s, SpoolPlan, value)), flow=_values(read_get(s, FlowPlan, value)),
+                parts=_values(read_get(s, SpoolPartsPlan, value)), transfer=_values(read_get(s, ItemTransferState, value)),
+                mapping=_values(read_get(s, OrderAssembly, value)),
+                spool_registration=_values(read_get(s, OrderSpool, value)), parents=sorted(_parents(s, value)))
         basis['scope'].append(detail)
     for value in sorted(project_ids):
-        basis['projects'].append(_values(s.get(PurchaseOrder, value)))
+        basis['projects'].append(_values(read_get(s, PurchaseOrder, value)))
     if item_ids:
         basis['audit'] = [(item_id, audit_id) for item_id, audit_id in s.execute(select(
             Audit.item_id, func.max(Audit.id)).where(Audit.item_id.in_(item_ids)).group_by(Audit.item_id).order_by(Audit.item_id)).all()]
@@ -505,7 +508,7 @@ def _change(s, user, kind, record_id, action, data):
              'project_id': value if target_kind == 'order' else _record(s, target_kind, value).project_id
                 if target_kind == 'gpn' else _project_id(s, value)})
     for project_id in sorted(_project_ids(s, keys)):
-        order = s.get(PurchaseOrder, project_id)
+        order = read_get(s, PurchaseOrder, project_id)
         if order:
             _event(s, order, actor, 'RECORDS_REMOVED' if action == 'remove' else 'RECORDS_RESTORED',
                 before=None, after={'root_kind': kind, 'root_id': record_id, 'batch_id': batch,

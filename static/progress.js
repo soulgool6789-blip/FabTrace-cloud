@@ -4,7 +4,7 @@
   const itemNumberText=(row,label,tag='span')=>row.kind==='spool'&&window.FabFlowStatus?.spoolText?window.FabFlowStatus.spoolText(row,label,tag):`<${tag}>${esc(label)}</${tag}>`;
   const ROOT='/api/progress',node=id=>document.getElementById(id),encode=encodeURIComponent;
   const arr=v=>Array.isArray(v)?v:[],text=v=>String(v??''),num=v=>Number.isFinite(Number(v))?Number(v):0;
-  const state={active:false,sequence:0,project:'',projects:[],detail:null,status:'all',subproject:'',kind:'all',query:'',sort:'status',projectQuery:''};
+  const state={active:false,sequence:0,loading:false,pending:null,read:null,project:'',projects:[],detail:null,status:'all',subproject:'',kind:'all',query:'',sort:'status',projectQuery:''};
   const names={wip:'WIP',finished:'Finished',shipped:'Shipped',delivered:'Delivered',component:'Component',spool:'Spool',assembly:'Assembly',unplanned:'Needs plan'};
   const button=(action,label,id='',cls='')=>`<button type="button" class="${esc(cls)}" data-progress-action="${esc(action)}" data-progress-id="${esc(id)}">${esc(label)}</button>`;
   const option=(value,label,current)=>`<option value="${esc(value)}"${text(value)===text(current)?' selected':''}>${esc(label)}</option>`;
@@ -32,11 +32,24 @@
     return meter(0,'No production progress recorded','Set up the actual plan or route.');
   }
   function partsMeter(row){const p=row.parts,t=p?.totals;if(!p?.configured)return '';const required=num(t?.required_qty),prepared=num(t?.prepared_qty);return required>0?meter(prepared/required*100,'Required pieces prepared',`${prepared} of ${required} required pieces; ${num(t.assigned_qty)} assigned; ${num(t.short_qty)} still to assign`):'<small>Required parts quantities need verification.</small>';}
+  function matchingItems(){
+    // Filter the current read-only response. Reopening or Refresh always reads the server.
+    const needle=state.query.trim().toLowerCase(),order={wip:0,finished:1,shipped:2,delivered:3};
+    const rows=arr(state.detail?.items).filter(row=>
+      (!state.subproject||row.subproject_id===state.subproject)&&(state.kind==='all'||row.kind===state.kind)&&
+      (state.status!=='wip'||!row.fabrication_finished)&&(state.status!=='finished'||row.fabrication_finished)&&
+      (!['shipped','delivered'].includes(state.status)||row.status===state.status)&&
+      (!needle||['id','description','google_part_number','current_title'].map(key=>text(row[key])).join(' ').toLowerCase().includes(needle)));
+    return rows.sort((a,b)=>{
+      const rank=state.sort==='progress_asc'?num(a.progress_percent)-num(b.progress_percent):state.sort==='progress_desc'?num(b.progress_percent)-num(a.progress_percent):state.sort==='status'?(order[a.status]??99)-(order[b.status]??99):0;
+      return rank||(text(a.id)<text(b.id)?-1:text(a.id)>text(b.id)?1:0);
+    });
+  }
   function board(){
     const d=state.detail,c=d.counts||{},project=d.project;
     let html=head(project.name,`${project.id}${project.client?' · '+project.client:''}`,button('home','All projects')+button('dossier-project','Project Job Packets',project.id)+button('guide-project','Guide & setup',project.id));
     html+=metrics(c)+`<section class="fp-card">${meter(c.finished_percent,'Registered parts finished',`${num(c.finished)} of ${num(c.total_parts)} known physical items`,true)}<div class="fp-tags">${tag('shipped',`${num(c.shipped)} shipped`)}${tag('delivered',`${num(c.delivered)} delivered`)}${num(c.planning_needed)?tag('pending',`${num(c.planning_needed)} need planning`):''}</div>${note()}</section>`+filters();
-    const rows=arr(d.items);
+    const rows=matchingItems();
     html+=`<p class="fp-note">${rows.length} matching part${rows.length===1?'':'s'}${d.as_of?' · Calculated '+esc(new Date(d.as_of).toLocaleString()):''}. Finished includes items subsequently shipped or delivered. Route history can remain below 100% when earlier work was adopted with a documented baseline.</p>`;
     if(!rows.length)return html+'<div class="fp-empty"><strong>No parts match these filters</strong><p>Clear a status, type, work-package or search filter. Items must be assigned to this project.</p></div>';
     html+='<div class="fp-card tablewrap"><table class="fp-table"><thead><tr><th>Physical item</th><th>Status</th><th>Recorded progress</th><th>Current work / quality</th><th>Open record</th></tr></thead><tbody>'+rows.map(row=>`<tr><td>${itemNumberText(row,row.kind==='spool'?(window.FabFlowStatus?.spoolNumber(row)||row.display_code||row.google_part_number||row.id):row.id,'strong')}<small>${esc(names[row.kind]||row.item_kind||row.kind)}${row.google_part_number?' · '+itemNumberText(row,row.google_part_number):''}</small>${row.parent_id?`<small>Parent: ${esc(row.parent_id)}</small>`:''}</td><td>${tag(row.status)}${row.blocked?`<div class="fp-tags">${tag('blocked','Blocked')}</div>`:''}${row.scope_source==='item_project_id'?'<small>Legacy project field; review planning scope.</small>':''}</td><td>${rowMeter(row)}${partsMeter(row)}</td><td>${row.current_title?`<strong>${row.current_step?esc(row.current_step)+' · ':''}${esc(row.current_title)}</strong>`:'<span>No active numbered step</span>'}<small>${esc(row.location||'Location not recorded')} · ${esc(row.handler||'Handler not recorded')}</small>${row.administrative_release?'<small class="fa-release-tag">Administrative release</small>':row.released?'<small>'+esc(row.release_label||'QA release recorded')+'</small>':''}${arr(row.blockers).length?`<small>${esc(row.blockers[0])}</small><details><summary>${row.blockers.length} blocker${row.blockers.length===1?'':'s'}</summary><ul>${row.blockers.map(v=>`<li>${esc(v)}</li>`).join('')}</ul></details>`:''}</td><td><div class="actions">${button('item','Item & QR',row.id)}${button('flow','Process flow',row.id)}${['spool','assembly'].includes(row.kind)?button('weld','Weld records',row.id):''}${row.kind==='spool'?button('spool-parts','Spool parts',row.id):''}${['spool','assembly'].includes(row.kind)?button('dossier-item','Job Packet',row.id):''}</div></td></tr>`).join('')+'</tbody></table></div>';
@@ -45,23 +58,29 @@
   function render(){if(!state.active)return;node('progressContent').innerHTML=state.detail?board():home();node('progressContent').setAttribute('aria-busy','false');wire();}
   function wire(){
     const homeSearch=node('progressProjectSearch');if(homeSearch)homeSearch.oninput=()=>{state.projectQuery=homeSearch.value;const start=homeSearch.selectionStart;render();node('progressProjectSearch').focus();node('progressProjectSearch').setSelectionRange(start,start);};
-    for(const [id,key] of [['progressStatus','status'],['progressSubproject','subproject'],['progressKind','kind'],['progressSort','sort']]){const el=node(id);if(el)el.onchange=()=>{state[key]=el.value;return load();};}
-    const search=node('progressSearch');if(search)search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();state.query=search.value;return load();}};
+    for(const [id,key] of [['progressStatus','status'],['progressSubproject','subproject'],['progressKind','kind'],['progressSort','sort']]){const el=node(id);if(el)el.onchange=()=>{state[key]=el.value;render();node(id)?.focus();};}
+    const search=node('progressSearch');if(search)search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();state.query=search.value;render();node('progressSearch')?.focus();}};
   }
   async function load(){
-    const sequence=++state.sequence;node('progressContent').innerHTML='<div class="fp-state" role="status">Loading registered project progress…</div>';node('progressContent').setAttribute('aria-busy','true');
-    try{let result;
-      if(state.project){const query=new URLSearchParams({status:state.status,subproject_id:state.subproject,kind:state.kind,search:state.query,sort:state.sort});result=await api(ROOT+'/projects/'+encode(state.project)+'?'+query.toString());}
-      else result=await api(ROOT+'/projects');
+    if(!state.active||!me)return;if(state.loading)return state.pending;
+    const sequence=++state.sequence,project=state.project;cancelRead();state.loading=true;
+    const request={controller:new AbortController(),timer:null,timedOut:false};state.read=request;
+    request.timer=setTimeout(()=>{request.timedOut=true;request.controller.abort();},30000);
+    node('progressContent').innerHTML='<div class="fp-state" role="status">Loading registered project progress…</div>';node('progressContent').setAttribute('aria-busy','true');
+    const pending=(async()=>{try{let result;
+      if(project){const query=new URLSearchParams({status:'all',subproject_id:'',kind:'all',search:'',sort:'status'});result=await api(ROOT+'/projects/'+encode(project)+'?'+query.toString(),{signal:request.controller.signal});}
+      else result=await api(ROOT+'/projects',{signal:request.controller.signal});
       if(!state.active||sequence!==state.sequence)return;
-      if(state.project)state.detail=result;else{state.detail=null;state.projects=arr(result.projects);}render();url();
-    }catch(error){if(!state.active||sequence!==state.sequence)return;node('progressContent').innerHTML=`<div class="fp-state fp-error" role="alert"><strong>Project progress could not be loaded.</strong><p>${esc(errorText(error))}</p><div class="actions">${button('refresh','Try again')}${button('home','All projects')}</div></div>`;}
-    finally{if(sequence===state.sequence)node('progressContent').setAttribute('aria-busy','false');}
+      if(project){if(result?.project?.id!==project||!Array.isArray(result.items))throw Error('The progress response does not match the selected project. Refresh to try again.');state.detail=result;}
+      else{if(!Array.isArray(result?.projects))throw Error('The project list could not be verified. Refresh to try again.');state.detail=null;state.projects=result.projects;}render();url();
+    }catch(error){if(!state.active||sequence!==state.sequence)return;state.detail=null;const message=request.timedOut?'This request took too long. Try again to load current project progress.':errorText(error);node('progressContent').innerHTML=`<div class="fp-state fp-error" role="alert"><strong>Project progress could not be loaded.</strong><p>${esc(message)}</p><div class="actions">${button('refresh','Try again')}${button('home','All projects')}</div></div>`;}
+    finally{clearTimeout(request.timer);request.controller.abort();if(state.read===request)state.read=null;if(sequence===state.sequence){state.loading=false;state.pending=null;node('progressContent').setAttribute('aria-busy','false');}}})();state.pending=pending;return pending;
   }
-  async function open(options={}){if(!me)return;show('progressPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;state.project=text(options.project||'');state.detail=null;state.status='all';state.subproject='';state.kind='all';state.query='';state.sort='status';await load();}
+  function cancelRead(){const request=state.read;if(!request)return;state.read=null;clearTimeout(request.timer);request.controller.abort();}
+  async function open(options={}){if(!me)return;const project=text(options.project||'');if(state.active&&state.loading&&state.project===project)return state.pending;show('progressPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;state.project=project;state.detail=null;state.loading=false;state.pending=null;state.status='all';state.subproject='';state.kind='all';state.query='';state.sort='status';await load();}
   async function act(action,id){
     if(action==='refresh')return load();if(action==='home')return open();if(action==='project')return open({project:id});
-    if(action==='search'){state.query=node('progressSearch')?.value||'';return load();}
+    if(action==='search'){state.query=node('progressSearch')?.value||'';render();return;}
     if(action==='dossier-project')return window.FabDossier.open({project:id});
     if(action==='guide-project')return window.FabGuide.open({project:id});
     if(action==='spool-parts')return window.FabParts.open({spool:id,project:state.project});
@@ -71,5 +90,5 @@
   }
   node('progressContent').addEventListener('click',async event=>{const target=event.target.closest('[data-progress-action]');if(!target||target.disabled)return;try{await act(target.dataset.progressAction,target.dataset.progressId||'');}catch(error){notify(errorText(error));}});
   node('navProgress').onclick=()=>open();
-  window.FabProgress={open,refresh:load,cancelPending(){state.active=false;state.sequence++;}};
+  window.FabProgress={open,refresh:load,cancelPending(){state.active=false;state.sequence++;cancelRead();state.loading=false;state.pending=null;}};
 })();

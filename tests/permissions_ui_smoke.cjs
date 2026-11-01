@@ -18,7 +18,7 @@ const calls=[],messages=[],routes=[];
 function employee(){const p=policy(selectedRole);return {badge:'SYNTHETIC',name:'Synthetic position test',role:selectedRole,role_label:p.label,permissions:{...p}};}
 function item(){const p=policy(selectedRole),has=cap=>p.capabilities.includes(cap);return {id:'SYNTHETIC-ITEM',description:'Disposable UI fixture',kind:'Part',project:'UI-TEST',location:'Shop',handler:'SYNTHETIC',welds_done:0,welds_required:1,dimensional:'Not started',weld:'Not started',released:false,tracking_enabled:false,reworks:[{id:1,kind:'Correction',reason:'Fixture only',assigned:'SYNTHETIC',can_close:has('close_rework')}],inspections:[],permissions:itemPermissionOverride||{can_weld:has('weld_production'),can_inspect:has('inspect'),can_open_rework:has('open_rework'),can_release:has('inspect'),can_reopen:has('admin')},transfer:{status_label:'Queued',can_transfer:true},release_control:{mode:'not_released',label:'Not released'}};}
 const context={console,URL,URLSearchParams,Date,Blob,location:{search:'',origin:'https://example.test',reload(){}},history:{replaceState(){}},
- document:{getElementById:el,createElement:()=>new Element('created'),body:{appendChild(){}}},setTimeout:()=>0,clearTimeout(){},confirm:()=>false,
+ document:{getElementById:el,createElement:()=>new Element('created'),body:{appendChild(){}},addEventListener(){}},setTimeout:()=>0,clearTimeout(){},confirm:()=>false,
  FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
  addEventListener(){},open:()=>null,
 };
@@ -64,6 +64,29 @@ async function signIn(role){selectedRole=role;await context.refreshAuth();await 
  el('employeeRole').value='painter';el('employeeRole').onchange();assert.match(el('employeeRoleHelp').textContent,/coating/);
  el('employeeForm').values={badge:'NEW',name:'Synthetic new user',pin:'synthetic-private-value',role:'painter'};await el('employeeForm').onsubmit({preventDefault(){},target:el('employeeForm')});assert.equal(JSON.parse(writes().at(-1).body).role,'painter');assert.equal(el('employeeRole').value,'','the next employee also needs explicit selection');
  vm.runInContext("me={role:'admin'}",context);assert.equal(context.FabPermissions.can('admin'),false,'role names never replace missing server capability grants');
+ const originalApi=context.api, pending=new Map(), started=[];
+ context.api=(url,options)=>{
+   if(['/api/me','/api/permissions','/api/qr/status'].includes(url)){
+     started.push(url);return new Promise((resolve,reject)=>pending.set(url,{resolve,reject}));
+   }
+   return originalApi(url,options);
+ };
+ el('workspace').classList.add('hidden');selectedRole='admin';
+ const startup=context.refreshAuth();
+ assert.deepEqual(started,['/api/me','/api/permissions','/api/qr/status'],'independent startup reads begin together');
+ pending.get('/api/me').resolve(employee());
+ pending.get('/api/qr/status').reject(Error('QR status temporarily unavailable'));
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(visible('workspace'),false,'workspace waits for verified permissions');
+ pending.get('/api/permissions').resolve({roles});await startup;
+ assert.equal(visible('workspace'),true,'a QR configuration read failure does not block authenticated use');
+ const denied=context.refreshAuth();
+ pending.get('/api/me').resolve(employee());
+ pending.get('/api/qr/status').resolve({ready:false});
+ pending.get('/api/permissions').reject(Error('Permission verification failed'));await denied;
+ assert.equal(visible('workspace'),false,'permission failures still deny access to the workspace');
+ assert.equal(context.FabPermissions.can('admin'),false,'failed authentication clears stale capability grants');
+ context.api=originalApi;
  assert.equal(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),html,'both HTML entrypoints stay identical');
  console.log('PASS: job permissions on legacy item controls and navigation; server denial is authoritative; all10 role labels; explicit employee position selection and scoped description; ordinary badge transfers remain available; missing capabilities fail closed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

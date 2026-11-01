@@ -24,7 +24,7 @@ from pypdf import PdfReader, PdfWriter
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
 from sqlalchemy.orm import Session, deferred
-from read_projection import read_cached
+from read_projection import read_cached, read_get, projection_get, PROJECTION_MISSING
 from sqlalchemy.exc import IntegrityError
 
 from isometric_ocr import ImageNormalizationError, normalize_image_pdf
@@ -131,6 +131,9 @@ def _safe_filename(value):
 
 
 def _set_for(s, scope, identity):
+    cached = projection_get(s, 'document_set', (scope, identity))
+    if cached is not PROJECTION_MISSING:
+        return cached
     column = SpoolDocumentSet.requirement_id if scope == 'requirements' else SpoolDocumentSet.spool_id
     return s.scalar(select(SpoolDocumentSet).where(column == identity))
 
@@ -186,10 +189,10 @@ def _target(s, scope, identity):
         _fail('Choose an order spool requirement or a physical spool.', 404)
     group = None
     if scope == 'requirements':
-        requirement = s.get(OrderSpoolRequirement, identity)
+        requirement = read_get(s, OrderSpoolRequirement, identity)
         if requirement is None or not requirement.active:
             _fail('Active spool requirement not found.', 404)
-        group = s.get(OrderGpn, requirement.gpn_id)
+        group = read_get(s, OrderGpn, requirement.gpn_id)
         if group is None:
             _fail('Assembly number not found.', 404)
         require_active_gpn(s, group.id)
@@ -198,7 +201,7 @@ def _target(s, scope, identity):
         item, registration = None, None
     else:
         from spool_receiving import is_physical_spool, physical_spool_number
-        item = s.get(Item, identity)
+        item = read_get(s, Item, identity)
         if not is_physical_spool(s, item):
             _fail('Physical spool not found.', 404)
         require_active_item(s, item.id)
@@ -207,15 +210,15 @@ def _target(s, scope, identity):
         project_id, assembly_id, spool_number = item.project, effective_parent_id(s, item.id), physical_spool_number(s, item)
         if project_id:
             require_active_project(s, project_id)
-        registration = s.get(OrderSpool, item.id)
-        requirement = s.get(OrderSpoolRequirement, registration.requirement_id) if registration else None
-        mapping = s.get(OrderAssembly, assembly_id) if assembly_id else None
-        group = s.get(OrderGpn, mapping.gpn_id) if mapping else None
+        registration = read_get(s, OrderSpool, item.id)
+        requirement = read_get(s, OrderSpoolRequirement, registration.requirement_id) if registration else None
+        mapping = read_get(s, OrderAssembly, assembly_id) if assembly_id else None
+        group = read_get(s, OrderGpn, mapping.gpn_id) if mapping else None
         if assembly_id:
             require_active_item(s, assembly_id)
         if group:
             require_active_gpn(s, group.id)
-    order = s.get(PurchaseOrder, project_id) if project_id else None
+    order = read_get(s, PurchaseOrder, project_id) if project_id else None
     context = {'kind': 'requirement' if scope == 'requirements' else 'spool',
                'requirement_id': requirement.id if requirement else None,
                'item_id': item.id if item else None, 'spool_number': spool_number,
@@ -230,7 +233,7 @@ def _locked_reason(s, scope, identity, item, requirement):
         if item.released:
             return 'This spool is released. Return it to work before uploading a new document revision.'
         parent_id = effective_parent_id(s, item.id)
-        parent = s.get(Item, parent_id) if parent_id else None
+        parent = read_get(s, Item, parent_id) if parent_id else None
         if parent and parent.released:
             return 'The parent assembly is released. Return it to work before changing spool documents.'
         return ''
@@ -277,6 +280,9 @@ def _metadata(document, doc_set, inherited=False, include_bom=True):
 def _documents(s, doc_set, inherited=False):
     if doc_set is None:
         return []
+    cached = projection_get(s, 'document_rows', doc_set.id)
+    if cached is not PROJECTION_MISSING:
+        return [(_metadata(row, doc_set, inherited), row) for row in cached]
     rows = list(s.scalars(
         select(SpoolDocument).where(SpoolDocument.set_id == doc_set.id)
         .order_by(SpoolDocument.version.desc()).limit(100)))
@@ -710,10 +716,10 @@ def bom_template(user: Employee = Depends(auth)):
 
 @router.get('/files/{document_id}')
 def document_file(document_id: str, download: bool = False, user: Employee = Depends(auth), s: Session = Depends(db)):
-    document = s.get(SpoolDocument, document_id)
+    document = read_get(s, SpoolDocument, document_id)
     if document is None:
         _fail('Spool document not found.', 404)
-    doc_set = s.get(SpoolDocumentSet, document.set_id)
+    doc_set = read_get(s, SpoolDocumentSet, document.set_id)
     _target(s, 'requirements' if doc_set.requirement_id else 'spools', doc_set.requirement_id or doc_set.spool_id)
     content, _ = _stored_file(s, document)
     disposition = 'attachment' if download or document.media_type != 'application/pdf' else 'inline'
@@ -830,7 +836,7 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
 
 def _physical_documents(s, item_id):
     from spool_receiving import is_physical_spool
-    item = s.get(Item, item_id)
+    item = read_get(s, Item, item_id)
     if item is None:
         return []
     if item.kind == 'Assembly':
@@ -841,8 +847,8 @@ def _physical_documents(s, item_id):
         return result
     if not is_physical_spool(s, item):
         return []
-    registration = s.get(OrderSpool, item.id)
-    requirement = s.get(OrderSpoolRequirement, registration.requirement_id) if registration else None
+    registration = read_get(s, OrderSpool, item.id)
+    requirement = read_get(s, OrderSpoolRequirement, registration.requirement_id) if registration else None
     _, _, active, rows, _, _ = _effective(s, 'spools', item.id, requirement)
     return [(item.id, active[kind], rows[kind]) for kind in ('bom', 'isometric') if active[kind]]
 
@@ -873,7 +879,7 @@ def spool_document_retained_file(s, document_id):
     apply current active-scope guards. Its caller must authorize the issued
     packet and supply only document IDs retained in that packet's snapshot.
     """
-    document = s.get(SpoolDocument, document_id)
+    document = read_get(s, SpoolDocument, document_id)
     if document is None:
         _fail('A retained spool document could not be verified for the Job Packet.', 503)
     content, _ = _stored_file(s, document)
@@ -892,8 +898,8 @@ def _stored_file(s, document):
         if (current.sha256 != document.sha256 or current.size_bytes != document.size_bytes
                 or current.media_type != document.media_type):
             break
-        stored = s.get(SpoolDocumentFile, current.id)
-        linked = s.get(SpoolDocumentFileLink, current.id)
+        stored = read_get(s, SpoolDocumentFile, current.id)
+        linked = read_get(s, SpoolDocumentFileLink, current.id)
         if stored is not None and linked is None:
             content = stored.content
             if len(content) == document.size_bytes and hashlib.sha256(content).hexdigest() == document.sha256:
@@ -901,7 +907,7 @@ def _stored_file(s, document):
             break
         if stored is not None or linked is None:
             break
-        current = s.get(SpoolDocument, linked.source_document_id)
+        current = read_get(s, SpoolDocument, linked.source_document_id)
     _fail('The saved document could not be verified. Contact an administrator.', 503)
 
 

@@ -14,7 +14,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from pwdlib import PasswordHash
 from permissions import Role, role_catalog, role_label, user_permissions, has_capability, require_capability
 from upload_limits import SpoolDocumentUploadLimit
-from read_projection import read_projection
+from read_projection import prime_projection, read_projection
 
 DATABASE_URL=os.environ.get('DATABASE_URL','')
 # Render PostgreSQL supplies postgresql://, but SQLAlchemy must use the
@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.01-loading-performance.1'
+APP_VERSION='2026.11.01-loading-performance.2'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -216,7 +216,13 @@ async def origin_check(request:Request,call_next):
     result.headers['X-Frame-Options']=('SAMEORIGIN' if request.method=='GET' and
         request.url.path.startswith(('/api/spool-documents/files/', '/api/spool-boms/mtr-files/')) else 'DENY')
     result.headers['Referrer-Policy']='no-referrer'
-    result.headers['Cache-Control']='no-store'
+    # Only public, release-versioned scripts/styles may be reused. HTML and
+    # authenticated records/documents always remain fresh and private.
+    versioned_asset = (request.method in ('GET', 'HEAD') and
+        request.url.path.startswith('/static/') and
+        request.url.path.endswith(('.js', '.css')) and
+        request.query_params.get('v') == APP_VERSION and result.status_code in (200, 304))
+    result.headers['Cache-Control']='public, max-age=86400' if versioned_asset else 'no-store'
     return result
 
 class Login(BaseModel):
@@ -445,6 +451,7 @@ def get_item(item_id:str,u:Employee=Depends(auth),s:Session=Depends(db)):
     with read_projection(s):
         r=s.get(Item,item_id)
         if not r:raise HTTPException(404,'Item not found')
+        prime_projection(s,[r])
         return item_dict(s,r,u)
 class WeldEvent(BaseModel):
     count:int=Field(ge=1,le=10000)

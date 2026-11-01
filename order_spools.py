@@ -10,7 +10,7 @@ from collections import defaultdict
 from fastapi import HTTPException
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         String, UniqueConstraint, and_, exists, func, or_, select, text)
-from read_projection import read_cached
+from read_projection import read_cached, read_get, projection_get, PROJECTION_MISSING
 
 from main import Base, Item, audit, utcnow
 from tracking import SpoolPlan
@@ -75,7 +75,7 @@ def _lock_qr_allocation(s):
 
 def spool_qr_identity(s, item_id):
     """Read a stored identity without allocating or changing inventory."""
-    return s.get(SpoolQrIdentity, item_id)
+    return read_get(s, SpoolQrIdentity, item_id)
 
 
 def resolve_spool_qr_identity(s, code):
@@ -106,7 +106,7 @@ def ensure_spool_qr_identity(s, item, actor, source='item_create'):
         return prior
     if item.kind == 'Assembly':
         return None
-    if item.kind != 'Spool' and not (s.get(SpoolPlan, item.id) or s.get(OrderSpool, item.id)):
+    if item.kind != 'Spool' and not (read_get(s, SpoolPlan, item.id) or read_get(s, OrderSpool, item.id)):
         return None
     number = _qr_number(item.google_part_number)
     if not number:
@@ -161,7 +161,7 @@ def backfill_spool_qr_identities(s, actor='system:spool-qr-backfill'):
 
 @read_cached(lambda s, item_id: item_id)
 def registered_spool(s, item_id):
-    return s.get(OrderSpool, item_id)
+    return read_get(s, OrderSpool, item_id)
 
 
 @read_cached(lambda s, item_id: item_id)
@@ -169,7 +169,7 @@ def effective_parent_id(s, item_id):
     registration = registered_spool(s, item_id)
     if registration:
         return registration.assembly_id
-    plan = s.get(SpoolPlan, item_id)
+    plan = read_get(s, SpoolPlan, item_id)
     return plan.assembly_id if plan else None
 
 
@@ -203,6 +203,9 @@ def effective_children_by_assembly(s, assembly_ids, *, include_removed=True):
 
 @read_cached(lambda s, assembly_id, *, include_removed=True: (assembly_id, include_removed))
 def effective_children(s, assembly_id, *, include_removed=True):
+    cached = projection_get(s, 'assembly_children', (assembly_id, include_removed))
+    if cached is not PROJECTION_MISSING:
+        return cached
     return effective_children_by_assembly(s, [assembly_id],
         include_removed=include_removed).get(assembly_id, [])
 
@@ -263,18 +266,18 @@ def guard_registered_spool(s, item, values=None):
     from orders import OrderAssembly, OrderGpn, _key
     from order_setup import OrderSpoolRequirement
     from removals import require_active_item, require_active_gpn
-    mapping = s.get(OrderAssembly, registration.assembly_id)
-    requirement = s.get(OrderSpoolRequirement, registration.requirement_id)
+    mapping = read_get(s, OrderAssembly, registration.assembly_id)
+    requirement = read_get(s, OrderSpoolRequirement, registration.requirement_id)
     if mapping is None or requirement is None or requirement.gpn_id != mapping.gpn_id or not requirement.active:
         raise HTTPException(409, 'This registered spool does not match an active requirement in its purchase-order assembly.')
-    group = s.get(OrderGpn, mapping.gpn_id)
+    group = read_get(s, OrderGpn, mapping.gpn_id)
     require_active_gpn(s, mapping.gpn_id)
     require_active_item(s, mapping.item_id)
     if item.kind != 'Spool' or _key(item.google_part_number or '') != requirement.normalized_number:
         raise HTTPException(409, 'The registered physical spool part number must match its saved purchase-order spool requirement.')
     if item.project != group.project_id:
         raise HTTPException(409, 'This registered spool must remain in its purchase-order project.')
-    plan = s.get(SpoolPlan, item.id)
+    plan = read_get(s, SpoolPlan, item.id)
     if plan and (plan.project_id != group.project_id or plan.assembly_id != registration.assembly_id):
         raise HTTPException(409, 'This registered spool has conflicting weld-plan scope. Correct the retained scope before changing its work.')
     if values is not None and (values.get('project_id') != group.project_id or

@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const ROOT='/api/orders',node=id=>document.getElementById(id),text=v=>String(v??''),arr=v=>Array.isArray(v)?v:[],enc=encodeURIComponent;
-  const state={active:false,sequence:0,loading:false,pending:null,saving:false,downloading:false,po:'',gpn:'',assembly:'',query:'',list:null,detail:null,form:null,error:'',formError:'',stale:false,staff:[],formRequest:0};
+  const state={active:false,sequence:0,loading:false,pending:null,read:null,saving:false,downloading:false,po:'',gpn:'',assembly:'',query:'',list:null,detail:null,form:null,error:'',formError:'',stale:false,staff:[],formRequest:0};
   const count=v=>Number.isInteger(v)&&v>=0?v:null,display=v=>count(v)===null?'—':String(v),canManage=()=>window.FabPermissions?.can('manage_production')===true&&(state.detail||state.list)?.permissions?.can_manage===true;
   const canRemove=()=>me?.role==='admin'&&(state.detail||state.list)?.permissions?.can_remove===true;
   const button=(action,label,id='',cls='',disabled=false)=>`<button type="button" class="${esc(cls)}" data-order-action="${esc(action)}" data-order-id="${esc(id)}"${disabled?' disabled':''}>${esc(label)}</button>`;
@@ -103,15 +103,23 @@
   function validDetail(d,project){return d?.order?.project_id===project&&Number.isInteger(d.order.version)&&Array.isArray(d.gpns)&&Array.isArray(d.assemblies)&&d.assemblies.every(a=>Array.isArray(a.spools));}
   async function load(){
     if(!state.active||!me)return;if(state.loading)return state.pending;
-    const sequence=++state.sequence,project=state.po;resetForm();state.loading=true;state.error='';state.detail=null;state.list=null;node('ordersContent').innerHTML='<div class="fo-state" role="status">Loading purchase orders and assembly scope…</div>';node('ordersContent').setAttribute('aria-busy','true');
-    const pending=(async()=>{try{const result=await api(ROOT+(project?'/'+enc(project):''));if(sequence!==state.sequence||!state.active)return;
+    const sequence=++state.sequence,project=state.po;cancelRead();resetForm();state.loading=true;state.error='';state.detail=null;state.list=null;
+    const request={controller:new AbortController(),timer:null,timedOut:false};state.read=request;
+    request.timer=setTimeout(()=>{request.timedOut=true;request.controller.abort();},30000);
+    node('ordersContent').innerHTML='<div class="fo-state" role="status">Loading purchase orders and assembly scope…</div>';node('ordersContent').setAttribute('aria-busy','true');
+    const pending=(async()=>{try{const result=await api(ROOT+(project?'/'+enc(project):''),{signal:request.controller.signal});if(sequence!==state.sequence||!state.active)return;
       if(project){if(!validDetail(result,project))throw Error('The order response could not be verified. Refresh before making a change.');state.detail=result;if(state.gpn&&!result.gpns.some(g=>g.id===state.gpn))throw Error('The selected GPN does not belong to this purchase order.');if(state.assembly){const a=result.assemblies.find(a=>a.item_id===state.assembly);if(!a||state.gpn&&a.gpn_id!==state.gpn)throw Error('The selected assembly does not belong to this PO and GPN.');state.gpn=a.gpn_id;}}
       else {if(!Array.isArray(result?.orders)||!Array.isArray(result?.unassigned_projects))throw Error('The purchase order register response could not be verified.');state.list=result;}
       render();updateUrl();
-    }catch(error){if(sequence===state.sequence&&state.active){state.error=errorText(error);state.detail=null;state.list=null;render();}}
-    finally{if(sequence===state.sequence){state.loading=false;state.pending=null;}}})();state.pending=pending;return pending;
+    }catch(error){if(sequence===state.sequence&&state.active){state.error=request.timedOut?'This request took too long. Try again to load current order records.':errorText(error);state.detail=null;state.list=null;render();}}
+    finally{clearTimeout(request.timer);request.controller.abort();if(state.read===request)state.read=null;if(sequence===state.sequence){state.loading=false;state.pending=null;}}})();state.pending=pending;return pending;
   }
-  async function open(options={}){if(!me)return;show('ordersPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;state.po=text(options.po||'');state.gpn=text(options.gpn||'');state.assembly=text(options.assembly||'');state.query='';state.loading=false;state.pending=null;state.saving=false;resetForm();await load();if(options.create===true&&canManage())return startForm('new-order');}
+  function cancelRead(){const request=state.read;if(!request)return;state.read=null;clearTimeout(request.timer);request.controller.abort();}
+  async function open(options={}){
+    if(!me)return;const po=text(options.po||''),gpn=text(options.gpn||''),assembly=text(options.assembly||'');
+    if(state.active&&state.loading&&state.po===po&&state.gpn===gpn&&state.assembly===assembly){const sequence=state.sequence;await state.pending;if(sequence===state.sequence&&state.active&&options.create===true&&canManage())return startForm('new-order');return;}
+    show('ordersPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;state.po=po;state.gpn=gpn;state.assembly=assembly;state.query='';state.loading=false;state.pending=null;state.saving=false;resetForm();const pending=load(),sequence=state.sequence;await pending;if(sequence===state.sequence&&state.active&&options.create===true&&canManage())return startForm('new-order');
+  }
   async function startForm(kind,id=''){
     if(!canManage()||state.saving||state.loading)return;
     if(kind!=='new-order'&&!state.detail)return;
@@ -190,6 +198,6 @@
   }
   node('ordersContent').addEventListener('click',async event=>{const control=event.target.closest('[data-order-action]');if(!control||control.disabled)return;try{await act(control.dataset.orderAction,control.dataset.orderId||'');}catch(error){notify(errorText(error));}});
   node('navOrders').onclick=()=>open({po:state.po,gpn:state.gpn,assembly:state.assembly});
-  window.FabOrders={open,refresh:load,cancelPending(){state.active=false;state.sequence++;state.loading=false;state.pending=null;state.saving=false;resetForm();}};
+  window.FabOrders={open,refresh:load,cancelPending(){state.active=false;state.sequence++;cancelRead();state.loading=false;state.pending=null;state.saving=false;resetForm();}};
 })();
 

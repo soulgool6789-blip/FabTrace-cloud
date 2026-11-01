@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 from main import Base, Employee, Item, audit, auth, db, lock_item, permit, require_unreleased, utcnow
 from tracking import ROLES, _require_plan
 from permissions import PROCESS_KEYS, can_control_process
+from read_projection import (PROJECTION_MISSING, prime_rows, projection_enabled,
+    projection_get, projection_put, read_get)
 
 
 router = APIRouter(prefix='/api/tracking', tags=['production timing'])
@@ -228,14 +230,40 @@ def summarize_process_events(item_id, events, as_of):
     }
 
 
+_PROCESS_EVENTS_NAMESPACE = 'production.process_events'
+
+
+def prime_process_read_events(s, item_ids):
+    """Batch histories only for the selected items in an opted-in read scope."""
+    if not projection_enabled(s):
+        return
+    identifiers = list(dict.fromkeys(item_ids))
+    missing = [item_id for item_id in identifiers
+               if projection_get(s, _PROCESS_EVENTS_NAMESPACE, item_id) is PROJECTION_MISSING]
+    from flow import FlowPlan
+    prime_rows(s, FlowPlan, FlowPlan.item_id, identifiers)
+    for offset in range(0, len(missing), 400):
+        batch = missing[offset:offset + 400]
+        grouped = {item_id: [] for item_id in batch}
+        for row in s.scalars(select(SpoolProcessEvent).where(
+                SpoolProcessEvent.item_id.in_(batch)).order_by(
+                SpoolProcessEvent.item_id, SpoolProcessEvent.sequence)):
+            grouped[row.item_id].append(row)
+        for item_id, rows in grouped.items():
+            projection_put(s, _PROCESS_EVENTS_NAMESPACE, item_id, rows)
+
+
 def process_snapshot(s, item_id, as_of=None, events=None, user=None):
     if events is None:
-        events = s.scalars(select(SpoolProcessEvent).where(
-            SpoolProcessEvent.item_id == item_id).order_by(SpoolProcessEvent.sequence)).all()
+        events = projection_get(s, _PROCESS_EVENTS_NAMESPACE, item_id)
+        if events is PROJECTION_MISSING:
+            events = s.scalars(select(SpoolProcessEvent).where(
+                SpoolProcessEvent.item_id == item_id).order_by(SpoolProcessEvent.sequence)).all()
+            projection_put(s, _PROCESS_EVENTS_NAMESPACE, item_id, events)
     snapshot = summarize_process_events(item_id, events, as_of if as_of is not None else utcnow())
     if s is not None:
         from flow import FlowPlan
-        flow = s.get(FlowPlan, item_id)
+        flow = read_get(s, FlowPlan, item_id)
         snapshot.update(flow_managed=flow is not None,
                         flow_step=flow.current_step if flow else None,
                         flow_status=flow.status if flow else None)
@@ -251,8 +279,8 @@ def with_process_permissions(s, item_id, snapshot, user):
         return {**snapshot, 'removal': removal_summary(s, 'item', item_id), 'can_mutate': False,
                 'permissions': {'allowed_actions': [], 'allowed_processes': []}}
     from flow import FlowPlan
-    item = s.get(Item, item_id)
-    flow = s.get(FlowPlan, item_id)
+    item = read_get(s, Item, item_id)
+    flow = read_get(s, FlowPlan, item_id)
     from spool_receiving import receiving_errors
     arrival_blockers = receiving_errors(s, item) if item is not None else []
     keys = PROCESS_KEYS.get(user.role, ())

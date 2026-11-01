@@ -16,7 +16,7 @@ class Element {
   }
   get innerHTML(){return this.html||''}
   setAttribute(name,value){this.attributes[name]=value}querySelectorAll(selector){return selector==='[data-location-action]'?this.actions:[]}
-  focus(){if(this.onfocus)this.onfocus()}scrollIntoView(){}
+  focus(){if(this.onfocus)this.onfocus()}scrollIntoView(){}remove(){this.removed=true;}
 }
 for(const id of ['navHandoff','handoffBack','handoffIncoming','handoffItem','handoffItemFind','handoffItemCamera','handoffItemInfo','handoffProcessNotice','handoffControls','handoffNotes','handoffSummary','handoffError','handoffConfirm','handoffLocationSettings'])elements.set(id,new Element(id));
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -24,14 +24,15 @@ const initialOptions=()=>({locations:[{id:'welding',label:'Welding',kind:'builti
 const employees=[{badge:'SHOP1',name:'Alex Sender',role:'welder',active:true},{badge:'SHOP2',name:'Sam Receiver',role:'handler',active:true},{badge:'SHOP3',name:'Lee Other',role:'handler',active:true},{badge:'OLD1',name:'Inactive worker',role:'handler',active:false}];
 function item(id='SPL-001',extra={}){return {id,kind:'Spool',description:'Fixture <spool>',handler:'SHOP1',location:'Legacy Rack 7',released:false,flow_enabled:true,flow_step:13,flow_status:'active',transfer:{item_id:id,version:4,handler:'SHOP1',handler_name:'Alex Sender',handler_active:true,location:'Legacy Rack 7',location_id:null,operational_status:'queued',status_label:'Queued',can_transfer:true,released:false},...extra}}
 let options=initialOptions(),items={'SPL-001':item(),'SPL-002':item('SPL-002')},directoryQueue=[],reads={},qrReads={},postHold=null,postFailure=null,locationFailure=null;
-const calls=[],messages=[],storage=new Map(),cameras=[],events={};
-let startHold=null;
+const calls=[],messages=[],storage=new Map(),cameras=[],events={},scripts=[],scriptTimers=new Map();
+let startHold=null,scriptTimerId=0;
 class Scanner {
   constructor(id){this.id=id;this.stops=0;this.clears=0;cameras.push(this)}
   async start(_camera,_config,decode){this.decode=decode;if(startHold)await startHold}
   async stop(){this.stops++}async clear(){this.clears++}
 }
-const context={document:{getElementById:id=>elements.get(id)||null},me:{name:'Authenticated Recorder',badge:'ADMIN',role:'admin'},current:null,URL,URLSearchParams,Date,console,esc,Html5Qrcode:Scanner,
+const context={document:{getElementById:id=>elements.get(id)||null,createElement:tag=>new Element(tag),head:{appendChild:script=>scripts.push(script)}},me:{name:'Authenticated Recorder',badge:'ADMIN',role:'admin'},current:null,URL,URLSearchParams,Date,console,esc,Html5Qrcode:Scanner,
+  setTimeout:(fn,delay)=>{scriptTimers.set(++scriptTimerId,{fn,delay});return scriptTimerId;},clearTimeout:id=>scriptTimers.delete(id),
   location:{origin:'https://fabtrace-cloud.onrender.com'},history:{replaceState(_a,_b,url){context.url=url}},
   localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
   show(page){if(page!=='handoffPage')context.FabHandoff?.cancelPending();context.page=page},notify:message=>messages.push(message),listItems(){context.show('itemsPage')},FabFlow:{open(value){context.openedFlow=value;context.show('flowPage')}},addEventListener:(event,callback)=>{events[event]=callback},
@@ -141,6 +142,31 @@ async function ready(receiver='SHOP2'){await lookup('Sender','SHOP1');await look
   items['SPL-001']=item('SPL-001',{qr_alias:alias,display_code:alias});await context.FabHandoff.open();
   const delayedAlias=deferred();qrReads[alias]=delayedAlias.promise;el('handoffItem').value=alias;const resolving=click('handoffItemFind');await flush();await change('handoffItem','SPL-002');delayedAlias.resolve({item_id:'SPL-001',qr_alias:alias,display_code:alias});await resolving;delete qrReads[alias];assert.match(el('handoffItemInfo').innerHTML,/SPL-002/);
   await context.FabHandoff.open();await click('handoffItemCamera');camera=cameras.at(-1);await camera.decode(aliasUrl);assert.equal(el('handoffItem').value,alias);assert.equal(camera.stops,1);assert.equal(camera.clears,1);
+
+  // Ordinary navigation/manual input never downloads the optional camera library.
+  assert.equal(scripts.length,0,'an available scanner is reused without adding a script');
+  delete context.Html5Qrcode;await context.FabHandoff.open({item:'SPL-001'});await lookup('Sender','SHOP1');
+  assert.equal(scripts.length,0);assert.equal(scriptTimers.size,0);
+  await context.FabHandoff.open({item:'SPL-001'});
+  const cameraCount=cameras.length,firstLoad=click('handoffSenderCamera');await flush();
+  assert.equal(scripts.length,1);assert.equal(scripts[0].async,true);assert.equal(scripts[0].src,'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js');assert.equal(cameras.length,cameraCount);assert.match(el('handoffCameraStatus').textContent,/Loading camera scanner/);
+  const secondLoad=click('handoffReceiverCamera');await flush();assert.equal(scripts.length,1,'concurrent scan actions share the script download');
+  context.Html5Qrcode=Scanner;scripts[0].onload();await Promise.all([firstLoad,secondLoad]);
+  assert.equal(scriptTimers.size,0);assert.equal(cameras.length,cameraCount+1,'only the latest requested camera starts');camera=cameras.at(-1);await camera.decode('FABTRACE:EMP:SHOP2');assert.equal(el('handoffReceiver').value,'SHOP2');assert.equal(el('handoffSender').value,'');
+
+  // Download errors and timeouts leave manual entry usable and allow a later retry.
+  delete context.Html5Qrcode;await context.FabHandoff.open({item:'SPL-001'});const failed=click('handoffSenderCamera');await flush();const failedScript=scripts.at(-1);failedScript.onerror();await failed;
+  assert.equal(failedScript.removed,true);assert.equal(scriptTimers.size,0);assert.match(el('handoffCameraStatus').textContent,/could not be downloaded/);assert.match(el('handoffCameraStatus').textContent,/manual entry/);await lookup('Sender','SHOP1');assert.match(el('handoffSenderInfo').textContent,/Alex Sender/);
+  const retryCount=scripts.length,retry=click('handoffReceiverCamera');await flush();assert.equal(scripts.length,retryCount+1);context.Html5Qrcode=Scanner;scripts.at(-1).onload();await retry;camera=cameras.at(-1);await context.FabHandoff.stopCamera();assert.equal(camera.stops,1);
+  const preloadedCount=scripts.length;await click('handoffSenderCamera');assert.equal(scripts.length,preloadedCount,'subsequent scans reuse the downloaded library');await context.FabHandoff.stopCamera();
+
+  delete context.Html5Qrcode;const timed=click('handoffSenderCamera');await flush();assert.equal(scriptTimers.size,1);const timer=[...scriptTimers.values()][0];assert.equal(timer.delay,15000);const timedScript=scripts.at(-1);timer.fn();await timed;
+  assert.equal(timedScript.removed,true);assert.equal(scriptTimers.size,0);assert.match(el('handoffCameraStatus').textContent,/did not load in time/);
+
+  const beforeAbandoned=cameras.length,abandoned=click('handoffSenderCamera');await flush();const abandonedScript=scripts.at(-1);context.FabHandoff.cancelPending();context.Html5Qrcode=Scanner;abandonedScript.onload();await abandoned;
+  assert.equal(cameras.length,beforeAbandoned,'a library arriving after navigation must not start a camera');assert.equal(scriptTimers.size,0);
+  delete context.Html5Qrcode;await context.FabHandoff.open({item:'SPL-001'});const stopped=click('handoffSenderCamera');await flush();const stoppedScript=scripts.at(-1);await click('handoffStopCamera');assert.match(el('handoffCameraStatus').textContent,/Camera stopped/);context.Html5Qrcode=Scanner;stoppedScript.onload();await stopped;
+  assert.equal(cameras.length,beforeAbandoned,'stopping while the library loads prevents later camera startup');assert.equal(scriptTimers.size,0);
   assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));assert.ok(index.indexOf('/static/handoff.js')<index.indexOf('/static/flow.js'));assert.match(index,/FabHandoff\.openBadge/);assert.match(index,/params\.has\('handoff'\)/);assert.doesNotMatch(index,/handler:handoffStaff|findHandoffBadge|function pendingItem/);
-  console.log('PASS: two badge identities, current-custodian check, active employees, recorder distinction, catalog selectors, same-custodian updates, snapshot payloads, reset/conflicts, lookup races, camera targets/cleanup, role-safe QR links, location management, and truthful legacy history.');
+  console.log('PASS: two badge identities, current-custodian check, active employees, recorder distinction, catalog selectors, same-custodian updates, snapshot payloads, reset/conflicts, lookup races, camera targets/cleanup, lazy coalesced scanner loading, error/timeout retry, manual fallback, navigation/stop during loading, role-safe QR links, location management, and truthful legacy history.');
 })().catch(error=>{console.error(error);process.exitCode=1});

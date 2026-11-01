@@ -16,7 +16,8 @@ from pydantic import Field, model_validator
 from sqlalchemy import (CheckConstraint, Column, DateTime, ForeignKey, Integer,
                         JSON, LargeBinary, String, Text, UniqueConstraint, func, select)
 from sqlalchemy.orm import Session, deferred
-from read_projection import read_cached, reader_role
+from read_projection import (read_cached, reader_role, read_get, projection_get,
+                             PROJECTION_MISSING)
 
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
 from orders import Input, _commit, _key, read_snapshot
@@ -172,7 +173,7 @@ def is_physical_spool(s, item):
         return True
     from tracking import SpoolPlan
     from order_spools import OrderSpool
-    return bool(s.get(SpoolPlan, item.id) or s.get(OrderSpool, item.id))
+    return bool(read_get(s, SpoolPlan, item.id) or read_get(s, OrderSpool, item.id))
 
 
 def physical_spool_number(s, item, values=None):
@@ -197,9 +198,9 @@ def retained_parent_matches(s, item, saved, current_parent):
     from flow import FlowEvent
     from order_spools import OrderSpool
     from tracking import SpoolPlan
-    if s.get(OrderSpool, item.id) is not None:
+    if read_get(s, OrderSpool, item.id) is not None:
         return False
-    child_plan, parent_plan = s.get(SpoolPlan, item.id), s.get(SpoolPlan, current_parent)
+    child_plan, parent_plan = read_get(s, SpoolPlan, item.id), read_get(s, SpoolPlan, current_parent)
     if (child_plan is None or parent_plan is None or child_plan.assembly_id != current_parent
             or not saved.get('project_id') or item.project != saved['project_id']
             or child_plan.project_id != saved['project_id'] or parent_plan.project_id != saved['project_id']):
@@ -213,15 +214,19 @@ def retained_parent_matches(s, item, saved, current_parent):
 def guard_receiving_identity(s, item, values=None):
     """An MTR or arrival decision cannot move to another physical identity."""
     from order_spools import effective_parent_id
-    record = s.scalar(select(SpoolMtrDocument).where(SpoolMtrDocument.spool_id == item.id)
-        .order_by(SpoolMtrDocument.uploaded_at, SpoolMtrDocument.id).limit(1))
+    record = projection_get(s, 'first_mtr', item.id)
+    if record is PROJECTION_MISSING:
+        record = s.scalar(select(SpoolMtrDocument).where(SpoolMtrDocument.spool_id == item.id)
+            .order_by(SpoolMtrDocument.uploaded_at, SpoolMtrDocument.id).limit(1))
     saved = record.scope_snapshot if record else None
     if saved is None:
         inspection = _latest(s, item.id)
         saved = inspection.basis.get('context') if inspection else None
     if saved is None:
-        piece_inspection = s.scalar(select(SpoolMaterialInspection).where(
-            SpoolMaterialInspection.spool_id == item.id).order_by(SpoolMaterialInspection.id.desc()).limit(1))
+        piece_inspection = projection_get(s, 'latest_material_inspection', item.id)
+        if piece_inspection is PROJECTION_MISSING:
+            piece_inspection = s.scalar(select(SpoolMaterialInspection).where(
+                SpoolMaterialInspection.spool_id == item.id).order_by(SpoolMaterialInspection.id.desc()).limit(1))
         saved = piece_inspection.basis.get('context') if piece_inspection else None
     if saved is None:
         return
@@ -264,6 +269,9 @@ def _locked_reason(s, item):
 
 @read_cached(lambda s, item_id: item_id)
 def _latest(s, item_id):
+    cached = projection_get(s, 'latest_arrival', item_id)
+    if cached is not PROJECTION_MISSING:
+        return cached
     return s.scalar(select(SpoolArrivalInspection).where(SpoolArrivalInspection.spool_id == item_id)
         .order_by(SpoolArrivalInspection.version.desc()).limit(1))
 
@@ -287,6 +295,9 @@ def _mtr_view(row, urls=True):
 
 @read_cached(lambda s, item_id: item_id)
 def _current_mtrs(s, item_id):
+    cached = projection_get(s, 'current_mtrs', item_id)
+    if cached is not PROJECTION_MISSING:
+        return cached
     latest = select(SpoolMtrDocument.reference_key,
         func.max(SpoolMtrDocument.version).label('version')).where(SpoolMtrDocument.spool_id == item_id)
     latest = latest.group_by(SpoolMtrDocument.reference_key).subquery()
@@ -327,6 +338,9 @@ def _material_inspection_view(row):
 
 @read_cached(lambda s, item_id: item_id)
 def _current_material_inspections(s, item_id):
+    cached = projection_get(s, 'current_material_inspections', item_id)
+    if cached is not PROJECTION_MISSING:
+        return cached
     latest = select(SpoolMaterialInspection.piece_key,
         func.max(SpoolMaterialInspection.version).label('version')).where(
         SpoolMaterialInspection.spool_id == item_id).group_by(SpoolMaterialInspection.piece_key).subquery()
@@ -507,7 +521,7 @@ def require_receiving_pass(s, item):
 
 def receiving_scope_basis(s, item_id):
     result = []
-    for item in _scope_items(s, s.get(Item, item_id)):
+    for item in _scope_items(s, read_get(s, Item, item_id)):
         summary = _physical_summary(s, item)
         result.append({'spool_id': item.id, 'basis_sha256': summary['basis_sha256'],
             'current_pass': summary['can_proceed'], 'inspection': summary['latest'],
@@ -516,12 +530,12 @@ def receiving_scope_basis(s, item_id):
 
 
 def spool_mtr_scope_metadata(s, item_id):
-    return [_mtr_view(row) for item in _scope_items(s, s.get(Item, item_id)) for row in _current_mtrs(s, item.id)]
+    return [_mtr_view(row) for item in _scope_items(s, read_get(s, Item, item_id)) for row in _current_mtrs(s, item.id)]
 
 
 def spool_mtr_retained_file(s, document_id):
-    row = s.get(SpoolMtrDocument, document_id)
-    file = s.get(SpoolMtrFile, document_id) if row else None
+    row = read_get(s, SpoolMtrDocument, document_id)
+    file = read_get(s, SpoolMtrFile, document_id) if row else None
     if file is None or len(file.content) != row.size_bytes or hashlib.sha256(file.content).hexdigest() != row.sha256:
         raise HTTPException(503, 'The retained MTR could not be verified. Contact an administrator.')
     return {**_mtr_view(row, urls=False), 'content': file.content}
@@ -542,7 +556,7 @@ def source_changed(s, scope, identity, actor, reason):
         .where(OrderSpool.requirement_id == identity, item_not_removed(Item.id))))
     s.flush()
     for item_id in sorted(set(identities)):
-        item = s.get(Item, item_id)
+        item = read_get(s, Item, item_id)
         if item is not None:
             ensure_material_piece_records(s, item, actor, reason)
             pause_receiving_scope(s, item, actor, utcnow(), reason)
@@ -783,7 +797,7 @@ def upload_mtr(item_id: str, files: list[UploadFile] = File(...), reference: str
 
 @router.get('/mtr-files/{document_id}')
 def mtr_file(document_id: str, download: bool = False, user: Employee = Depends(auth), s: Session = Depends(db)):
-    row = s.get(SpoolMtrDocument, document_id)
+    row = read_get(s, SpoolMtrDocument, document_id)
     if row is None:
         raise HTTPException(404, 'MTR document not found.')
     _context(s, row.spool_id)

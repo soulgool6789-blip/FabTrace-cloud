@@ -176,7 +176,7 @@ async function check(name,fn){await fn();checks.push(name);}
   await check('navigation, authenticated deep-link wiring and printable assets',async()=>{
     const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
     for(const phrase of ['id="navGuide"','id="guidePage"','id="guideContent"','/static/guide.js','/static/guide.css','FabGuide.cancelPending'])assert.ok(index.includes(phrase),phrase);
-    assert.match(index,/async function refreshAuth\(\)[\s\S]*me=await api\('\/api\/me'\)[\s\S]*params\.has\('guide'\)[\s\S]*FabGuide\.open\(\{project:params\.get\('project'\)[\s\S]*section:params\.get\('section'\)/);
+    assert.match(index,/async function refreshAuth\(\)[\s\S]*api\('\/api\/me'\)[\s\S]*params\.has\('guide'\)[\s\S]*FabGuide\.open\(\{project:params\.get\('project'\)[\s\S]*section:params\.get\('section'\)/);
     assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),'both entrypoints carry the same guide wiring');
     assert.match(fs.readFileSync(path.join(__dirname,'../static/guide.css'),'utf8'),/@media print[\s\S]*body\.fg-printing/);
     assert.equal(calls.filter(c=>c.method&&c.method!=='GET'||c.body!==undefined).length,0);

@@ -236,7 +236,8 @@ def _counts(required=0, assigned=0, received=0, prepared=0):
 
 def parts_snapshot(s, spool_id):
     """Current quantities only; no elapsed time, side effects or approvals."""
-    cfg = s.get(SpoolPartsPlan, spool_id)
+    from read_projection import read_get
+    cfg = read_get(s, SpoolPartsPlan, spool_id)
     if not cfg:
         return None
     item, spool_plan = _spool(s, spool_id)
