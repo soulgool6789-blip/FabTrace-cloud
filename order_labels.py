@@ -150,12 +150,13 @@ def list_labels(project_id: str,
         rows = snapshot.execute(query.where(OrderGpn.id.in_(ids))
             .order_by(OrderGpn.gpn, Item.google_part_number, SpoolQrIdentity.sequence, Item.created_at, Item.id)
             .offset(offset).limit(limit)).all() if ids else []
+        from spool_presentation import item_presentations
+        displays = item_presentations(snapshot, [row[0] for row in rows])
         for item, group, parent_id, plan_id, planned_welds, identity in rows:
             requirement = requirements.get(group.id, {}).get(_key(item.google_part_number or ''))
             alias = identity.display_code if identity else None
             items.append({'id': item.id, 'kind': 'Spool',
-                'qr_alias': alias, 'display_code': alias or item.id,
-                'google_part_number': item.google_part_number, 'spool_number': item.google_part_number,
+                **displays[item.id],
                 'assembly_id': parent_id, 'weld_plan_exists': plan_id is not None,
                 'welds_per_spool': requirement['welds_per_spool'] if requirement else None,
                 'planned_welds': planned_welds,

@@ -33,16 +33,40 @@
     const stage = normalize(value), safeTag = ['span','strong','small'].includes(tag) ? tag : 'span';
     return `<${safeTag}${stage ? ` class="${className(stage)}" data-flow-stage="${stage.key}" title="${escape(title(stage))}"` : ''}>${escape(label)}</${safeTag}>`;
   }
+  function spoolNumber(value) {
+    const id = value?.item_id || value?.id || '';
+    return String(value?.qr_alias || (value?.display_code !== id && value?.display_code) || value?.spool_number || value?.google_part_number || value?.part_number || value?.display_code || id);
+  }
+  function spoolText(value, label = spoolNumber(value), tag = 'span') {
+    const number = value?.spool_number || value?.google_part_number || value?.part_number || label;
+    const id = value?.item_id || value?.id || '';
+    return text(value, label, tag).replace(/^<([a-z]+)/, (_, safeTag) => `<${safeTag} data-spool-number="${escape(number)}" data-spool-id="${escape(id)}"`);
+  }
+  function decorateSpool(element, value, label = spoolNumber(value)) {
+    if (!element) return;
+    const stage = normalize(value);
+    element.textContent = String(label ?? '');
+    element.classList.remove('fst-text', ...new Set(catalog.map(row => 'fst-color-' + row.color)));
+    element.removeAttribute('data-flow-stage');
+    element.removeAttribute('title');
+    element.setAttribute('data-spool-number', value?.spool_number || value?.google_part_number || value?.part_number || String(label ?? ''));
+    element.setAttribute('data-spool-id', value?.item_id || value?.id || '');
+    if (stage) {
+      element.classList.add(...className(stage).split(' '));
+      element.setAttribute('data-flow-stage', stage.key);
+      element.setAttribute('title', title(stage));
+    }
+  }
   function badge(value) {
     const stage = normalize(value);
     return stage ? `<span class="fst-stage ${className(stage)}" data-flow-stage="${stage.key}" title="${escape(title(stage))}">${escape(stage.label)}</span>` : '';
   }
   function legend() {
-    return `<aside class="fst-legend" aria-label="Flow status color key"><strong>Part text colors</strong><ul>${catalog.filter(stage => !stage.qa).map(stage => `<li>${text(stage, stage.key === 'paint' ? 'Painting' : stage.label)}<small>${stage.color[0].toUpperCase() + stage.color.slice(1)}</small></li>`).join('')}</ul><p>QA/QC checkpoints keep the preceding work-stage color. The stage name and hold status are shown separately.</p></aside>`;
+    return `<aside class="fst-legend" aria-label="Flow status color key"><strong>Spool number colors</strong><ul>${catalog.filter(stage => !stage.qa).map(stage => `<li>${text(stage, stage.key === 'paint' ? 'Painting' : stage.label)}<small>${stage.color[0].toUpperCase() + stage.color.slice(1)}</small></li>`).join('')}</ul><p>Each spool number uses its current Flow status color. QA/QC checkpoints keep the preceding work-stage color.</p></aside>`;
   }
   function strip(_serverCatalog, value) {
     const current = normalize(value);
     return `<section class="fst-flow" aria-label="Flow progress"><div class="fst-flow-heading"><h3>Flow progress</h3>${current ? `<span>Current stage ${badge(current)}</span>` : ''}</div><ol>${catalog.map((stage, index) => `<li data-flow-stage="${stage.key}"${current?.key === stage.key ? ' class="fst-current" aria-current="step"' : ''}><span class="fst-sequence">${index + 1}</span>${text(stage, stage.label, 'strong')}${stage.qa ? '<small>QA/QC checkpoint</small>' : ''}</li>`).join('')}</ol>${current?.inherited ? `<p class="fst-following">This part is following ${escape(current.source_item_id)} through ${escape(current.label)}.</p>` : ''}</section>`;
   }
-  window.FabFlowStatus = Object.freeze({catalog: Object.freeze(catalog), normalize, className, text, badge, legend, strip});
+  window.FabFlowStatus = Object.freeze({catalog: Object.freeze(catalog), normalize, className, text, spoolNumber, spoolText, decorateSpool, badge, legend, strip});
 })();

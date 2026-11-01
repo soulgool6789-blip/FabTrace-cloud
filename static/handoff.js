@@ -1,6 +1,7 @@
 /* Shared badge, location and operational-status controls. The server owns custody and QA gates. */
 (() => {
   'use strict';
+  const itemNumberText=(item,label)=>item&&(item.kind==='Spool'||item.qr_alias||item.bom?.item_id)&&window.FabFlowStatus?.spoolText?window.FabFlowStatus.spoolText(item,label):esc(label);
   const ROOT='/api/transfers', node=id=>document.getElementById(id), encode=encodeURIComponent;
   const rows=value=>Array.isArray(value)?value:[], storageKey='fabtrace_pending_handoff', pendingAge=20*60*1000;
   const roleTitle={sender:'Sending employee',receiver:'Receiving employee'};
@@ -34,7 +35,7 @@
     const person=employee=>employee?`${employee.name} (${employee.badge})`:'Badge identification required';
     const pair=(label,value)=>`<dt>${esc(label)}</dt><dd>${esc(value||'—')}</dd>`;
     const same=sender&&receiver&&sender.badge===receiver.badge;
-    return `<h3>${esc(itemLabel(item)||transfer.item_id)}</h3>${same?'<p class="fh-same">Same custodian — location/status update</p>':''}<dl>${pair('Sending employee',person(sender))}${pair('Receiving employee',person(receiver))}${pair('From location',transfer.location)}${pair('To location',location||'Choose a destination')}${pair('Work status',statusLabel(options,status))}${pair('Recorded by',me?`${me.name} (${me.badge})`:'Sign in required')}</dl>${same&&location===transfer.location&&status===transfer.operational_status?'<p class="fh-help">Choose a changed location or work status before recording this update.</p>':''}`;
+    return `<h3>${itemNumberText(item,itemLabel(item)||transfer.item_id)}</h3>${same?'<p class="fh-same">Same custodian — location/status update</p>':''}<dl>${pair('Sending employee',person(sender))}${pair('Receiving employee',person(receiver))}${pair('From location',transfer.location)}${pair('To location',location||'Choose a destination')}${pair('Work status',statusLabel(options,status))}${pair('Recorded by',me?`${me.name} (${me.badge})`:'Sign in required')}</dl>${same&&location===transfer.location&&status===transfer.operational_status?'<p class="fh-help">Choose a changed location or work status before recording this update.</p>':''}`;
   }
   function validVersion(transfer){return transfer&&Number.isInteger(transfer.version)&&transfer.version>=0}
   function bindControls(prefix,{transfer,options,onChange=()=>{},onRole=()=>{}}={}){
@@ -195,7 +196,7 @@
     const item=state.item,transfer=snapshot(item),target=node('handoffItemInfo'),process=node('handoffProcessNotice');
     if(!item){target.textContent='Scan or enter the physical item to begin.';process.classList.add('hidden');return}
     const pair=(label,value)=>`<dl><dt>${esc(label)}</dt><dd>${esc(value||'—')}</dd></dl>`;
-    target.innerHTML=`<strong>${esc(itemLabel(item))}</strong><div class="fh-current">${pair('Recorded custodian',`${transfer?.handler_name||item.handler||'—'}${transfer?.handler_name?' ('+transfer.handler+')':''}`)}${pair('Recorded location',transfer?.location||item.location)}${pair('Recorded work status',transfer?.status_label||'Not recorded')}${pair('Current process',item.flow_step?'Step '+item.flow_step+' · '+(item.flow_status||'In progress'):item.flow_enabled?item.flow_status||'Route recorded':'No numbered route')}${pair('Release decision',item.release_control?.label||(item.released?'QA released':'Not released'))}</div>${transfer?.handler_active===false?'<p class="fh-inline-error">The recorded custodian is inactive. A supervisor must resolve the employee record before this handoff.</p>':''}`;
+    target.innerHTML=`<strong>${itemNumberText(item,itemLabel(item))}</strong><div class="fh-current">${pair('Recorded custodian',`${transfer?.handler_name||item.handler||'—'}${transfer?.handler_name?' ('+transfer.handler+')':''}`)}${pair('Recorded location',transfer?.location||item.location)}${pair('Recorded work status',transfer?.status_label||'Not recorded')}${pair('Current process',item.flow_step?'Step '+item.flow_step+' · '+(item.flow_status||'In progress'):item.flow_enabled?item.flow_status||'Route recorded':'No numbered route')}${pair('Release decision',item.release_control?.label||(item.released?'QA released':'Not released'))}</div>${transfer?.handler_active===false?'<p class="fh-inline-error">The recorded custodian is inactive. A supervisor must resolve the employee record before this handoff.</p>':''}`;
     process.classList.toggle('hidden',!item.flow_enabled&&!item.released);
     process.innerHTML=`${item.released?'This item is released. Use its permitted later handoff in Process flow.':'To complete a production handoff and move the process clock, use the current numbered step.'}${item.flow_enabled?' <button type="button" id="handoffOpenFlow">Open current process step</button>':''}`;
     if(node('handoffOpenFlow'))node('handoffOpenFlow').onclick=()=>window.FabFlow.open({item:item.id});

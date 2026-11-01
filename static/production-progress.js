@@ -6,6 +6,8 @@
   const flowStatus=()=>window.FabFlowStatus;
   const stageText=(value,label,tag='span')=>flowStatus()?.text(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;
   const stageBadge=value=>flowStatus()?.badge(value)||'';
+  const spoolNumber=value=>flowStatus()?.spoolNumber?.(value)||value.qr_alias||value.spool_number||value.part_number||value.id;
+  const spoolText=(value,label=spoolNumber(value),tag='span')=>flowStatus()?.spoolText?.(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;
   const stepNames={completed:'Recorded',current:'Current step',pending:'Pending',not_recorded:'Earlier step not recorded'};
   const stageNames={completed:'Recorded',current:'In progress',pending:'Pending',not_recorded:'History incomplete',scope_unknown:'Scope not declared',not_applicable:'Outside this route'};
   const button=(action,label,id='',project='',cls='')=>`<button type="button" class="${esc(cls)}" data-pp-action="${esc(action)}" data-pp-id="${esc(id)}" data-pp-project="${esc(project)}">${esc(label)}</button>`;
@@ -52,7 +54,7 @@
   function searchMatch(values){const q=state.query.trim().toLowerCase();return !q||values.some(v=>text(v).toLowerCase().includes(q));}
   function ownMatch(n){return (state.kind==='all'||kind(n)===state.kind)&&(state.status==='all'||state.status==='hold'&&n.on_hold||state.status==='finished'&&n.fabrication_finished||state.status==='wip'&&!n.fabrication_finished);}
   function filterItem(n,inherited=false){
-    const matched=inherited||searchMatch([n.id,n.part_number,n.current_title,n.location,n.handler,n.handler_name]);
+    const matched=inherited||searchMatch([n.id,n.spool_number,n.google_part_number,n.part_number,n.qr_alias,n.display_code,n.current_title,n.location,n.handler,n.handler_name]);
     const children=arr(n.children).map(c=>filterItem(c,matched)).filter(Boolean);
     const own=matched&&ownMatch(n);
     return own||children.length?{...n,children,_context:!own}:null;
@@ -89,7 +91,7 @@
   }
   function itemView(n,depth=0){
     const k=key('item',n.id),children=arr(n.children),expanded=opened(k);
-    let html=`<details class="pp-item${n._context?' pp-context':''}" data-pp-expand="${esc(k)}" data-pp-item="${esc(n.id)}"${expanded}><summary><span class="pp-expander" aria-hidden="true"></span><div class="pp-identity"><span class="pp-eyebrow">${esc(label(n))}${n._context?' · Parent context':''}</span>${stageText(n.flow_stage,n.id,'strong')}${n.part_number?`<small>Part no. ${stageText(n.flow_stage,n.part_number)}</small>`:''}<div class="pp-identity-stage">${stageBadge(n.flow_stage)}</div><small>${esc(n.current_title||(n.fabrication_finished?finishedLabel(n):'Route not started'))}</small></div><div class="pp-row-progress">${meter(ownProgress(n),`${label(n)} route`,n.fabrication_finished,true)}</div><span class="pp-status ${n.on_hold?'pp-status-hold':n.fabrication_finished?'pp-status-finished':'pp-status-wip'}">${esc(statusLabel(n))}</span></summary>`;
+    let html=`<details class="pp-item${n._context?' pp-context':''}" data-pp-expand="${esc(k)}" data-pp-item="${esc(n.id)}"${expanded}><summary><span class="pp-expander" aria-hidden="true"></span><div class="pp-identity"><span class="pp-eyebrow">${esc(label(n))}${n._context?' · Parent context':''}</span>${kind(n)==='spool'?spoolText(n,spoolNumber(n),'strong'):`<strong>${esc(n.id)}</strong>`}${n.part_number?`<small>${kind(n)==='spool'?'Spool number':'Part no.'} ${kind(n)==='spool'?spoolText(n,n.spool_number||n.part_number):esc(n.part_number)}</small>`:''}<div class="pp-identity-stage">${stageBadge(n.flow_stage)}</div><small>${esc(n.current_title||(n.fabrication_finished?finishedLabel(n):'Route not started'))}</small></div><div class="pp-row-progress">${meter(ownProgress(n),`${label(n)} route`,n.fabrication_finished,true)}</div><span class="pp-status ${n.on_hold?'pp-status-hold':n.fabrication_finished?'pp-status-finished':'pp-status-wip'}">${esc(statusLabel(n))}</span></summary>`;
     if(!expanded)return html+'</details>';
     html+=`<div class="pp-item-body">${itemDetail(n)}`;
     if(children.length)html+=`<section class="pp-children"><h3>${kind(n)==='assembly'?'Spools':'Individual parts'} <span>${children.length}${isFiltered()?' matching':''}</span></h3>${children.map(c=>itemView(c,depth+1)).join('')}</section>`;

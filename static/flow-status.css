@@ -1,12 +1,16 @@
 /* One text-color vocabulary for every spool and material view. */
-.fst-text.fst-color-black{color:#000;background:#fff}
-.fst-text.fst-color-red{color:#b91c1c;background:#fff}
-.fst-text.fst-color-yellow{color:#fde047;background:#253248;border-radius:4px;padding:2px 5px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
-.fst-text.fst-color-blue{color:#1d4ed8;background:#fff}
-.fst-text.fst-color-orange{color:#b94b00;background:#fff}
-.fst-text.fst-color-pink{color:#be185d;background:#fff}
-.fst-text.fst-color-green{color:#15803d;background:#fff}
+.fst-text.fst-color-black{--fst-foreground:#000;color:var(--fst-foreground);background:#fff}
+.fst-text.fst-color-red{--fst-foreground:#b91c1c;color:var(--fst-foreground);background:#fff}
+.fst-text.fst-color-yellow{--fst-foreground:#fde047;color:var(--fst-foreground);background:#253248;border-radius:4px;padding:2px 5px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.fst-text.fst-color-blue{--fst-foreground:#1d4ed8;color:var(--fst-foreground);background:#fff}
+.fst-text.fst-color-orange{--fst-foreground:#b94b00;color:var(--fst-foreground);background:#fff}
+.fst-text.fst-color-pink{--fst-foreground:#be185d;color:var(--fst-foreground);background:#fff}
+.fst-text.fst-color-green{--fst-foreground:#15803d;color:var(--fst-foreground);background:#fff}
 .fst-text{font-weight:700;overflow-wrap:anywhere}
+/* Dialog heading selectors also use these semantic spool-number colors. */
+#spoolBomDialog #spoolBomSubtitle.fst-text,
+#spoolDocumentsDialog .fst-text[data-flow-stage]{color:var(--fst-foreground)}
+#spoolDocumentsDialog .dpqa-physical .fst-text{display:inline;font-size:inherit;margin:0}
 .fst-stage{display:inline-block;border:1px solid currentColor;border-radius:5px;padding:3px 7px;font-size:11px;line-height:1.45;vertical-align:middle}
 .fst-stage.fst-color-yellow{padding:3px 7px;border-color:#253248}
 .fst-legend{border:1px solid #dbe5ee;background:#fff;border-radius:10px;padding:13px 15px;margin:15px 0;font-size:12px;color:#364b60}

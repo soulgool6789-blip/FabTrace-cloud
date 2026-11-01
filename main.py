@@ -39,7 +39,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.01-flow-colors.1'
+APP_VERSION='2026.11.01-spool-number-colors.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -179,6 +179,8 @@ def item_dict(s,r,user=None):
     d['tracking_enabled']=is_tracked(s,r)
     d['tracking']=tracking_summary(s,r) if d['tracking_enabled'] else None
     flow=s.get(FlowPlan,r.id)
+    from spool_presentation import item_presentation
+    d.update(item_presentation(s,r,plan=flow,receiving=d['receiving'],identity=identity))
     d['flow_enabled']=flow is not None
     d['flow_step']=flow.current_step if flow else None
     d['flow_status']=flow.status if flow else None
@@ -298,10 +300,11 @@ def items(search:str='',limit:int=100,offset:int=0,u:Employee=Depends(auth),s:Se
     count=s.scalar(select(func.count()).select_from(q.subquery()))
     rows=s.scalars(q.order_by(Item.updated_at.desc()).limit(limit).offset(offset)).all()
     tracked_ids=set(s.scalars(select(SpoolPlan.item_id).where(SpoolPlan.item_id.in_([r.id for r in rows])))) if rows else set()
-    aliases={row.item_id:row.display_code for row in s.scalars(select(SpoolQrIdentity).where(SpoolQrIdentity.item_id.in_([r.id for r in rows])))} if rows else {}
     from administration import release_summary
+    from spool_presentation import item_presentations
+    displays=item_presentations(s,rows)
     return {'total':count,'items':[{**asdict(r,ITEM_KEYS),'tracking_enabled':r.id in tracked_ids,
-        'qr_alias':aliases.get(r.id),'display_code':aliases.get(r.id,r.id),
+        **displays[r.id],
         'release_control':release_summary(s,r)} for r in rows]}
 class ItemIn(BaseModel):
     id:str=Field(min_length=3,max_length=60,pattern=r'^[A-Za-z0-9_-]+$')

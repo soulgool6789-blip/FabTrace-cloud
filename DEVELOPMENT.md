@@ -51,9 +51,9 @@ This guide describes the implemented tracking extension and the constraints that
 
 `main.py` defines shared models and dependencies before importing the tracking, production, flow, parts, quality, dossier, progress, transfers, administration, orders, removals, order_setup, production_progress, exports and orders_excel routers, in that order, at the end of the module. Extensions import those shared definitions and use lazy imports for reciprocal helpers. Preserve this registration order so `init_db.py` sees every table in `Base.metadata` and the shared XLSX writer is registered before its scoped consumer.
 
-## Flow progress and part text colors
+## Flow progress and spool number colors
 
-Release `2026.11.01-flow-colors.1` uses `flow_stages.py` as the backend display catalog over the existing numbered traveler. The catalog version is `CLM-24-v3`; numeric step IDs, gate logic, database schema and prior event snapshots remain unchanged. `qa_code` retains the legacy integration code. New `display_qa_code` and `flow_stage_key` identify the current labels, including final QA/QC-004 at step 22. Step 19 remains the required assembly inspection in Testing; a display stage does not create a test result.
+Release `2026.11.01-spool-number-colors.1` uses `flow_stages.py` as the backend display catalog over the existing numbered traveler. The catalog version is `CLM-24-v3`; numeric step IDs, gate logic, database schema and prior event snapshots remain unchanged. `qa_code` retains the legacy integration code. New `display_qa_code` and `flow_stage_key` identify the current labels, including final QA/QC-004 at step 22. Step 19 remains the required assembly inspection in Testing; a display stage does not create a test result.
 
 | Flow stage | Existing steps | Text color |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ Release `2026.11.01-flow-colors.1` uses `flow_stages.py` as the backend display 
 
 `flow_stage` is a read-only presentation object. An active own route determines the stage; completed children may follow a valid linked parent after their own current work is complete and with no hold, rework or administrative override. Generic release or route completion does not imply Ready To Ship. Production progress resolves inheritance from its preloaded tree so step accounting and query behavior stay separate from color. Numbered-step percentages continue to measure each item's own recorded work.
 
-The shared `FabFlowStatus` helper validates stage keys, escapes rendered text and supplies color classes, the legend and the ordered flow strip. Yellow text uses a dark backing for readability. Part identity, part number and description text are colored in production/flow, allocated parts, and physical BOM material views. A material piece without a current QA-001 Pass remains at QA/QC-001 even if other pieces passed. Material colors are added only by `_spool_detail`, and allocated-component colors only at the public parts view boundary; persisted material fields and dossier/evidence fingerprints do not include them. Both HTML shells load versioned shared assets before feature scripts.
+The shared `FabFlowStatus` helper validates stage keys, escapes rendered text and supplies color classes, the legend and the ordered flow strip. `spoolNumber`, `spoolText`, and `decorateSpool` identify and color readable spool numbers and permanent physical-copy labels while retaining internal IDs in navigation targets. Yellow text uses a dark backing for readability. Material descriptions and component identifiers use normal text. `spool_presentation.py` decorates live API response boundaries with readable identities and the authoritative stage; it does not allocate QR aliases or change saved history. Shared requirements expose individual physical copies and only provide a common stage when their registered copies agree. Stage metadata stays outside stored material fields and dossier/evidence fingerprints. Both HTML shells load versioned shared assets before feature scripts.
 
 ## Result-specific inspection fields
 

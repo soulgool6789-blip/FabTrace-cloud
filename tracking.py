@@ -855,11 +855,16 @@ def spool_dict(s, item, user=None):
     from spool_receiving import receiving_summary
     registration = registered_spool(s, item.id)
     parts = parts_summary(s, item.id)
+    arrival = receiving_summary(s, item, user)
+    # Dossier evidence calls this reader without a user. Live labels and colors
+    # belong only to UI responses, never to the retained evidence fingerprint.
+    from spool_presentation import item_presentation
+    display = item_presentation(s, item, receiving=arrival) if user is not None else {}
     return {
         **({'removal': removal_summary(s, 'item', item.id), 'can_mutate': not item_is_removed(s, item.id)} if user is not None else {}),
         **({'parts': parts} if parts else {}),
         'item': {**asdict(item, 'id description kind project drawing location handler welds_required welds_done dimensional weld dimension_at last_work_at reinspection_due on_hold released released_at released_by'.split()),
-                 'release_control': release_summary(s, item), 'receiving': receiving_summary(s, item, user)},
+                 **display, 'release_control': release_summary(s, item), 'receiving': arrival},
         'plan': asdict(plan, PLAN_KEYS) if plan else None,
         'registered_assembly_id': registration.assembly_id if registration else None,
         'summary': tracking_summary(s, item),
@@ -1443,7 +1448,9 @@ def _filtered_items(s, project_id='', subproject_id=''):
 @router.get('/overview')
 def overview(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
     rows = _filtered_items(s, project_id, subproject_id)
-    spools = [tracking_summary(s, item) for item in rows]
+    from spool_presentation import item_presentations
+    displays = item_presentations(s, rows)
+    spools = [{**tracking_summary(s, item), **displays[item.id]} for item in rows]
     return {
         'projects': get_projects(u, s),
         'subprojects': get_subprojects('', u, s),
@@ -1497,7 +1504,10 @@ def _item_exceptions(s, item):
 @router.get('/exceptions')
 def exceptions(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
     result = []
-    for item in _filtered_items(s, project_id, subproject_id):
-        result.extend(_item_exceptions(s, item))
+    rows = _filtered_items(s, project_id, subproject_id)
+    from spool_presentation import item_presentations
+    displays = item_presentations(s, rows)
+    for item in rows:
+        result.extend({**row, **displays[item.id]} for row in _item_exceptions(s, item))
     return {'exceptions': result}
 

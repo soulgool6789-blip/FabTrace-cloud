@@ -612,13 +612,14 @@ also use it. Completed children can follow only a valid, active parent chain.
 
 def _summary(s, item, plan=None):
     from production import compact_process_summary, process_snapshot
+    from spool_presentation import item_presentation
     plan = plan if plan is not None else s.get(FlowPlan, item.id)
     project_id, subproject_id = _project(s, item)
     return {
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
         'current_title': STEP_BY_NUMBER[plan.current_step]['title'] if plan and plan.current_step else '',
-        'flow_stage': flow_stage_for_item(s, item, plan=plan),
+        **item_presentation(s, item, plan=plan),
         'step_entered_at': _utc(plan.step_entered_at).isoformat() if plan and plan.step_entered_at else None,
         'version': plan.version if plan else 0, 'project_id': project_id, 'subproject_id': subproject_id,
         'released': bool(item.released), 'open_exceptions': len(_exceptions(s, item.id, True)) if plan else 0,
@@ -634,6 +635,7 @@ def detail(s, item, user):
     from transfers import transfer_snapshot
     from orders import order_scope
     from spool_receiving import receiving_errors, receiving_summary
+    from spool_presentation import item_presentation
     arrival_blockers = receiving_errors(s, item)
     parts = parts_summary(s, item.id)
     plan = s.get(FlowPlan, item.id)
@@ -669,13 +671,16 @@ def detail(s, item, user):
     active = not item_is_removed(s, item.id)
     if not active:
         actions = []
+    arrival = receiving_summary(s, item, user)
+    display = item_presentation(s, item, plan=plan, receiving=arrival)
     return {
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
-        'receiving': receiving_summary(s, item, user),
-        'flow_stage': flow_stage_for_item(s, item, plan=plan),
+        'receiving': arrival,
+        'flow_stage': display['flow_stage'],
         **({'parts': parts} if parts else {}),
         'order_scope': order_scope(s, item.id),
         'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
+                 **display,
                  'release_control': release_summary(s, item)},
         'release_control': release_summary(s, item),
         'transfer': transfer_snapshot(s, item, user),
@@ -687,6 +692,7 @@ def detail(s, item, user):
         'components': [_summary(s, s.get(Item, key)) for key in component_ids],
         'spools': [_summary(s, s.get(Item, key)) for key in spool_ids],
         'parent': {'item_id': parent_item.id, 'description': parent_item.description,
+            **item_presentation(s, parent_item, plan=parent_plan),
             'route': parent_plan.route if parent_plan else ('spool' if link else 'assembly')} if parent_item else None,
         'events': [_dict(row, EVENT_KEYS) for row in s.scalars(select(FlowEvent).where(FlowEvent.item_id == item.id).order_by(FlowEvent.sequence))],
         'exceptions': [_dict(row, EXCEPTION_KEYS) for row in _exceptions(s, item.id)],

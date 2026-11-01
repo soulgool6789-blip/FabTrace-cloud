@@ -149,6 +149,9 @@ def _tree(s, selected_project_id=''):
         Item.id.in_(candidate_ids), item_not_removed(Item.id))).all()} if candidate_ids else {}
     rows = [row for row in rows if row['id'] in items and row['project_id'] in project_ids]
     ids = set(items)
+    from order_spools import SpoolQrIdentity
+    from spool_presentation import identity_fields
+    identities = {row.item_id: row for row in s.scalars(select(SpoolQrIdentity).where(SpoolQrIdentity.item_id.in_(ids)))}
     plans = {row.item_id: row for row in s.scalars(select(SpoolPlan).where(SpoolPlan.item_id.in_(ids))).all()}
     flows = {row.item_id: row for row in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(ids))).all()}
     events = _group(s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids),
@@ -181,6 +184,7 @@ def _tree(s, selected_project_id=''):
         part_summary = ({'configured': True, 'reference': parts['reference'],
                          **parts['totals']} if parts else None)
         nodes[identifier] = {'id': identifier, 'item_kind': item.kind, 'route': route,
+            **identity_fields(item, identities.get(identifier), is_spool=route == 'spool'),
             'part_number': item.google_part_number, 'project_id': row['project_id'],
             'parent_id': row['parent_id'], 'location': item.location, 'handler': item.handler,
             'handler_name': staff.get(item.handler, item.handler),

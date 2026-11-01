@@ -316,6 +316,7 @@ def parts_basis(s, spool_id):
 def _detail(s, item, spool_plan, user):
     from removals import item_is_removed, item_not_removed, removal_summary
     from flow import flow_stage_for_item
+    from spool_presentation import item_presentation
     active = not item_is_removed(s, item.id)
     cfg = s.get(SpoolPartsPlan, item.id)
     project = s.get(Project, spool_plan.project_id)
@@ -356,7 +357,7 @@ def _detail(s, item, spool_plan, user):
         'unallocated_components': [with_stage(c) for c in snapshot.get('unallocated_components', [])]}
     return {'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'item': {'id': item.id, 'description': item.description, 'google_part_number': item.google_part_number,
-                    'flow_stage': flow_stage_for_item(s, item),
+                    **item_presentation(s, item),
                     'project_id': spool_plan.project_id, 'project_name': project.name if project else '', 'subproject_id': spool_plan.subproject_id},
         **presentation, 'permissions': {'can_manage': active and has_capability(user, 'manage_production'),
                                   'can_allocate': active and has_capability(user, 'allocate_parts'), 'can_mutate': active},
@@ -410,19 +411,21 @@ def _commit(s):
 
 @router.get('/spools')
 def list_spools(project_id: str = Query('', max_length=80), user: Employee = Depends(auth), s: Session = Depends(db)):
-    from flow import flow_stage_for_item
+    from spool_presentation import item_presentations
     from removals import item_not_removed, project_not_removed
     query = select(Item, SpoolPlan).join(SpoolPlan, SpoolPlan.item_id == Item.id).where(
         Item.kind != 'Assembly', item_not_removed(), project_not_removed(SpoolPlan.project_id))
     if project_id:
         query = query.where(SpoolPlan.project_id == project_id)
     items = []
-    for item, plan in s.execute(query.order_by(Item.id)):
+    rows = list(s.execute(query.order_by(Item.id)))
+    displays = item_presentations(s, [row[0] for row in rows])
+    for item, plan in rows:
         project = s.get(Project, plan.project_id)
         snapshot = parts_snapshot(s, item.id)
         reason = _edit_reason(s, item, plan)
         items.append({'item_id': item.id, 'description': item.description, 'project_id': plan.project_id,
-            'flow_stage': flow_stage_for_item(s, item),
+            **displays[item.id],
             'project_name': project.name if project else '', 'subproject_id': plan.subproject_id,
             'configured': bool(snapshot), 'version': snapshot['version'] if snapshot else 0,
             'totals': snapshot['totals'] if snapshot else _counts(), 'editable': not reason, 'locked_reason': reason})

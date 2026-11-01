@@ -363,7 +363,7 @@ def _validate_assembly_scope(s, order, item, required_spools):
         raise HTTPException(409, 'Required spool count must match the existing assembly traveler; the order does not rewrite established production scope')
 
 
-def _assembly_detail(s, mapping, group, progress_rows):
+def _assembly_detail(s, mapping, group, progress_rows, *, presentation=False):
     from removals import removal_summary
     from spool_boms import item_bom_summary
     item = s.get(Item, mapping.item_id)
@@ -372,7 +372,10 @@ def _assembly_detail(s, mapping, group, progress_rows):
     flow = s.get(FlowPlan, item.id)
     spools = []
     blockers = []
-    for child, child_plan in _linked(s, item.id, include_removed=bool(item_removal and item_removal['removed'])):
+    linked_rows = _linked(s, item.id, include_removed=bool(item_removal and item_removal['removed']))
+    from spool_presentation import item_presentations
+    displays = item_presentations(s, [child for child, _ in linked_rows]) if presentation else {}
+    for child, child_plan in linked_rows:
         child_removal = removal_summary(s, 'item', child.id)
         child_flow = s.get(FlowPlan, child.id)
         row = progress_rows.get(child.id, {})
@@ -388,6 +391,7 @@ def _assembly_detail(s, mapping, group, progress_rows):
         ready = bool(child.kind == 'Spool' and child_plan and child_flow and child_flow.route == 'spool'
                      and child_flow.status == 'completed' and row.get('fabrication_finished') and not errors)
         spools.append({'item_id': child.id, 'description': child.description, 'google_part_number': child.google_part_number,
+                       **displays.get(child.id, {}),
                        'bom': item_bom_summary(child, s) if not (child_removal and child_removal['removed']) else None,
                        'removal': child_removal,
                        'project_id': child_project, 'subproject_id': child_plan.subproject_id if child_plan else None,
@@ -446,6 +450,13 @@ def order_detail(s, project_id, user=None):
         group_query = group_query.where(gpn_not_removed(OrderGpn.id))
     groups = s.scalars(group_query.order_by(OrderGpn.gpn)).all()
     quantity_plans = requirements_by_gpn(s, [group.id for group in groups])
+    if user is not None:
+        from spool_presentation import requirement_presentations
+        displays = requirement_presentations(s, [line['id'] for plan in quantity_plans.values()
+            for line in plan['spools']])
+        quantity_plans = {identifier: {**plan, 'spools': [
+            {**line, **displays.get(line['id'], {})} for line in plan['spools']]}
+            for identifier, plan in quantity_plans.items()}
     progress_rows = {row['id']: row for row in project_rows(s, project_id)}
     gpns, assemblies = [], []
     for group in groups:
@@ -453,7 +464,8 @@ def order_detail(s, project_id, user=None):
         if not removed:
             mapping_query = mapping_query.where(item_not_removed(OrderAssembly.item_id))
         mappings = s.scalars(mapping_query.order_by(OrderAssembly.item_id)).all()
-        children = [_assembly_detail(s, mapping, group, progress_rows) for mapping in mappings]
+        children = [_assembly_detail(s, mapping, group, progress_rows,
+                                    presentation=user is not None) for mapping in mappings]
         # A removed physical instance still owns its retained identity. Do not
         # offer a shared-number correction that would rewrite its history.
         physical_count = len(s.scalars(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id)).all())

@@ -14,6 +14,9 @@
   const busy=()=>state.loading||state.working||state.saving||pieceSaving();
   const bytes=value=>value>=1048576?(value/1048576).toFixed(1)+' MB':Math.max(1,Math.ceil(value/1024))+' KB';
   const label=kind=>kind==='bom'?'Bill of material':'Isometric drawings';
+  const spoolText=(value,number)=>window.FabFlowStatus?.spoolText(value,number)||esc(number);
+  const spoolRecord=data=>({...data?.context,flow_stage:data?.flow_stage});
+  function spoolCopies(){const rows=arr(state.data?.physical_spools);return rows.length>1?`<details class="sdoc-copy-status"><summary>${rows.length} physical spools${state.data.flow_stage_state==='mixed'?' · Mixed flow stages':''}</summary>${rows.map(row=>`<p>${spoolText(row,window.FabFlowStatus?.spoolNumber(row)||row.display_code||row.item_id)} · ${esc(row.flow_stage?.label||'Status unavailable')}</p>`).join('')}</details>`:'';}
   const button=(action,caption,extra='',primary=false,disabled=false)=>`<button type="button" data-sdoc-action="${action}" ${extra}${disabled?' disabled':''}${primary?' class="primary"':''}>${esc(caption)}</button>`;
   const dialog=document.createElement('dialog');dialog.id='spoolDocumentsDialog';dialog.setAttribute('aria-labelledby','spoolDocumentsTitle');dialog.setAttribute('aria-describedby','spoolDocumentsSubtitle');
   dialog.innerHTML='<div class="sdoc-head"><div class="sdoc-heading"><button id="spoolDocumentsBack" type="button">← Back</button><div><span class="sdoc-eyebrow">Spool documents</span><h2 id="spoolDocumentsTitle">BOM &amp; drawings</h2><p id="spoolDocumentsSubtitle"></p></div></div><button id="spoolDocumentsClose" type="button" aria-label="Close spool documents">×</button></div><div id="spoolDocumentsContent"></div><div class="sdoc-footer"><p>Files stay with their selected spool records.</p><button id="spoolDocumentsDone" type="button">Return to spool</button></div>';
@@ -43,7 +46,7 @@
   function invalidatePreview(draft){draft.preview=null;draft.error='';draft.stale=false;if(draft===state.drafts?.isometric)state.package=null;}
   function contextView(){
     const c=state.data.context,physical=c.kind==='spool';
-    return `<dl class="sdoc-context">${[['P.O.',c.purchase_order||c.project_id],['Assembly',c.assembly_number||c.assembly_id],['Spool number',c.spool_number],...(physical?[['Unique spool ID',c.item_id]]:[])].filter(row=>row[1]).map(([name,value])=>`<div><dt>${esc(name)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl><p class="sdoc-scope">${physical?'These files belong to this physical spool. Use assembly setup when a drawing covers several corresponding spools.':'Files are matched to spools in this P.O. and assembly.'}</p>${physical&&!state.package&&!state.working&&(state.tab==='isometric'||state.view==='upload'&&!state.drafts.bom.files.length)&&state.data.permissions?.can_upload!==false&&idOK(c.requirement_id)?`<div class="sdoc-share"><div><strong>Does this isometric cover several spools?</strong><p>Use assembly setup to share the full drawing and create a separate Excel BOM for every matching spool. Your selected files will carry over.</p></div>${button('use-assembly','Use for all assembly spools','',false,busy())}</div>`:''}`;
+    return `<dl class="sdoc-context">${[['P.O.',c.purchase_order||c.project_id],['Assembly',c.assembly_number||c.assembly_id],['Spool number',c.spool_number],...(physical?[['Physical spool',c.display_code||c.qr_alias||c.item_id],...(c.display_code&&c.display_code!==c.item_id?[['Internal record ID',c.item_id]]:[])]:[])].filter(row=>row[1]).map(([name,value])=>`<div><dt>${esc(name)}</dt><dd>${['Spool number','Physical spool'].includes(name)?spoolText(spoolRecord(state.data),value):esc(value)}</dd></div>`).join('')}</dl>${spoolCopies()}<p class="sdoc-scope">${physical?'These files belong to this physical spool. Use assembly setup when a drawing covers several corresponding spools.':'Files are matched to spools in this P.O. and assembly.'}</p>${physical&&!state.package&&!state.working&&(state.tab==='isometric'||state.view==='upload'&&!state.drafts.bom.files.length)&&state.data.permissions?.can_upload!==false&&idOK(c.requirement_id)?`<div class="sdoc-share"><div><strong>Does this isometric cover several spools?</strong><p>Use assembly setup to share the full drawing and create a separate Excel BOM for every matching spool. Your selected files will carry over.</p></div>${button('use-assembly','Use for all assembly spools','',false,busy())}</div>`:''}`;
   }
   function table(bom,caption='Bill of material'){
     if(!bom||!Array.isArray(bom.lines))return '';
@@ -144,6 +147,7 @@
   }
   function render(){
     node('spoolDocumentsSubtitle').textContent=state.data?'Spool '+state.data.context.spool_number:state.target?.spool_number?'Spool '+state.target.spool_number:'';
+    window.FabFlowStatus?.decorateSpool(node('spoolDocumentsSubtitle'),spoolRecord(state.data),node('spoolDocumentsSubtitle').textContent);
     node('spoolDocumentsClose').disabled=state.saving||pieceSaving();node('spoolDocumentsDone').disabled=state.saving||pieceSaving();node('spoolDocumentsBack').disabled=state.saving||pieceSaving();
     node('spoolDocumentsDone').textContent=state.target?.kind==='requirements'?'Return to setup':'Return to spool';
     const content=node('spoolDocumentsContent');content.setAttribute('aria-busy',String(busy()));

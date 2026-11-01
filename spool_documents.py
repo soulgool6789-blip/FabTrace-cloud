@@ -305,13 +305,21 @@ def _effective(s, scope, identity, requirement=None):
 
 def _detail(s, scope, identity, user):
     context, item, requirement = _target(s, scope, identity)
+    from spool_presentation import item_presentation, requirement_presentations
+    if item is not None:
+        display = item_presentation(s, item)
+        context = {**context, 'display_code': display['display_code'], 'qr_alias': display['qr_alias']}
+        stage = {'flow_stage': display['flow_stage'], 'flow_stage_state': 'common',
+                 'physical_spools': [{'item_id': item.id, **display}], 'physical_spools_total': 1}
+    else:
+        stage = requirement_presentations(s, [requirement.id])[requirement.id]
     local, inherited, active, _, local_documents, inherited_documents = _effective(s, scope, identity, requirement)
     locked = _locked_reason(s, scope, identity, item, requirement)
     history = []
     for metadata, row in (local_documents + inherited_documents)[:100]:
         history.append(_metadata(row, inherited if metadata['inherited'] else local,
                                  metadata['inherited'], include_bom=False))
-    return {'context': context, 'version': local.version if local else 0,
+    return {'context': context, **stage, 'version': local.version if local else 0,
             'editable': _can_upload(user) and not locked, 'locked_reason': locked,
             'active': active, 'history': history,
             'inherited_from': ({'requirement_id': requirement.id, 'spool_number': requirement.spool_number}

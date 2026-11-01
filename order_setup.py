@@ -259,10 +259,13 @@ def _totals(rows):
             'known_assembly_quantity': assembly_quantity, 'known_total_spools': total_spools}
 
 
-def _groups(s, project_ids):
+def _groups(s, project_ids, *, include_status=False):
     groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id.in_(project_ids),
         gpn_not_removed(OrderGpn.id)).order_by(OrderGpn.gpn, OrderGpn.id)).all()
     plans = requirements_by_gpn(s, [row.id for row in groups])
+    from spool_presentation import requirement_presentations
+    displays = requirement_presentations(s, [line['id'] for plan in plans.values()
+        for line in plan['spools']]) if include_status else {}
     mappings = s.scalars(select(OrderAssembly)
         .where(OrderAssembly.gpn_id.in_([row.id for row in groups]))).all() if groups else []
     active_ids = set(s.scalars(select(Item.id).where(
@@ -279,7 +282,7 @@ def _groups(s, project_ids):
             'assembly_quantity': plan['assembly_quantity'] if plan else None,
             'spools_per_assembly': plan['spools_per_assembly'] if plan else None,
             'total_spools': plan['total_spools'] if plan else None,
-            'spools': plan['spools'] if plan else [],
+            'spools': [{**line, **displays.get(line['id'], {})} for line in plan['spools']] if plan else [],
             'registered_assemblies': active[group.id], 'editable': not history[group.id],
             'welds_editable': bool(plan and any(line['welds_per_spool'] is None for line in plan['spools'])),
             'locked_reason': ('Physical assembly records already exist. Their production scope is retained; '
@@ -292,7 +295,7 @@ def setup_detail(s, project_id, user):
         project_not_removed(PurchaseOrder.project_id)))
     if order is None:
         raise HTTPException(404, 'Active purchase order not found')
-    rows = _groups(s, {project_id})[project_id]
+    rows = _groups(s, {project_id}, include_status=True)[project_id]
     return {'order': {'project_id': order.project_id, 'purchase_order': order.purchase_order,
                      'customer': order.customer, 'version': order.version},
             'assemblies': rows, 'totals': _totals(rows), 'permissions': _permissions(user)}

@@ -331,6 +331,12 @@ def project_progress(project_id: str,
         (lambda r: (-r['progress_percent'], r['id'])) if sort == 'progress_desc' else (
         (lambda r: r['id']) if sort == 'id' else (lambda r: (order[r['status']], r['id']))))
     matches.sort(key=key)
+    # Keep project_rows stable for dossier and export consumers; attach the live
+    # physical identity/status only to this selected UI response.
+    from spool_presentation import item_presentations
+    displays = item_presentations(s, s.scalars(select(Item).where(
+        Item.id.in_([row['id'] for row in matches])))) if matches else {}
+    matches = [{**row, **displays.get(row['id'], {})} for row in matches]
     return {'project': {'id': project.id, 'name': project.name, 'client': project.client},
         'removal': removal_summary(s, 'order', project_id), 'can_mutate': not removed,
         'as_of': _stamp(utcnow()), 'definitions': DEFINITIONS, 'counts': counts,
