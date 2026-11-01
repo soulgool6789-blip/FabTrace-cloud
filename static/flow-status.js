@@ -20,14 +20,17 @@
   function normalize(value) {
     const candidate = value?.flow_stage || value;
     const known = byKey.get(candidate?.key);
-    return known ? {...known, source_item_id: String(candidate.source_item_id || ''), inherited: candidate.inherited === true} : null;
+    return known ? {...known, source_item_id: String(candidate.source_item_id || ''), inherited: candidate.inherited === true,
+      needs_station_selection: candidate.needs_station_selection === true,
+      recorded_location_label: String(candidate.recorded_location_label || '')} : null;
   }
   function className(value) {
     const stage = normalize(value);
     return stage ? 'fst-text fst-color-' + stage.color : '';
   }
   function title(stage) {
-    return stage.label + (stage.inherited && stage.source_item_id ? ' · Following ' + stage.source_item_id : '');
+    return stage.label + (stage.inherited && stage.source_item_id ? ' · Following ' + stage.source_item_id : '')
+      + (stage.needs_station_selection ? ' · Recorded location: ' + (stage.recorded_location_label || 'Unmapped station') + ' · Select a flow station on the next transfer' : '');
   }
   function text(value, label, tag = 'span') {
     const stage = normalize(value), safeTag = ['span','strong','small'].includes(tag) ? tag : 'span';
@@ -59,10 +62,14 @@
   }
   function badge(value) {
     const stage = normalize(value);
-    return stage ? `<span class="fst-stage ${className(stage)}" data-flow-stage="${stage.key}" title="${escape(title(stage))}">${escape(stage.label)}</span>` : '';
+    return stage ? `<span class="fst-stage fst-station" data-flow-stage="${stage.key}" data-station-stage="${stage.key}" title="${escape(title(stage))}">${escape(stage.label)}${stage.needs_station_selection ? ' · Confirm station' : ''}</span>` : '';
+  }
+  function stationText(value, label, tag = 'span') {
+    const stage = normalize(value), safeTag = ['span','strong','small'].includes(tag) ? tag : 'span';
+    return `<${safeTag} class="fst-station"${stage ? ` data-station-stage="${stage.key}"` : ''}>${escape(label ?? stage?.label ?? '')}</${safeTag}>`;
   }
   function legend() {
-    return `<aside class="fst-legend" aria-label="Flow status color key"><strong>Spool number colors</strong><ul>${catalog.filter(stage => !stage.qa).map(stage => `<li>${text(stage, stage.key === 'paint' ? 'Painting' : stage.label)}<small>${stage.color[0].toUpperCase() + stage.color.slice(1)}</small></li>`).join('')}</ul><p>Each spool number uses its current Flow status color. QA/QC checkpoints keep the preceding work-stage color.</p></aside>`;
+    return `<aside class="fst-legend" aria-label="Spool number color key"><strong>Spool number colors</strong><ul>${catalog.filter(stage => !stage.qa).map(stage => `<li><span class="fst-swatch fst-color-${stage.color}" aria-hidden="true"></span>${stationText(stage, stage.key === 'paint' ? 'Painting' : stage.label)}<small>${stage.color[0].toUpperCase() + stage.color.slice(1)}</small></li>`).join('')}</ul><p>The individual spool number carries the color of its recorded station. New spools stay in Inventory until a station transfer is recorded. QA/QC checkpoints keep the preceding station color.</p></aside>`;
   }
   function processBoard(records, options = {}) {
     const attribute = ['data-flow-spool', 'data-pp-spool'].includes(options.attribute) ? options.attribute : 'data-flow-spool';
@@ -78,17 +85,17 @@
     const card = row => {
       const context = [row.purchase_order ? 'P.O. ' + row.purchase_order : row.project_name || row.project_id,
         row.assembly_number || row.assembly_id].filter(Boolean);
-      return `<li data-process-spool="${escape(row.item_id)}"><button type="button" class="fst-spool-link" ${attribute}="${escape(row.item_id)}" data-spool-project="${escape(row.project_id || '')}" aria-label="Open process flow for ${escape(spoolNumber(row))}">${spoolText(row, spoolNumber(row), 'strong')}</button>${context.length ? `<small class="fst-spool-context">${context.map(escape).join(' · ')}</small>` : ''}${row.flow_stage?.blocked || row.on_hold || Number(row.open_exceptions) > 0 ? '<span class="fst-spool-blocked">Work blocked</span>' : ''}</li>`;
+      return `<li data-process-spool="${escape(row.item_id)}"><button type="button" class="fst-spool-link" ${attribute}="${escape(row.item_id)}" data-spool-project="${escape(row.project_id || '')}" aria-label="Open process flow for ${escape(spoolNumber(row))}">${spoolText(row, spoolNumber(row), 'strong')}</button>${context.length ? `<small class="fst-spool-context">${context.map(escape).join(' · ')}</small>` : ''}${row.flow_stage?.needs_station_selection ? `<small class="fst-spool-context">Recorded location: ${escape(row.flow_stage.recorded_location_label || 'Unmapped station')}. Select a flow station on the next transfer.</small>` : ''}${row.flow_stage?.blocked || row.on_hold || Number(row.open_exceptions) > 0 ? `<span class="fst-spool-blocked">${row.flow_stage?.key === 'ready_to_ship' ? 'Release blocked' : 'Work blocked'}</span>` : ''}</li>`;
     };
     const section = (stage, entries, index) => {
       entries.sort((a, b) => compare(spoolNumber(a), spoolNumber(b)) || compare(a.item_id, b.item_id));
-      return `<section class="fst-process" data-spool-process="${stage.key}"><header class="fst-process-heading"><span class="fst-process-sequence">${index + 1}</span><h3>${escape(stage.label)}</h3><span class="fst-process-count" aria-label="${entries.length} individual spools">${entries.length}</span></header>${entries.length ? `<ul class="fst-process-spools">${entries.map(card).join('')}</ul>` : '<p class="fst-process-empty">No spools at this process</p>'}</section>`;
+      return `<section class="fst-process" data-spool-process="${stage.key}"><header class="fst-process-heading"><span class="fst-process-sequence">${index + 1}</span><h3 class="fst-station" data-station-stage="${stage.key}">${escape(stage.label)}</h3><span class="fst-process-count" aria-label="${entries.length} individual spools">${entries.length}</span></header>${entries.length ? `<ul class="fst-process-spools">${entries.map(card).join('')}</ul>` : '<p class="fst-process-empty">No spools at this process</p>'}</section>`;
     };
-    return `<section class="fst-process-board" aria-label="${escape(options.title || 'Individual spools by process')}"><div class="fst-process-board-heading"><h2>${escape(options.title || 'Individual spools by process')}</h2><span>${seen.size} individual spool${seen.size === 1 ? '' : 's'}</span></div><p class="fst-process-help">Each numbered copy appears under its current process. Select its colored number to open that spool.</p><div class="fst-process-grid">${catalog.map((stage, index) => section(stage, groups.get(stage.key), index)).join('')}${unknown.length ? section({key:'unknown', label:'Status unavailable'}, unknown, catalog.length) : ''}</div></section>`;
+    return `<section class="fst-process-board" aria-label="${escape(options.title || 'Individual spools by process')}"><div class="fst-process-board-heading"><h2>${escape(options.title || 'Individual spools by process')}</h2><span>${seen.size} individual spool${seen.size === 1 ? '' : 's'}</span></div><p class="fst-process-help">Each numbered copy appears at its recorded station. Select its colored number to open that spool. A QR transfer updates its station.</p><div class="fst-process-grid">${catalog.map((stage, index) => section(stage, groups.get(stage.key), index)).join('')}${unknown.length ? section({key:'unknown', label:'Status unavailable'}, unknown, catalog.length) : ''}</div></section>`;
   }
   function strip(_serverCatalog, value) {
     const current = normalize(value);
-    return `<section class="fst-flow" aria-label="Flow progress"><div class="fst-flow-heading"><h3>Flow progress</h3>${current ? `<span>Current stage ${badge(current)}</span>` : ''}</div><ol>${catalog.map((stage, index) => `<li data-flow-stage="${stage.key}"${current?.key === stage.key ? ' class="fst-current" aria-current="step"' : ''}><span class="fst-sequence">${index + 1}</span>${text(stage, stage.label, 'strong')}${stage.qa ? '<small>QA/QC checkpoint</small>' : ''}</li>`).join('')}</ol>${current?.inherited ? `<p class="fst-following">This part is following ${escape(current.source_item_id)} through ${escape(current.label)}.</p>` : ''}</section>`;
+    return `<section class="fst-flow" aria-label="Flow progress"><div class="fst-flow-heading"><h3>Flow progress</h3>${current ? `<span>Recorded station ${badge(current)}</span>` : ''}</div><ol>${catalog.map((stage, index) => `<li data-flow-stage="${stage.key}"${current?.key === stage.key ? ' class="fst-current" aria-current="step"' : ''}><span class="fst-sequence">${index + 1}</span>${stationText(stage, stage.label, 'strong')}${stage.qa ? '<small>QA/QC checkpoint</small>' : ''}</li>`).join('')}</ol>${current?.inherited ? `<p class="fst-following">This part is following ${escape(current.source_item_id)} at ${escape(current.label)}.</p>` : ''}</section>`;
   }
-  window.FabFlowStatus = Object.freeze({catalog: Object.freeze(catalog), normalize, className, text, spoolNumber, spoolText, decorateSpool, badge, legend, processBoard, strip});
+  window.FabFlowStatus = Object.freeze({catalog: Object.freeze(catalog), normalize, className, text, spoolNumber, spoolText, decorateSpool, stationText, badge, legend, processBoard, strip});
 })();

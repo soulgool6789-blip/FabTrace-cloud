@@ -7,6 +7,7 @@ from test_order_labels import generate, labels, public_qr_url
 from test_order_setup import branch, create_setup, detail
 from test_production_progress import flatten
 from test_progress import database_state
+from station_helpers import move
 
 
 NUMBER = '643-777-PCW-03-01'
@@ -28,9 +29,10 @@ def test_actual_spool_number_and_copy_status_agree_across_live_views(api):
     copies = labels(api, project)['items']
     first, second = copies
     enroll(api, first['id'], 'spool', start_step=13)
+    move(api, first['id'], 'welding')
     before = database_state(api)
 
-    expected = {first['id']: 'welding', second['id']: 'qa_001'}
+    expected = {first['id']: 'welding', second['id']: 'inventory'}
     views = [
         indexed(ok(api.get('/api/items'))['items'], 'id'),
         indexed(labels(api, project)['items'], 'id'),
@@ -84,11 +86,12 @@ def test_requirement_common_stage_becomes_mixed_without_changing_evidence_payloa
     generate(api, project)
     common = detail(api, project)['assemblies'][0]['spools'][0]
     assert common['flow_stage_state'] == 'common' and common['physical_spools_total'] == 2
-    assert common['flow_stage']['key'] == 'qa_001'
+    assert common['flow_stage']['key'] == 'inventory'
     assert common['flow_stage']['source_item_id'] is None
     copies = common['physical_spools']
     assert len({row['display_code'] for row in copies}) == 2
     enroll(api, copies[0]['item_id'], 'spool', start_step=13)
+    move(api, copies[0]['item_id'], 'welding')
     before = database_state(api)
 
     setup = detail(api, project)['assemblies'][0]['spools'][0]
@@ -97,7 +100,7 @@ def test_requirement_common_stage_becomes_mixed_without_changing_evidence_payloa
     for view in (setup, documents, order):
         assert view['flow_stage_state'] == 'mixed' and view['flow_stage'] is None
         assert view['physical_spools_total'] == 2
-        assert {row['flow_stage']['key'] for row in view['physical_spools']} == {'welding', 'qa_001'}
+        assert {row['flow_stage']['key'] for row in view['physical_spools']} == {'welding', 'inventory'}
         assert {row['spool_number'] for row in view['physical_spools']} == {NUMBER}
         assert {row['item_id'] for row in view['physical_spools']} == {row['item_id'] for row in copies}
 

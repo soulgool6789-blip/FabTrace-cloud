@@ -17,7 +17,8 @@ from test_dossier import physical_release
 ROOT = "/api/transfers"
 STATUSES = {"queued", "in_progress", "awaiting_inspection", "waiting_material", "paused", "ready_next_operation"}
 BUILTIN_LOCATIONS = {"receiving", "material_storage", "kitting", "fabrication_prep", "production_staging",
-                     "fit_up", "welding", "qa_qc", "assembly", "blast_paint", "shipping"}
+                     "fit_up", "welding", "qa_qc", "assembly", "blast_paint", "shipping",
+                     "inventory", "qa_001", "qa_002", "floor", "qa_003", "testing", "qa_004", "ready_to_ship"}
 
 
 def options(api, role="admin"):
@@ -195,7 +196,9 @@ def test_status_cannot_set_quality_shipping_or_other_server_owned_fields(api):
 
 
 def test_passive_status_does_not_pause_manual_timer_or_change_quality(api):
+    from receiving_helpers import accept_arrival
     item_id = item(api)
+    accept_arrival(api, item_id)
     process = ok(api.post(f"/api/tracking/spools/{item_id}/process", {
         "action": "start", "process_key": "fit_up", "expected_version": 0,
         "notes": "Synthetic process already running before custody metadata changes",

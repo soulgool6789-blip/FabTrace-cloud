@@ -18,7 +18,7 @@ def identity_fields(item, identity=None, *, is_spool=True):
             'qr_alias': alias, 'display_code': alias or item.id}
 
 
-def item_presentation(s, item, *, plan=_UNSET, receiving=None, identity=_UNSET):
+def item_presentation(s, item, *, plan=_UNSET, receiving=None, identity=_UNSET, stations=None, stage_cache=None):
     from flow import FlowPlan, flow_stage_for_item
     from order_spools import spool_qr_identity
     from tracking import SpoolPlan
@@ -30,20 +30,24 @@ def item_presentation(s, item, *, plan=_UNSET, receiving=None, identity=_UNSET):
                                     'spool' if is_spool else 'component')
     return {**identity_fields(item, identity, is_spool=is_spool),
             'item_kind': item.kind, 'route': route,
-            'flow_stage': flow_stage_for_item(s, item, plan=plan, receiving=receiving)}
+            'flow_stage': flow_stage_for_item(s, item, plan=plan, receiving=receiving,
+                                             stations=stations, stage_cache=stage_cache)}
 
 
 def item_presentations(s, items):
     """Batch identities/plans; compute each selected physical item's stage once."""
     from flow import FlowPlan
     from order_spools import SpoolQrIdentity
+    from flow_stations import station_positions
     items = list(items)
     ids = {item.id for item in items}
     if not ids:
         return {}
     identities = {row.item_id: row for row in s.scalars(select(SpoolQrIdentity).where(SpoolQrIdentity.item_id.in_(ids)))}
     plans = {row.item_id: row for row in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(ids)))}
-    return {item.id: item_presentation(s, item, plan=plans.get(item.id), identity=identities.get(item.id))
+    stations, stage_cache = station_positions(s, items, flows=plans), {}
+    return {item.id: item_presentation(s, item, plan=plans.get(item.id), identity=identities.get(item.id),
+                                     stations=stations, stage_cache=stage_cache)
             for item in items}
 
 
@@ -58,6 +62,7 @@ def physical_spool_board(s, project_id='', subproject_id=''):
     from main import Item
     from flow import FlowException, FlowPlan, STEP_BY_NUMBER, _step_errors
     from flow_stages import STAGES, STAGE_ORDER
+    from flow_stations import station_positions
     from order_spools import OrderSpool, SpoolQrIdentity
     from orders import OrderAssembly, OrderGpn, PurchaseOrder
     from removals import gpn_not_removed, item_not_removed, project_not_removed
@@ -88,6 +93,10 @@ def physical_spool_board(s, project_id='', subproject_id=''):
     if subproject_id:
         query = query.where(SpoolPlan.subproject_id == subproject_id)
     rows = list(s.execute(query))
+    stations = station_positions(s, [row[0] for row in rows],
+        flows={row[0].id: row[1] for row in rows if row[1]},
+        plans={row[0].id: row[2] for row in rows if row[2]})
+    stage_cache = {}
     identifiers = {row[0].id for row in rows}
     exceptions = dict(s.execute(select(FlowException.item_id, func.count(FlowException.id))
         .where(FlowException.item_id.in_(identifiers), FlowException.closed_at.is_(None))
@@ -95,7 +104,8 @@ def physical_spool_board(s, project_id='', subproject_id=''):
     result, sequences = [], {}
     for item, flow, plan, identity, registration, mapping, group, order, project_name, parent_number in rows:
         arrival = receiving_summary(s, item)
-        display = item_presentation(s, item, plan=flow, receiving=arrival, identity=identity)
+        display = item_presentation(s, item, plan=flow, receiving=arrival, identity=identity,
+                                    stations=stations, stage_cache=stage_cache)
         project = plan.project_id if plan else group.project_id if registration and group else item.project
         assembly_id = registration.assembly_id if registration else plan.assembly_id if plan else None
         sequences[item.id] = identity.sequence if identity else 0

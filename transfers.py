@@ -28,16 +28,24 @@ TRANSFER_ROLES = ROLE_IDS
 MANAGE_ROLES = ('admin', 'supervisor')
 KEEP_CURRENT = 'current'
 LOCATIONS = (
+    {'id': 'inventory', 'label': 'Inventory'},
+    {'id': 'qa_001', 'label': 'QA/QC-001'},
+    {'id': 'fabrication_prep', 'label': 'Prep/Fabrication'},
+    {'id': 'qa_002', 'label': 'QA/QC-002'},
+    {'id': 'floor', 'label': 'Floor'},
+    {'id': 'welding', 'label': 'Process Welder'},
+    {'id': 'qa_003', 'label': 'QA/QC-003'},
+    {'id': 'testing', 'label': 'Testing'},
+    {'id': 'blast_paint', 'label': 'Paint'},
+    {'id': 'qa_004', 'label': 'QA/QC-004'},
+    {'id': 'ready_to_ship', 'label': 'Ready To Ship'},
     {'id': 'receiving', 'label': 'Receiving'},
     {'id': 'material_storage', 'label': 'Material storage'},
     {'id': 'kitting', 'label': 'Kitting / component selection'},
-    {'id': 'fabrication_prep', 'label': 'Fabrication preparation'},
     {'id': 'production_staging', 'label': 'Production staging'},
     {'id': 'fit_up', 'label': 'Fit-up'},
-    {'id': 'welding', 'label': 'Welding'},
-    {'id': 'qa_qc', 'label': 'QA / QC inspection'},
+    {'id': 'qa_qc', 'label': 'QA / QC inspection', 'active': False},
     {'id': 'assembly', 'label': 'Assembly'},
-    {'id': 'blast_paint', 'label': 'Blast / paint'},
     {'id': 'shipping', 'label': 'Shipping / dispatch'},
 )
 STATUSES = (
@@ -296,7 +304,9 @@ def _commit(s):
 
 @router.get('/api/transfers/options')
 def options(u: Employee = Depends(auth), s: Session = Depends(db)):
-    return {'locations': [{**row, 'kind': 'builtin', 'active': True, 'version': 0} for row in LOCATIONS]
+    from flow_stations import LOCATION_STAGES
+    return {'locations': [{**row, 'kind': 'builtin', 'active': row.get('active', True), 'version': 0,
+                           'flow_stage_key': LOCATION_STAGES.get(row['id'])} for row in LOCATIONS]
         + [location_dict(row) for row in s.scalars(select(TransferLocation).order_by(TransferLocation.label, TransferLocation.id))],
         'statuses': STATUSES, 'keep_current_location_id': KEEP_CURRENT,
         'can_manage_locations': u.role in MANAGE_ROLES}

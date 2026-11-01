@@ -1,6 +1,6 @@
 """Shared display stages over the existing, immutable numbered traveler.
 
-Stage colors describe the current physical work position. They never complete
+Stage colors describe the recorded physical station. They never complete
 a traveler step, grant a quality release, or replace the separate hold status.
 """
 
@@ -34,40 +34,3 @@ def stage_status(key, item_id, *, inherited=False, blocked=False):
     stage = STAGE_BY_KEY.get(key, STAGE_BY_KEY['inventory'])
     return {field: stage[field] for field in ('key', 'label', 'color', 'color_label', 'qa')} | {
         'source_item_id': item_id, 'inherited': bool(inherited), 'blocked': bool(blocked)}
-
-
-def position_stage(item_id, route=None, current_step=None, status='not_started',
-                   receiving=None, *, blocked=False):
-    """Map recorded position, never a generic release flag, to one stage.
-
-Completed preparation remains preparation until its linked spool takes over;
-completed spool fabrication remains post-weld QA until assembly work is active.
-An administrative override is deliberately not a shipping milestone.
-"""
-    receiving = receiving or {}
-    if status == 'active' and current_step in STAGE_BY_STEP:
-        key = STAGE_BY_STEP[current_step]
-    elif status in ('shipped', 'delivered') and route == 'assembly':
-        key = 'ready_to_ship'
-    elif status == 'completed':
-        key = {'component': 'preparation', 'spool': 'qa_003', 'assembly': 'qa_004'}.get(route, 'inventory')
-    elif receiving.get('required') and not receiving.get('can_proceed'):
-        key = 'qa_001'
-    else:
-        key = 'inventory'
-    # A current quality hold cannot advertise the green shipping release.
-    if key == 'ready_to_ship' and blocked:
-        key = 'qa_004'
-    return stage_status(key, item_id, blocked=blocked)
-
-
-def inherit_stage(own, parent, *, eligible=False):
-    """Follow a valid linked parent after this item's own work is complete.
-
-The caller establishes relationship, route completion and physical readiness.
-Earlier or unknown parent positions do not move the child's status backwards.
-"""
-    if (not eligible or not parent or own.get('blocked') or parent.get('blocked')
-            or STAGE_ORDER.get(parent.get('key'), -1) < STAGE_ORDER.get(own.get('key'), 0)):
-        return own
-    return {**parent, 'inherited': True}

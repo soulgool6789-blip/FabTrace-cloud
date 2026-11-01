@@ -1,6 +1,6 @@
 /* Focused correction check: real physical spool numbers own flow colors.
  * Run only against tests/orders_browser_server.py's disposable loopback DB.
- * Pass --grouping-only for the focused individual-copy process-board check.
+ * Pass --grouping-only for the focused station-transfer, process-board and P.O. check.
  * No deployed host is accepted and no synthetic data leaves the fixture. */
 'use strict';
 const assert = require('node:assert/strict');
@@ -12,10 +12,10 @@ const BASE = process.env.ORDERS_TEST_BASE || 'http://127.0.0.1:8782';
 assert.ok(['127.0.0.1', 'localhost'].includes(new URL(BASE).hostname), 'Disposable loopback fixture only');
 const GROUPING_ONLY = process.argv.includes('--grouping-only');
 const OUT = process.env.SPOOL_NUMBER_COLORS_TEST_OUT || (GROUPING_ONLY
-  ? '/tmp/fabtrace-spool-process-groups-review' : '/tmp/fabtrace-spool-number-colors-review');
+  ? '/tmp/fabtrace-station-transfer-review' : '/tmp/fabtrace-spool-number-colors-review');
 fs.mkdirSync(OUT, {recursive: true});
 const NUMBER = '643-777-PCW-03-01';
-const BLUE = 'rgb(29, 78, 216)', BLACK = 'rgb(0, 0, 0)';
+const BLUE = 'rgb(29, 78, 216)', BLACK = 'rgb(0, 0, 0)', RED = 'rgb(185, 28, 28)';
 const checks = [], errors = [], writes = [];
 let browser, page, stage = 'launch', seedComplete = false;
 
@@ -40,7 +40,7 @@ let browser, page, stage = 'launch', seedComplete = false;
     await page.goto(BASE + '/?' + query);
     await page.locator('#' + id + '[aria-busy="false"]').waitFor();
   };
-  const color = async (scope, id, expected, description) => {
+  const color = async (scope, id, expected, description, expectedStage = expected === BLUE ? 'welding' : 'qa_001') => {
     const selected = scope.locator('[data-spool-number="' + NUMBER + '"][data-spool-id="' + id + '"]:visible');
     await selected.first().waitFor();
     const values = await selected.evaluateAll(elements => elements.map(element => {
@@ -52,7 +52,7 @@ let browser, page, stage = 'launch', seedComplete = false;
     for (const value of values) {
       assert.ok(value.text.includes(NUMBER), description + ': color must belong to the actual spool number');
       assert.equal(value.color, expected, description + ': ' + JSON.stringify(value));
-      assert.equal(value.stage, expected === BLUE ? 'welding' : 'qa_001', description + ': stage');
+      assert.equal(value.stage, expectedStage, description + ': stage');
     }
     return values;
   };
@@ -81,8 +81,8 @@ let browser, page, stage = 'launch', seedComplete = false;
   const labels = await api('get', '/api/order-labels/' + project + '/labels');
   assert.equal(labels.items.length, copyCount);
   const copies = labels.items.slice().sort((a, b) => a.display_code.localeCompare(b.display_code, undefined, {numeric: true}));
-  const first = copies[GROUPING_ONLY ? 10 : 0], second = copies[GROUPING_ONLY ? 2 : 1];
-  const inventory = GROUPING_ONLY ? [copies[0], copies[1], copies[9]] : [];
+  const first = copies[GROUPING_ONLY ? 1 : 0], second = copies[GROUPING_ONLY ? 2 : 1];
+  const inventory = GROUPING_ONLY ? copies.filter(copy => copy.id !== first.id) : [];
   assert.notEqual(first.id, second.id); assert.notEqual(first.display_code, second.display_code);
   const acceptArrival = async item => {
     const materialBase = '/api/spool-boms/spools/' + item.id;
@@ -104,29 +104,116 @@ let browser, page, stage = 'launch', seedComplete = false;
       notes: 'Synthetic arrival verification',
       checks: Object.fromEntries(['identity', 'bom', 'heat_numbers', 'mtrs', 'condition'].map(key => [key, true]))});
   };
-  for (const copy of [first, ...inventory]) await acceptArrival(copy);
-  await api('post', '/api/flow/items/' + first.id + '/start', {route: 'spool', expected_children: 0,
-    material_reference: 'LOCAL-KITTED-MATERIALS', start_step: 13,
-    baseline_reference: 'LOCAL-CONTROLLED-BASELINE',
-    baseline_reason: 'Synthetic existing spool at process welding, prior history remains unrecorded'});
-  assert.equal((await api('get', '/api/flow/items/' + first.id)).flow_stage.key, 'welding');
-  assert.equal((await api('get', '/api/flow/items/' + second.id)).flow_stage.key, 'qa_001');
-  for (const copy of inventory) {
-    const detail = await api('get', '/api/flow/items/' + copy.id);
-    assert.equal(detail.flow_stage.key, 'inventory', 'Accepted physical spool remains Inventory until its traveler starts');
-    assert.equal(detail.flow, null, 'Inventory copy has no started traveler');
-  }
-  seedComplete = true;
-
   if (GROUPING_ONLY) {
+    seedComplete = true;
+    const expectedTransfers = [];
+    const expectedScanAudit = {method: 'POST', path: '/api/items/' + first.id + '/scan'};
+    const expectedBrowserWrites = [expectedScanAudit];
+    const states = async () => (await api('get', '/api/order-labels/' + project + '/labels')).items
+      .map(item => ({id: item.id, stage: item.flow_stage.key, color: item.flow_stage.color}))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const expectedStates = currentStage => copies.map(copy => ({id: copy.id,
+      stage: copy.id === first.id ? currentStage : 'inventory',
+      color: copy.id === first.id && currentStage === 'preparation' ? 'red' : 'black'}))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    stage = 'fresh pending physical copies remain Inventory and QR reads do not move them';
+    assert.deepEqual(await states(), expectedStates('inventory'), 'New copies start Inventory even while arrival QA is pending');
+    const untouched = await api('get', '/api/items/' + first.id);
+    assert.equal(untouched.transfer.version, 0);
+    assert.equal(untouched.released, false);
+    const pending = await api('get', '/api/spool-boms/spools/' + first.id);
+    assert.equal(pending.arrival.can_proceed, false, 'Fresh Inventory does not imply arrival QA approval');
+    await panel('flowContent', 'flow=1&project=' + project);
+    const freshBoard = page.locator('#flowContent .fst-process-board');
+    assert.equal(await freshBoard.locator('section[data-spool-process="inventory"] li[data-process-spool]').count(), copies.length);
+    assert.equal(await freshBoard.locator('section:not([data-spool-process="inventory"]) li[data-process-spool]').count(), 0,
+      'Fresh physical copies must not be auto-assigned to QA/QC-001');
+    assert.ok(await freshBoard.locator('.fst-text[data-spool-id]').evaluateAll(nodes => nodes.length === 12
+      && nodes.every(node => node.dataset.flowStage === 'inventory' && getComputedStyle(node).color === 'rgb(0, 0, 0)')),
+    'Every new physical alias is visibly black in Inventory');
+    await page.goto(BASE + '/?spool=' + encodeURIComponent(first.display_code));
+    await page.locator('#itemPage:not(.hidden)').waitFor();
+    assert.equal(await page.evaluate(() => current.id), first.id, 'QR alias resolves the exact physical copy');
+    await color(page.locator('#itemPage'), first.id, BLACK, 'Opening QR leaves Inventory number black', 'inventory');
+    await page.goto(BASE + '/?handoff=1&item=' + encodeURIComponent(first.display_code));
+    await color(page.locator('#handoffItemInfo'), first.id, BLACK, 'Reading scan and handoff leaves Inventory number black', 'inventory');
+    assert.equal((await api('get', '/api/items/' + first.id)).transfer.version, 0,
+      'Opening an item or QR never records a station transfer');
+    assert.deepEqual(await states(), expectedStates('inventory'));
+    assert.deepEqual(writes, expectedBrowserWrites,
+      'Opening a QR may append its existing scan audit, but must not record a station transfer');
+    checks.push('All 12 new pending copies stay Inventory black; opening an exact QR alias and handoff screen leaves their stations and transfer versions unchanged');
+
+    const transferViaQr = async (location, workStatus, receiver, expectedStage) => {
+      const before = await api('get', '/api/items/' + first.id);
+      await page.goto(BASE + '/?handoff=1&item=' + encodeURIComponent(first.display_code));
+      await page.locator('#handoffItemInfo .fst-text[data-spool-id="' + first.id + '"]').waitFor();
+      for (const [role, badge] of [['Sender', before.transfer.handler], ['Receiver', receiver]]) {
+        await page.locator('#handoff' + role).focus();
+        await page.goto(BASE + '/?badge=' + encodeURIComponent(badge));
+        await page.locator('#handoff' + role + 'Info[data-state="valid"]').waitFor();
+      }
+      await page.locator('#handoffLocation').selectOption(location);
+      await page.locator('#handoffStatus').selectOption(workStatus);
+      await page.locator('#handoffNotes').fill('Synthetic recorded station transfer for ' + first.display_code);
+      assert.deepEqual(writes, expectedBrowserWrites, 'Scanning both employee QR badges does not move the spool');
+      const responsePromise = page.waitForResponse(response => response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/items/' + first.id + '/transfer');
+      const expectedTransfer = {method: 'POST', path: '/api/items/' + first.id + '/transfer'};
+      expectedTransfers.push(expectedTransfer);
+      expectedBrowserWrites.push(expectedTransfer);
+      await page.locator('#handoffConfirm').click();
+      const response = await responsePromise;
+      assert.ok(response.ok(), await response.text());
+      const payload = response.request().postDataJSON(), result = await response.json();
+      assert.equal(payload.location_id, location);
+      assert.equal(payload.scan_method, 'employee_qr', 'Actual badge QR route records the handoff');
+      assert.equal(payload.expected_transfer_version, before.transfer.version);
+      assert.equal(result.id, first.id);
+      assert.equal(result.transfer.version, before.transfer.version + 1);
+      assert.equal(result.flow_stage.key, expectedStage);
+      assert.equal(result.released, false, 'Station movement never grants QA release');
+      await page.getByText('Transfer recorded for ' + first.display_code + '. Scan the next item and both badges.', {exact: true}).waitFor();
+      assert.deepEqual(await states(), expectedStates(expectedStage), 'Only the transferred physical copy changes station');
+      assert.equal((await api('get', '/api/flow/items/' + first.id)).flow, null,
+        'Station transfer never starts or advances a numbered traveler');
+    };
+
+    stage = 'actual QA/QC-001 station transfer changes only its exact physical copy';
+    await transferViaQr('qa_001', 'awaiting_inspection', 'TEST-QA', 'qa_001');
+    assert.equal((await api('get', '/api/spool-boms/spools/' + first.id)).arrival.can_proceed, false,
+      'Moving to QA/QC-001 leaves pending receiving checks intact');
+    checks.push('Recording the QR station handoff moves only [002] to QA/QC-001 black and preserves pending arrival QA and unreleased state');
+
+    stage = 'arrival evidence does not move station; actual Prep/Fabrication transfer turns only [002] red';
+    await acceptArrival(first);
+    assert.deepEqual(await states(), expectedStates('qa_001'), 'Approval of arrival evidence alone does not move the recorded station');
+    await transferViaQr('fabrication_prep', 'queued', 'TEST-HANDLER', 'preparation');
+    assert.equal((await api('get', '/api/spool-boms/spools/' + first.id)).arrival.can_proceed, true,
+      'A station handoff preserves the explicitly recorded arrival approval');
+    checks.push('After explicitly recorded synthetic arrival approval, [002] stays QA/QC-001 until a second QR handoff moves it to Prep/Fabrication red; all other copies remain Inventory black');
+
     const stageKeys = ['inventory', 'qa_001', 'preparation', 'qa_002', 'floor', 'welding',
       'qa_003', 'testing', 'paint', 'qa_004', 'ready_to_ship'];
-    const inventoryIds = new Set(inventory.map(copy => copy.id));
     const expected = copies.map(copy => ({id: copy.id, alias: copy.display_code,
-      stage: copy.id === first.id ? 'welding' : inventoryIds.has(copy.id) ? 'inventory' : 'qa_001',
-      color: copy.id === first.id ? BLUE : BLACK}));
+      stage: copy.id === first.id ? 'preparation' : 'inventory',
+      color: copy.id === first.id ? RED : BLACK}));
     const byId = new Map(expected.map(copy => [copy.id, copy]));
     const snapshots = {};
+    const neutralStations = async (scope, description, minimum = 1) => {
+      const labels = await scope.locator('.fst-station[data-station-stage]').evaluateAll(nodes =>
+        nodes.map(node => ({label: node.textContent, stage: node.dataset.stationStage,
+          color: getComputedStyle(node).color,
+          semanticColor: node.matches('.fst-text,[class*="fst-color-"]')
+            || Boolean(node.querySelector('.fst-text,[class*="fst-color-"]'))})));
+      assert.ok(labels.length >= minimum, description + ': station labels are present');
+      for (const label of labels) {
+        assert.equal(label.color, 'rgb(51, 65, 85)', description + ': neutral station text ' + JSON.stringify(label));
+        assert.equal(label.semanticColor, false, description + ': spool colors must not style station names');
+      }
+      return labels;
+    };
     const readBoard = board => board.locator('section[data-spool-process]').evaluateAll(groups =>
       groups.map(group => ({stage: group.dataset.spoolProcess,
         items: [...group.querySelectorAll('li[data-process-spool]')].map(row => {
@@ -172,10 +259,12 @@ let browser, page, stage = 'launch', seedComplete = false;
       await board.waitFor({state: 'visible'});
       assert.equal(await board.count(), 1, 'Exactly one current-process board per view');
       snapshots[surface.name] = await verifyBoard(board, surface.name);
+      await neutralStations(board, surface.name + ' process headings', 11);
+      await neutralStations(page.locator('#' + surface.host + ' .fst-legend'), surface.name + ' color key', 7);
       await noOverflow();
       await board.scrollIntoViewIfNeeded();
       await page.screenshot({path: path.join(OUT, surface.name + '-groups-desktop.png'), fullPage: false});
-      checks.push(surface.name + ': all 12 physical aliases appear exactly once in the correct naturally sorted process bucket; Inventory and QA/QC-001 are separate black groups, Process Welder is blue');
+      checks.push(surface.name + ': all 12 physical aliases appear exactly once in their naturally sorted recorded station; [002] is Prep/Fabrication red and the other copies Inventory black, while station headings and color-key labels stay neutral');
 
       stage = surface.name + ': 390px process board fit';
       await page.setViewportSize({width: 390, height: 844});
@@ -187,6 +276,7 @@ let browser, page, stage = 'launch', seedComplete = false;
         return rect.left >= -1 && rect.right <= innerWidth + 1 && row.scrollWidth <= row.clientWidth + 1;
       })), surface.name + ': every physical spool row fits without clipping');
       await verifyBoard(board, surface.name + ' mobile');
+      await neutralStations(board, surface.name + ' mobile headings', 11);
       await board.locator('section[data-spool-process="inventory"]').scrollIntoViewIfNeeded();
       await page.screenshot({path: path.join(OUT, surface.name + '-inventory-mobile.png'), fullPage: false});
       checks.push(surface.name + ': all exact copy labels remain correctly colored and unclipped at 390px');
@@ -202,19 +292,95 @@ let browser, page, stage = 'launch', seedComplete = false;
         surface.name + ': readable physical alias opens its exact internal process record');
       assert.equal(await page.locator('#flowContent .ff-head h1 .fst-text[data-spool-id="' + surface.chosen.id + '"]').count(), 1,
         surface.name + ': selected process detail retains physical identity');
+      await neutralStations(page.locator('#flowContent .fst-flow'), surface.name + ' detail flow catalog', 11);
       checks.push(surface.name + ': searching the full copy alias retains only that copy, and clicking opens its exact internal Item ID');
     }
     assert.deepEqual(snapshots.process, snapshots['production-progress'],
       'Process and Production Progress agree on every physical copy, bucket, order and computed color');
+
+    stage = 'saved Purchase Order shows every physical copy and its own color without expanding copies';
+    await page.setViewportSize({width: 1440, height: 1000});
+    await panel('orderSetupContent', 'order-setup=1&po=' + project);
+    const po = page.locator('#orderSetupContent');
+    const verifyPO = async description => {
+      const rows = await po.locator('[data-os-physical-spool]').evaluateAll(nodes => nodes.map(node => {
+        const label = node.querySelector('.fst-text[data-spool-id]'), station = node.querySelector('.os-copy-status .fst-station'),
+          colorName = node.querySelector('.os-copy-color');
+        return {id: node.dataset.osPhysicalSpool, alias: label?.textContent, color: label && getComputedStyle(label).color,
+          station: station?.dataset.stationStage, colorName: colorName?.textContent,
+          colorNameColor: colorName && getComputedStyle(colorName).color,
+          hidden: !node.getClientRects().length || Boolean(node.closest('details:not([open])'))};
+      }));
+      assert.equal(rows.length, copies.length, description + ': every physical copy is in the saved P.O.');
+      assert.equal(new Set(rows.map(row => row.id)).size, copies.length, description + ': no duplicate physical copies');
+      assert.deepEqual(rows.map(row => row.alias), expected.map(copy => copy.alias), description + ': natural copy order');
+      for (const row of rows) {
+        const copy = byId.get(row.id);
+        assert.ok(copy, description + ': no invented copies');
+        assert.equal(row.hidden, false, description + ': ' + row.alias + ' is visible without a copy toggle');
+        assert.equal(row.alias, copy.alias);
+        assert.equal(row.station, copy.stage);
+        assert.equal(row.color, copy.color, description + ': computed number color for ' + copy.alias);
+        assert.equal(row.colorName, 'Text color: ' + (copy.color === RED ? 'Red' : 'Black'));
+        assert.ok(![RED, BLUE, 'rgb(253, 224, 71)', 'rgb(185, 75, 0)', 'rgb(190, 24, 93)', 'rgb(21, 128, 61)'].includes(row.colorNameColor),
+          description + ': the descriptive color name remains neutral');
+      }
+      assert.equal(await po.locator('details.os-copy-flow').count(), 0, 'Copies are not hidden in a dropdown');
+      assert.equal(await po.locator('[data-os-planned-number="' + NUMBER + '"].fst-text').count(), 0,
+        'A planned shared spool number is not assigned one copy color');
+      assert.notEqual(await po.locator('[data-os-planned-number="' + NUMBER + '"]').evaluate(node => getComputedStyle(node).color), RED,
+        'The shared planned number does not inherit the transferred copy\'s red color');
+      await neutralStations(po.locator('.os-copy-status'), description + ' per-copy station labels', copies.length);
+      await neutralStations(po.locator('.fst-legend'), description + ' color key', 7);
+      await noOverflow();
+    };
+    await verifyPO('Desktop Purchase Order');
+    await po.locator('[data-os-physical-spool="' + copies[0].id + '"]').scrollIntoViewIfNeeded();
+    await page.screenshot({path: path.join(OUT, 'purchase-order-copies-desktop.png'), fullPage: false});
+    await page.setViewportSize({width: 390, height: 844});
+    await verifyPO('390px Purchase Order');
+    assert.ok(await po.locator('[data-os-physical-spool]').evaluateAll(nodes => nodes.every(node => {
+      const rect = node.getBoundingClientRect();
+      return rect.left >= -1 && rect.right <= innerWidth + 1 && node.scrollWidth <= node.clientWidth + 1;
+    })), 'Mobile P.O. copy labels fit without horizontal clipping');
+    await po.locator('[data-os-physical-spool="' + copies[0].id + '"]').scrollIntoViewIfNeeded();
+    await page.screenshot({path: path.join(OUT, 'purchase-order-copies-mobile.png'), fullPage: false});
+    checks.push('Saved Purchase Order shows all 12 individual aliases without copy toggles on desktop and 390px, with correct per-copy number colors, neutral station labels, explicit color names and a plain shared planned number');
+    await po.locator('button[data-os-action="physical-spool"][data-os-id="' + first.id + '"]').click();
+    await page.locator('#itemPage:not(.hidden)').waitFor();
+    assert.equal(await page.evaluate(() => current.id), first.id, 'Purchase Order opens the exact selected physical copy');
+    await color(page.locator('#itemPage'), first.id, RED, 'P.O. to selected red physical copy', 'preparation');
+    checks.push('The visible P.O. copy button opens the exact physical record with its current red number color');
+
     assert.deepEqual(errors, [], 'No browser page errors');
-    assert.deepEqual(writes, [], 'Filtering and opening process groups must not write production or QA data');
+    assert.deepEqual(writes, expectedBrowserWrites,
+      'Only the existing QR scan audit and two explicitly recorded synthetic QR transfers may write during browser navigation');
     const report = {status: 'passed', mode: 'grouping-only', checks, project_id: project,
-      spools: expected, page_errors: errors, view_writes: writes, artifacts: OUT};
+      spools: expected, page_errors: errors, recorded_transfers: expectedTransfers,
+      qr_scan_audits: [expectedScanAudit], unexpected_writes: [], artifacts: OUT};
     fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     await browser.close();
     return;
   }
+
+  // The broader color check retains its welding/QA pair, with actual recorded
+  // station transfers; starting a numbered traveler alone no longer colors it.
+  await acceptArrival(first);
+  await api('post', '/api/flow/items/' + first.id + '/start', {route: 'spool', expected_children: 0,
+    material_reference: 'LOCAL-KITTED-MATERIALS', start_step: 13,
+    baseline_reference: 'LOCAL-CONTROLLED-BASELINE',
+    baseline_reason: 'Synthetic existing spool at process welding, prior history remains unrecorded'});
+  for (const [copy, location, status] of [[first, 'welding', 'in_progress'], [second, 'qa_001', 'awaiting_inspection']]) {
+    const current = await api('get', '/api/items/' + copy.id);
+    await api('post', '/api/items/' + copy.id + '/transfer', {sender_badge: current.handler,
+      handler: current.handler, location_id: location, operational_status: status,
+      expected_transfer_version: current.transfer.version, expected_handler: current.handler,
+      scan_method: 'employee_qr', notes: 'Synthetic recorded physical station handoff'});
+  }
+  assert.equal((await api('get', '/api/flow/items/' + first.id)).flow_stage.key, 'welding');
+  assert.equal((await api('get', '/api/flow/items/' + second.id)).flow_stage.key, 'qa_001');
+  seedComplete = true;
 
   stage = 'core inventory and exact physical spool navigation';
   await page.goto(BASE + '/?items=1');
@@ -262,13 +428,13 @@ let browser, page, stage = 'launch', seedComplete = false;
   ]) {
     await panel(host, query);
     if (host === 'orderSetupContent') {
-      for (const toggle of await page.locator('#orderSetupContent details.os-copy-flow:not([open]) > summary').all())
-        await toggle.click();
+      assert.equal(await page.locator('#orderSetupContent details.os-copy-flow').count(), 0,
+        'Physical copies must be visible without a copy dropdown');
     }
     await color(page.locator('#' + host), first.id, BLUE, query + ' first copy');
     await color(page.locator('#' + host), second.id, BLACK, query + ' second copy');
     if (host === 'orderSetupContent') {
-      const common = page.locator('#orderSetupContent [data-spool-number="' + NUMBER + '"][data-spool-id=""]');
+      const common = page.locator('#orderSetupContent [data-os-planned-number="' + NUMBER + '"]');
       assert.ok(await common.count(), 'Mixed requirement retains its base spool number');
       assert.ok((await common.evaluateAll(elements => elements.every(el =>
         !el.matches('.fst-text') && !el.querySelector('.fst-text')))),

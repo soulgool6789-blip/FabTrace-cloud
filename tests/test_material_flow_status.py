@@ -1,13 +1,12 @@
 """Live material colors stay separate from each piece's immutable QA basis."""
-from conftest import BADGES
 from receiving_helpers import accept_arrival, receiving_detail, upload_receiving_bom
 from test_material_piece_qa import edit_piece
 from test_progress import database_state
 from test_spool_receiving import create_spool
+from station_helpers import move
 
 
 def test_material_movement_changes_colors_without_rewriting_piece_approvals(api):
-    from flow import FlowPlan
     from spool_boms import spool_bom_basis
 
     item_id = create_spool(api, 'MATERIAL-COLOR-01')
@@ -18,11 +17,7 @@ def test_material_movement_changes_colors_without_rewriting_piece_approvals(api)
     approved = accept_arrival(api, item_id)['traceability']['materials']
     with api.session_factory() as session:
         basis = spool_bom_basis(session, item_id)
-        # A persisted local traveler position, independent of the material
-        # evidence model. The full real transition path is covered in test_flow.
-        session.add(FlowPlan(item_id=item_id, route='spool', current_step=12,
-            status='active', baseline_step=9, started_by=BADGES['admin']))
-        session.commit()
+    move(api, item_id, 'floor')
 
     before_read = database_state(api)
     floor = receiving_detail(api, item_id)['traceability']['materials']
@@ -32,8 +27,7 @@ def test_material_movement_changes_colors_without_rewriting_piece_approvals(api)
     assert database_state(api) == before_read
     with api.session_factory() as session:
         assert spool_bom_basis(session, item_id) == basis
-        session.get(FlowPlan, item_id).current_step = 13
-        session.commit()
+    move(api, item_id, 'welding')
 
     welding = receiving_detail(api, item_id)['traceability']['materials']
     assert all(row['flow_stage']['color'] == 'blue' for row in welding)

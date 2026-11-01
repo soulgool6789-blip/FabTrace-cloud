@@ -194,6 +194,7 @@ def test_flow_requires_auth_and_does_not_invent_existing_history(api):
 
 
 def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confirm_delivery(api):
+    from station_helpers import move
     component = create_item(api, "FLOW-COMPONENT")
     spool_id = create_item(api, "FLOW-SPOOL", kind="Spool", planned=1)
     assembly = create_item(api, "FLOW-ASSEMBLY", kind="Assembly")
@@ -203,15 +204,17 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
     enroll(api, assembly, "assembly", expected_children=1)
     expected_stages = {
         1: ('inventory', 'black'), 2: ('qa_001', 'black'),
-        3: ('qa_001', 'black'), 4: ('qa_001', 'black'),
+        3: ('qa_001', 'black'), 4: ('inventory', 'black'),
         **{n: ('preparation', 'red') for n in range(5, 11)},
-        11: ('qa_002', 'red'), 12: ('floor', 'yellow'),
-        13: ('welding', 'blue'), 14: ('welding', 'blue'),
+        11: ('qa_002', 'red'), 12: ('qa_002', 'red'),
+        13: ('floor', 'yellow'), 14: ('welding', 'blue'),
         15: ('qa_003', 'blue'), 16: ('qa_003', 'blue'),
         **{n: ('testing', 'orange') for n in (17, 18, 19)},
-        20: ('paint', 'pink'), 21: ('paint', 'pink'), 22: ('qa_004', 'pink'),
-        23: ('ready_to_ship', 'green'), 24: ('ready_to_ship', 'green'),
+        20: ('testing', 'orange'), 21: ('paint', 'pink'), 22: ('qa_004', 'pink'),
+        23: ('qa_004', 'pink'), 24: ('ready_to_ship', 'green'),
     }
+    handoffs = {6: 'fabrication_prep', 8: 'production_staging', 9: 'fit_up',
+                12: 'floor', 13: 'welding', 16: 'floor', 20: 'blast_paint', 23: 'ready_to_ship'}
 
     def assert_stage(item_id, step, source=None):
         value = detail(api, item_id)['flow_stage']
@@ -220,16 +223,21 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
         assert value['inherited'] is bool(source)
 
     for step in range(1, 9):
+        if step in (2, 5):
+            move(api, component, 'qa_001' if step == 2 else 'fabrication_prep')
         assert_current(detail(api, component), step)
         assert_stage(component, step)
         if step == 5:
             assign_component(api, component, spool_id)
-        advance(api, component, role="inspector" if step == 2 else "admin", **({"target_spool_id": spool_id} if step == 5 else {}))
+        advance(api, component, role="inspector" if step == 2 else "admin", **({"target_spool_id": spool_id} if step == 5 else {}),
+                **({'location_id': handoffs[step]} if step in handoffs else {}))
     component_done = detail(api, component)
     assert component_done["flow"]["current"] is None
     assert all(row["status"] == "completed" for row in component_done["flow"]["steps"])
 
     for step in range(9, 17):
+        if step in (9, 11, 15):
+            move(api, spool_id, {9: 'fabrication_prep', 11: 'qa_002', 15: 'qa_003'}[step])
         assert_current(detail(api, spool_id), step)
         assert_stage(spool_id, step)
         assert_stage(component, step, spool_id)
@@ -242,25 +250,30 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
         if step == 15:
             accept_weld(api, spool_id, weld["id"])
             inspect_dimensions(api, spool_id)
-        advance(api, spool_id, role="inspector" if step in (11, 15) else "admin")
+        advance(api, spool_id, role="inspector" if step in (11, 15) else "admin",
+                **({'location_id': handoffs[step]} if step in handoffs else {}))
     spool_done = detail(api, spool_id)
     assert spool_done["flow"]["current"] is None
     assert spool_done["item"]["released"] is True
     assert spool_done["item"]["id"] == spool_id
     assert len(spool_done["components"]) == 1
     assert spool_done["components"][0]["item_id"] == component
-    assert spool_done['flow_stage']['key'] == 'qa_003'
-    assert spool_done['flow_stage']['color'] == 'blue'
+    assert spool_done['flow_stage']['key'] == 'floor'
+    assert spool_done['flow_stage']['color'] == 'yellow'
 
     link_spool(api, assembly, spool_id)
+    move(api, assembly, 'testing')
     for step in range(17, 25):
+        if step == 22:
+            move(api, assembly, 'qa_004')
         assert_current(detail(api, assembly), step)
         assert_stage(assembly, step)
         assert_stage(spool_id, step, assembly)
         assert_stage(component, step, assembly)
         if step in (19, 22):
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if step in (19, 22) else "admin")
+        advance(api, assembly, role="inspector" if step in (19, 22) else "admin",
+                **({'location_id': handoffs[step]} if step in handoffs else {}))
     shipped = detail(api, assembly)
     assert shipped["flow"]["status"] == "shipped"
     assert shipped["flow"].get("delivered_at") is None
@@ -706,7 +719,8 @@ def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shi
     for step in range(17, 24):
         if step in (19, 22):
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if step in (19, 22) else "admin")
+        advance(api, assembly, role="inspector" if step in (19, 22) else "admin",
+                **({'location_id': 'ready_to_ship'} if step == 23 else {}))
     before = detail(api, assembly)
     assert_current(before, 24)
     assert before["item"]["released"] is True
@@ -724,9 +738,11 @@ def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shi
         assert_current(after, 24)
         assert after["flow"]["shipped_at"] is None
         assert after["events"] == before["events"]
-        assert after['flow_stage']['key'] == 'qa_004' and after['flow_stage']['blocked']
-        assert detail(api, spool_id)['flow_stage']['color'] != 'green'
-        assert detail(api, component)['flow_stage']['color'] != 'green'
+        assert after['flow_stage']['key'] == 'ready_to_ship' and after['flow_stage']['blocked']
+        assert detail(api, spool_id)['flow_stage']['color'] == 'green'
+        assert detail(api, spool_id)['flow_stage']['blocked']
+        assert detail(api, component)['flow_stage']['color'] == 'green'
+        assert detail(api, component)['flow_stage']['blocked']
 
 
 def test_scope_correction_is_versioned_audited_and_cannot_remove_linked_children_or_restart_time(api):

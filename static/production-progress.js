@@ -4,7 +4,7 @@
   const ROOT='/api/progress/orders',node=id=>document.getElementById(id),text=v=>String(v??''),arr=v=>Array.isArray(v)?v:[],enc=encodeURIComponent;
   const state={active:false,sequence:0,loading:false,project:'',choices:[],data:null,error:'',status:'all',kind:'all',query:'',expanded:new Set(),autoOpen:true};
   const flowStatus=()=>window.FabFlowStatus;
-  const stageText=(value,label,tag='span')=>flowStatus()?.text(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;
+  const stageText=(value,label,tag='span')=>flowStatus()?.stationText(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;
   const stageBadge=value=>flowStatus()?.badge(value)||'';
   const spoolNumber=value=>flowStatus()?.spoolNumber?.(value)||value.qr_alias||value.spool_number||value.part_number||value.id;
   const spoolText=(value,label=spoolNumber(value),tag='span')=>flowStatus()?.spoolText?.(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;

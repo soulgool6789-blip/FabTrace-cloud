@@ -7,16 +7,26 @@
 .fst-text.fst-color-pink{--fst-foreground:#be185d;color:var(--fst-foreground);background:#fff}
 .fst-text.fst-color-green{--fst-foreground:#15803d;color:var(--fst-foreground);background:#fff}
 .fst-text{font-weight:700;overflow-wrap:anywhere}
+/* A spool's status color belongs to its number, even inside styled tables. */
+.fst-text[data-spool-id][data-flow-stage]{color:var(--fst-foreground)!important}
+.fst-station[data-station-stage]{color:#334155!important}
 /* Dialog heading selectors also use these semantic spool-number colors. */
 #spoolBomDialog #spoolBomSubtitle.fst-text,
 #spoolDocumentsDialog .fst-text[data-flow-stage]{color:var(--fst-foreground)}
 #spoolDocumentsDialog .dpqa-physical .fst-text{display:inline;font-size:inherit;margin:0}
-.fst-stage{display:inline-block;border:1px solid currentColor;border-radius:5px;padding:3px 7px;font-size:11px;line-height:1.45;vertical-align:middle}
-.fst-stage.fst-color-yellow{padding:3px 7px;border-color:#253248}
+.fst-stage{display:inline-block;border:1px solid #cbd5e1;border-radius:5px;background:#f8fafc;padding:3px 7px;font-size:11px;line-height:1.45;vertical-align:middle}
 .fst-legend{border:1px solid #dbe5ee;background:#fff;border-radius:10px;padding:13px 15px;margin:15px 0;font-size:12px;color:#364b60}
 .fst-legend>strong{font-size:12px}
 .fst-legend ul{display:flex;flex-wrap:wrap;gap:9px 18px;list-style:none;padding:0;margin:11px 0}
 .fst-legend li{display:flex;align-items:center;gap:7px;min-height:25px}
+.fst-swatch{display:inline-block;width:13px;height:13px;flex:0 0 13px;border:1px solid #6b7280;border-radius:3px}
+.fst-swatch.fst-color-black{background:#000}
+.fst-swatch.fst-color-red{background:#b91c1c}
+.fst-swatch.fst-color-yellow{background:#fde047}
+.fst-swatch.fst-color-blue{background:#1d4ed8}
+.fst-swatch.fst-color-orange{background:#b94b00}
+.fst-swatch.fst-color-pink{background:#be185d}
+.fst-swatch.fst-color-green{background:#15803d}
 .fst-legend small{font-size:10px;color:#5c6d7e}
 .fst-legend p{font-size:11px!important;color:#607183;line-height:1.5;margin:7px 0 0!important}
 .fst-flow{background:#fff;border:1px solid #cddbe7;border-radius:12px;padding:16px;margin:15px 0 18px;color:#294158}

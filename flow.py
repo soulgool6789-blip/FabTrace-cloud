@@ -19,7 +19,7 @@ from permissions import flow_step_roles
 from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
     _production_complete, _requirement_satisfied, _reset_requirements,
     tracking_release_errors)
-from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES, position_stage, inherit_stage
+from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
@@ -552,65 +552,49 @@ def _step_states(s, plan):
     return list(states.values())
 
 
-def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None):
-    """Read-only status for boards, parts and material registers.
-
-This helper deliberately does not call parts/project projections: those views
-also use it. Completed children can follow only a valid, active parent chain.
-"""
+def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, stations=None, stage_cache=None):
+    """Recorded station and separate quality blockers for live UI responses."""
     from administration import release_summary
-    from order_spools import effective_parent_id
-    from removals import item_is_removed
+    from flow_stations import station_positions
     from spool_receiving import receiving_summary
 
+    if stage_cache is not None and item.id in stage_cache:
+        return stage_cache[item.id]
     seen = set(seen or ())
     plan = plan if plan is not None else s.get(FlowPlan, item.id)
     route = plan.route if plan else ('assembly' if item.kind == 'Assembly' else
             'spool' if item.kind == 'Spool' or s.get(SpoolPlan, item.id) else 'component')
+    if stations is None or item.id not in stations:
+        stations = station_positions(s, [item])
+    own = dict(stations[item.id])
     arrival = receiving if receiving is not None else receiving_summary(s, item)
     override = release_summary(s, item)['active_override']
     blocked = bool(_physical_hold_errors(s, item)
                    or _exceptions(s, item.id, True) or override
                    or arrival.get('required') and not arrival.get('can_proceed'))
-    if plan and plan.current_step in (23, 24) and not item.released:
+    if (own['key'] == 'ready_to_ship' or plan and plan.current_step in (23, 24)) and not item.released:
         blocked = True
-    if plan and route == 'assembly' and (plan.current_step in (23, 24)
+    if plan and route == 'assembly' and (own['key'] == 'ready_to_ship' or plan.current_step in (23, 24)
                                         or plan.status in ('shipped', 'delivered')):
         # A late defect on a prepared part does not necessarily rewrite the
         # ancestor's release flag. Use the real descendant gates before showing
-        # green, including on completed children that inherit this status.
+        # release readiness, including on completed children at this station.
         blocked = blocked or bool(_assembly_errors(s, item, plan) or tracking_release_errors(s, item))
         if not blocked and plan.status == 'active':
             blocked = bool(_step_errors(s, item, plan, quality_for_update=False))
-    own = position_stage(item.id, route, plan.current_step if plan else None,
-                         plan.status if plan else 'not_started', arrival, blocked=blocked)
-    if item.id in seen or blocked or not plan or plan.status != 'completed':
-        return own
-    seen.add(item.id)
-    if route == 'component':
-        completed = {step['number'] for step in _step_states(s, plan) if step['status'] == 'completed'}
-        if not {7, 8}.issubset(completed):
-            return own
-        link = s.get(ComponentLink, item.id)
-        parent_id = link.spool_id if link else None
-        expected_route = 'spool'
-    elif route == 'spool' and item.released:
-        parent_id = effective_parent_id(s, item.id)
-        expected_route = 'assembly'
-    else:
-        return own
-    parent = s.get(Item, parent_id) if parent_id and parent_id not in seen else None
-    parent_plan = s.get(FlowPlan, parent.id) if parent else None
-    if (not parent or not parent_plan or parent_plan.route != expected_route
-            or parent_plan.status not in ('active', 'completed', 'shipped', 'delivered')
-            or item_is_removed(s, parent.id) or _project(s, parent)[0] != _project(s, item)[0]):
-        return own
-    if route == 'component' and item.project != _project(s, parent)[0]:
-        return own
-    return inherit_stage(own, flow_stage_for_item(s, parent, plan=parent_plan, seen=seen), eligible=True)
+    source_id = own['source_item_id']
+    if not blocked and source_id != item.id and source_id not in seen:
+        source = s.get(Item, source_id)
+        if source:
+            blocked = flow_stage_for_item(s, source, seen=seen | {item.id},
+                stations=stations, stage_cache=stage_cache)['blocked']
+    own['blocked'] = bool(blocked)
+    if stage_cache is not None:
+        stage_cache[item.id] = own
+    return own
 
 
-def _summary(s, item, plan=None):
+def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cache=None):
     from production import compact_process_summary, process_snapshot
     from spool_presentation import item_presentation
     plan = plan if plan is not None else s.get(FlowPlan, item.id)
@@ -619,7 +603,8 @@ def _summary(s, item, plan=None):
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
         'current_title': STEP_BY_NUMBER[plan.current_step]['title'] if plan and plan.current_step else '',
-        **item_presentation(s, item, plan=plan),
+        **(presentation if presentation is not None else item_presentation(
+            s, item, plan=plan, stations=stations, stage_cache=stage_cache)),
         'step_entered_at': _utc(plan.step_entered_at).isoformat() if plan and plan.step_entered_at else None,
         'version': plan.version if plan else 0, 'project_id': project_id, 'subproject_id': subproject_id,
         'released': bool(item.released), 'open_exceptions': len(_exceptions(s, item.id, True)) if plan else 0,
@@ -672,7 +657,13 @@ def detail(s, item, user):
     if not active:
         actions = []
     arrival = receiving_summary(s, item, user)
-    display = item_presentation(s, item, plan=plan, receiving=arrival)
+    from flow_stations import station_positions
+    family = {item.id: item, **{key: s.get(Item, key) for key in component_ids + spool_ids}}
+    if parent_item:
+        family[parent_item.id] = parent_item
+    stations, stage_cache = station_positions(s, family.values()), {}
+    display = item_presentation(s, item, plan=plan, receiving=arrival,
+                                stations=stations, stage_cache=stage_cache)
     return {
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'receiving': arrival,
@@ -689,10 +680,10 @@ def detail(s, item, user):
             'current': STEP_BY_NUMBER[plan.current_step] if plan.current_step else None,
             'blockers': _step_errors(s, item, plan)} if plan else None,
         'production_process': process,
-        'components': [_summary(s, s.get(Item, key)) for key in component_ids],
-        'spools': [_summary(s, s.get(Item, key)) for key in spool_ids],
+        'components': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in component_ids],
+        'spools': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in spool_ids],
         'parent': {'item_id': parent_item.id, 'description': parent_item.description,
-            **item_presentation(s, parent_item, plan=parent_plan),
+            **item_presentation(s, parent_item, plan=parent_plan, stations=stations, stage_cache=stage_cache),
             'route': parent_plan.route if parent_plan else ('spool' if link else 'assembly')} if parent_item else None,
         'events': [_dict(row, EVENT_KEYS) for row in s.scalars(select(FlowEvent).where(FlowEvent.item_id == item.id).order_by(FlowEvent.sequence))],
         'exceptions': [_dict(row, EXCEPTION_KEYS) for row in _exceptions(s, item.id)],
@@ -708,13 +699,15 @@ def catalog(u: Employee = Depends(auth)):
 @router.get('/items')
 def items(project_id: str = '', subproject_id: str = '', u: Employee = Depends(auth), s: Session = Depends(db)):
     from removals import item_not_removed
-    result = []
+    from spool_presentation import item_presentations
+    selected = []
     for item, plan in s.execute(select(Item, FlowPlan).join(FlowPlan, FlowPlan.item_id == Item.id).where(item_not_removed()).order_by(Item.id)):
         project, subproject = _project(s, item)
         if project_id and project != project_id or subproject_id and subproject != subproject_id:
             continue
-        result.append(_summary(s, item, plan))
-    return {'items': result}
+        selected.append((item, plan))
+    displays = item_presentations(s, [item for item, _ in selected])
+    return {'items': [_summary(s, item, plan, presentation=displays[item.id]) for item, plan in selected]}
 
 
 @router.get('/board')

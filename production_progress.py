@@ -18,7 +18,8 @@ from orders import PurchaseOrder, OrderGpn, OrderAssembly, read_snapshot
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
 from order_setup import requirements_by_gpn
-from flow_stages import STAGES, STAGE_BY_STEP, position_stage, inherit_stage
+from flow_stages import STAGES, STAGE_BY_STEP
+from flow_stations import station_positions
 
 
 router = APIRouter(prefix='/api/progress', tags=['P.O. production progress'])
@@ -30,7 +31,7 @@ DEFINITIONS = {
     'baseline': 'Earlier steps adopted with a historical baseline remain not recorded. Rework and return events reset downstream recorded steps.',
     'holds': 'Hold indicators describe current item holds, tracking holds, open rework or process exceptions. Other readiness warnings are shown separately.',
     'routes': 'A part follows preparation, a spool follows fabrication, and an assembly follows final assembly/finish. Parent work is not credited to a child’s own route.',
-    'flow_colors': 'Text colors show current work position. A completed child can follow its linked parent; its own recorded-step percentage and quality history stay separate. QA checkpoints retain the preceding work-stage color.',
+    'flow_colors': 'Individual spool colors show the last recorded station transfer. New records stay in Inventory until movement is recorded. QA results, work steps and release blockers do not move a spool. Completed linked children follow a later recorded parent movement.',
     'testing': 'Testing includes assembly collection and dimensional inspection, with the existing required test/evidence gates retained before coating.',
 }
 COUNT_KEYS = ('items', 'parts', 'spools', 'assemblies', 'finished', 'wip', 'on_hold',
@@ -154,6 +155,7 @@ def _tree(s, selected_project_id=''):
     identities = {row.item_id: row for row in s.scalars(select(SpoolQrIdentity).where(SpoolQrIdentity.item_id.in_(ids)))}
     plans = {row.item_id: row for row in s.scalars(select(SpoolPlan).where(SpoolPlan.item_id.in_(ids))).all()}
     flows = {row.item_id: row for row in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(ids))).all()}
+    stations, stage_cache = station_positions(s, items.values(), flows=flows, plans=plans), {}
     events = _group(s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids),
         FlowEvent.action.in_(('advance', 'fail', 'reopen', 'admin_return_to_work')))
         .order_by(FlowEvent.item_id, FlowEvent.sequence)).all(), 'item_id')
@@ -189,11 +191,11 @@ def _tree(s, selected_project_id=''):
             'parent_id': row['parent_id'], 'location': item.location, 'handler': item.handler,
             'handler_name': staff.get(item.handler, item.handler),
             'current_step': row['current_step'], 'current_title': row['current_title'],
-            'flow_stage': position_stage(identifier, route, row['current_step'], row['flow_status'],
-                row.get('receiving'), blocked=bool(reasons
+            'flow_stage': {**stations[identifier], 'blocked': bool(reasons
                     or row['administrative_release'] or (row.get('receiving') or {}).get('required')
                     and not (row.get('receiving') or {}).get('can_proceed')
-                    or row['current_step'] in (23, 24) and not row['fabrication_finished'])),
+                    or (row['current_step'] in (23, 24) or stations[identifier]['key'] == 'ready_to_ship')
+                    and not row['fabrication_finished'])},
             'status': row['status'], 'fabrication_finished': row['fabrication_finished'],
             'on_hold': bool(reasons), 'hold_reasons': reasons, 'blockers': row['blockers'],
             'receiving': row.get('receiving'),
@@ -212,13 +214,13 @@ def _tree(s, selected_project_id=''):
                 'total_steps': len(fabrication), 'not_recorded_steps': unrecorded,
                 'shipped': int(row['flow_status'] in ('shipped', 'delivered')),
                 'delivered': int(row['flow_status'] == 'delivered')}}
-        if route == 'assembly' and (row['current_step'] in (23, 24)
+        if route == 'assembly' and (stations[identifier]['key'] == 'ready_to_ship' or row['current_step'] in (23, 24)
                                     or row['flow_status'] in ('shipped', 'delivered')):
             # Check authoritative shipping readiness once per candidate assembly,
             # not once per descendant part. Optional project/packet gates and a
             # late child defect must give the same color in every workspace.
             nodes[identifier]['flow_stage'] = flow_stage_for_item(
-                s, item, plan=flow, receiving=row.get('receiving'))
+                s, item, plan=flow, receiving=row.get('receiving'), stations=stations, stage_cache=stage_cache)
 
     # Keep every physical ID in exactly one tree. Contradictory/cyclic legacy
     # links are displayed as unassigned scope warnings rather than duplicated.
@@ -245,8 +247,8 @@ def _tree(s, selected_project_id=''):
     for identifier, parent_id in parents.items():
         nodes[parent_id]['children'].append(nodes[identifier])
 
-    # Resolve parent colors from the already-loaded tree. No per-node reads and
-    # no credit to child step counts, timestamps or approvals are introduced.
+    # Movement already resolved the station and its actual source. A later
+    # quality restriction remains visible without relocating any child.
     resolved_stages = set()
 
     def resolve_stage(identifier):
@@ -254,16 +256,9 @@ def _tree(s, selected_project_id=''):
         if identifier in resolved_stages:
             return node['flow_stage']
         resolved_stages.add(identifier)
-        parent = nodes.get(parents.get(identifier))
-        expected = 'spool' if node['route'] == 'component' else 'assembly' if node['route'] == 'spool' else None
-        completed = {step['number'] for step in node['steps'] if step['state'] == 'completed'}
-        eligible = bool(parent and parent['route'] == expected
-            and node['flow_status'] == 'completed' and node['fabrication_finished']
-            and not node['administrative_release'] and not node['on_hold']
-            and (node['route'] != 'component' or {7, 8}.issubset(completed))
-            and parent['flow_status'] in ('active', 'completed', 'shipped', 'delivered'))
-        if eligible:
-            node['flow_stage'] = inherit_stage(node['flow_stage'], resolve_stage(parent['id']), eligible=True)
+        source_id = node['flow_stage']['source_item_id']
+        if source_id != identifier and source_id in nodes:
+            node['flow_stage']['blocked'] = bool(node['flow_stage']['blocked'] or resolve_stage(source_id)['blocked'])
         return node['flow_stage']
 
     for identifier in nodes:

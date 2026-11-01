@@ -9,6 +9,7 @@ from test_progress import database_state
 from test_removal_orders import change
 from test_spool_status_presentation import NUMBER, seed
 from tracking_helpers import ok
+from station_helpers import move
 
 
 def board(api, project='', **kwargs):
@@ -28,13 +29,14 @@ def test_board_keeps_inventory_and_legacy_spools_once_with_exact_identity_and_no
     initial = board(api, project)
     assert [row['item_id'] for row in initial['items']] == [first['id'], second['id']]
     assert all(row['status'] == 'not_started' and row['current_step'] is None for row in initial['items'])
-    assert initial['stage_counts']['qa_001'] == 2
+    assert initial['stage_counts']['inventory'] == 2
     assert ok(api.get('/api/flow/items', params={'project_id': project}))['items'] == []
 
     # Receipt acceptance leaves this actual copy in Inventory without a route;
-    # the other copy has a real, independently recorded welding baseline.
+    # the other copy has a real, independently recorded welding transfer.
     accept_arrival(api, first['id'])
     enroll(api, second['id'], 'spool', start_step=13)
+    move(api, second['id'], 'welding')
     create(api, 'BOARD-NO-PLAN', project, number='BOARD-SP-10')
     create(api, 'BOARD-LEGACY', project, kind='Part', number='BOARD-SP-2')
     ok(api.post('/api/tracking/spools/BOARD-LEGACY/plan', {
@@ -60,7 +62,7 @@ def test_board_keeps_inventory_and_legacy_spools_once_with_exact_identity_and_no
     assert len(rows) == result['total'] == 4
     assert set(rows) == {first['id'], second['id'], 'BOARD-NO-PLAN', 'BOARD-LEGACY'}
     assert [row['item_id'] for row in result['items']] == [
-        first['id'], 'BOARD-LEGACY', 'BOARD-NO-PLAN', second['id']]
+        'BOARD-LEGACY', 'BOARD-NO-PLAN', first['id'], second['id']]
     assert rows[first['id']]['flow_stage']['key'] == 'inventory'
     assert rows[first['id']]['flow_stage']['color'] == 'black'
     assert rows[first['id']]['status'] == 'not_started'
@@ -76,8 +78,8 @@ def test_board_keeps_inventory_and_legacy_spools_once_with_exact_identity_and_no
         assert row['purchase_order'] == saved['order']['purchase_order']
     assert len(result['stage_catalog']) == len(result['stage_counts']) == 11
     assert sum(result['stage_counts'].values()) == result['total']
-    assert result['stage_counts']['inventory'] == 1
-    assert result['stage_counts']['qa_001'] == 2
+    assert result['stage_counts']['inventory'] == 3
+    assert result['stage_counts']['qa_001'] == 0
     assert result['stage_counts']['welding'] == 1
     assert empty['items'] == [] and not any(empty['stage_counts'].values())
     assert database_state(api) == before

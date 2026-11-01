@@ -220,19 +220,20 @@ def test_assembly_finish_stops_at_22_shipping_and_delivery_are_separate(api):
     row = flatten(before)[assembly]
     assert row['fabrication_finished'] and row['progress']['percent'] == 100, row['blockers']
     assert row['progress']['total'] == 6 and row['progress']['completed'] == 6
-    assert row['flow_stage']['key'] == 'ready_to_ship'
-    assert row['flow_stage']['color'] == 'green'
+    assert row['flow_stage']['key'] == 'floor'
+    assert row['flow_stage']['color'] == 'yellow'
     children = row['children']
-    assert children and all(child['flow_stage']['key'] == 'ready_to_ship' for child in children)
+    assert children and all(child['flow_stage']['key'] == 'floor' for child in children)
     assert all(child['flow_stage']['source_item_id'] == assembly and child['flow_stage']['inherited'] for child in children)
     assert all(child['progress']['total'] == 8 for child in children)
     assert len(row['steps']) == 8
     shipping = next(stage for stage in row['stages'] if stage['key'] == 'ready_to_ship')
     assert shipping['current'] == 1 and shipping['completed'] == 0
     assert before['summary']['total_steps'] == 14
-    advance(api, assembly)
+    advance(api, assembly, location_id='ready_to_ship')
     advance(api, assembly)
     shipped = report(api, PROJECT)
+    assert flatten(shipped)[assembly]['flow_stage']['key'] == 'ready_to_ship'
     assert shipped['summary']['completed_steps'] == before['summary']['completed_steps']
     assert shipped['summary']['recorded_percent'] == before['summary']['recorded_percent']
     assert shipped['summary']['shipped'] == 1 and shipped['summary']['delivered'] == 0
@@ -260,7 +261,7 @@ def test_quality_failure_resets_downstream_steps_and_marks_actual_exception(api)
     row = node(api, assembly)
     assert row['progress']['completed'] == 1 and row['progress']['percent'] == 16.7
     assert row['current_step'] == 18 and row['steps'][1]['state'] == 'current'
-    assert row['flow_stage']['key'] == 'testing' and row['flow_stage']['color'] == 'orange'
+    assert row['flow_stage']['key'] == 'floor' and row['flow_stage']['color'] == 'yellow'
     assert row['flow_stage']['blocked']
     assert all(child['flow_stage']['color'] != 'green' for child in row['children'])
     assert all(step['state'] == 'pending' for step in row['steps'][2:])
@@ -268,13 +269,13 @@ def test_quality_failure_resets_downstream_steps_and_marks_actual_exception(api)
     assert report(api)['summary']['on_hold'] >= 1
 
 
-def test_shipping_document_gate_prevents_green_in_both_flow_and_progress(api, monkeypatch):
+def test_shipping_document_gate_reports_blocker_without_relocating_the_recorded_station(api, monkeypatch):
     from test_quality import workspace, create_requirement
     ok(api.post('/api/tracking/projects', {'id': PROJECT, 'name': 'Local shipping color fixture'}), 201)
     enroll_project_as_order(api)
     assembly = assembly_at_step(api, 23)
     before = node(api, assembly)
-    assert before['flow_stage']['color'] == 'green'
+    assert before['flow_stage']['key'] == 'floor'
     quality = workspace(api, project_id=PROJECT)['workspace']['id']
     create_requirement(api, quality, gate='shipment')
     module = importlib.import_module('production_progress')
@@ -287,7 +288,7 @@ def test_shipping_document_gate_prevents_green_in_both_flow_and_progress(api, mo
     monkeypatch.setattr(module, 'flow_stage_for_item', counted)
     current = node(api, assembly)
     assert checked == [assembly], 'Only the candidate shipping assembly needs extra gate reads'
-    assert current['flow_stage']['key'] == 'qa_004' and current['flow_stage']['blocked']
+    assert current['flow_stage']['key'] == 'floor' and current['flow_stage']['blocked']
     assert flow_detail(api, assembly)['flow_stage'] == current['flow_stage']
     assert all(child['flow_stage']['color'] != 'green' for child in current['children'])
     assert current['progress'] == before['progress']
