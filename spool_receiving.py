@@ -464,12 +464,17 @@ def _physical_summary(s, item, user=None, history=False):
         latest = _latest(s, item.id)
         return {'required': True, 'spool_id': item.id, 'version': latest.version if latest else 0,
             'status': 'removed', 'can_proceed': False, 'basis_sha256': '',
-            'blockers': [str(error.detail)], 'latest': _inspection_view(latest),
+            'blockers': [str(error.detail)], 'pass_blockers': [str(error.detail)],
+            'latest': _inspection_view(latest),
             'history': ([_inspection_view(row) for row in s.scalars(select(SpoolArrivalInspection)
                 .where(SpoolArrivalInspection.spool_id == item.id)
                 .order_by(SpoolArrivalInspection.version.desc()).limit(50))] if history else []),
             'permissions': {'can_inspect': False}, 'checks_catalog': CHECKS}
-    evidence, blockers = _basis(s, item)
+    evidence, prerequisites = _basis(s, item)
+    # Readiness for a new Pass is independent of the previous decision. Keep
+    # both response lists separate from each other and the cached basis.
+    pass_blockers = list(prerequisites)
+    blockers = list(pass_blockers)
     digest = _digest(evidence)
     latest = _latest(s, item.id)
     current = bool(latest and latest.result == 'Pass' and latest.basis_sha256 == digest and not blockers)
@@ -485,7 +490,8 @@ def _physical_summary(s, item, user=None, history=False):
         blockers.insert(0, message)
     result = {'required': True, 'spool_id': item.id, 'version': latest.version if latest else 0,
         'status': status, 'can_proceed': current, 'basis_sha256': digest,
-        'blockers': list(dict.fromkeys(blockers)), 'latest': _inspection_view(latest),
+        'blockers': list(dict.fromkeys(blockers)), 'pass_blockers': pass_blockers,
+        'latest': _inspection_view(latest),
         'history': [], 'permissions': {'can_inspect': has_capability(user, 'quality_review') and not _locked_reason(s, item)},
         'checks_catalog': CHECKS}
     if history:
@@ -807,3 +813,4 @@ def mtr_file(document_id: str, download: bool = False, user: Employee = Depends(
         'Content-Disposition': ('attachment' if download else 'inline') + f'; filename="{fallback}"; filename*=UTF-8\'\'{quote(row.filename)}',
         'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "frame-ancestors 'self'"})
+

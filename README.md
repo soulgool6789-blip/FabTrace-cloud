@@ -1,12 +1,20 @@
 # FabTrace Cloud
 
+## Selectable arrival Pass for every physical spool
+
+Release `2026.11.02-arrival-pass-choice.1` makes **Pass** selectable in the arrival inspection form for every physical spool that the signed-in QA/QC employee or administrator is permitted to inspect. Incomplete material evidence no longer disables the choice. The form lists what must be completed before saving a Pass and links back to the relevant material records.
+
+Arrival summaries expose `pass_blockers` separately from the status of the previous inspection. A pending first inspection, a previous Fail, or an outdated arrival decision does not itself block a new decision. Known missing material prerequisites are checked before submission so they do not incorrectly turn the draft into a stale-record error. Choosing Pass alone never writes an inspection or releases a spool.
+
+Saving a passing arrival inspection still requires the current structured BOM, saved heat numbers and MTR references, a current QA-001 Pass for every piece, and all five arrival checks. Inspection reference and notes remain optional for Pass; Fail still requires its reference and reason. Concurrent changes, role permissions, released-record locks, and retained audit history continue to be enforced by the server. This change applies through the shared spool interface and requires no database migration or bulk approval.
+
 ## Shared material BOM behind an attached PDF
 
 Release `2026.11.02-bom-material-source.1` keeps an individual spool's view-only PDF available while using the latest structured BOM from that spool's exact setup requirement to create its physical material records. A structured individual-spool BOM still takes priority. Older document revisions, unrelated spool numbers and the built-in catalog are not substituted for an uploaded document.
 
 Existing saved material registers stay pinned to their original source and retain the explicit review/adoption process for a changed BOM. The PDF and the distinct structured material BOM both remain in quality evidence and Job Packets. A new revision of either evidence file requires current inspection review.
 
-The existing deployment initializer creates missing blank piece records once, with an initialization history entry. It does not enter heat numbers, MTR references or QA decisions. Arrival Pass still requires complete current material records, each piece's QA-001 Pass and the arrival checklist. The materials screen names the shared BOM and keeps a separate link to the attached document; blocked Pass choices link back to the outstanding material records.
+The existing deployment initializer creates missing blank piece records once, with an initialization history entry. It does not enter heat numbers, MTR references or QA decisions. Arrival Pass still requires complete current material records, each piece's QA-001 Pass and the arrival checklist. The materials screen names the shared BOM and keeps a separate link to the attached document; outstanding material requirements link back to the material records.
 
 ## Revised 24-step fabrication flow
 
