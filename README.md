@@ -1,5 +1,9 @@
 # FabTrace Cloud
 
+## Employee names on printed badges
+
+Release `2026.11.02-employee-badge-name.1` prints the employee’s current name prominently above their badge ID. Open **Employees → Print employee QR badge**. Printing reads the current active employee record before preparing the badge. The employee badge QR keeps its existing identity link; item/spool labels continue to omit employee-assignment captions.
+
 ## QR labels without assignment captions
 
 Release `2026.11.02-label-no-assignment.1` removes the complete Assigned to line, employee name, and badge from all item QR label cards, print sheets, and SVG downloads. Normal employee assignments and custody history remain in FabTrace.
