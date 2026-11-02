@@ -113,10 +113,9 @@ def test_shared_bom_piece_keys_do_not_authorize_a_different_physical_copy(api):
     assert database_state(api) == before
 
 
-@pytest.mark.parametrize('field', ['heat_number', 'mtr_reference'])
-def test_one_missing_evidence_field_blocks_entire_batch_with_named_piece(api, field):
+def test_one_missing_mtr_blocks_entire_batch_with_named_piece(api):
     prepared(api)
-    detail = edit_piece(api, 'BULK-QA-01', 1, **{field: ''})
+    detail = edit_piece(api, 'BULK-QA-01', 1, mtr_reference='')
     blocked = detail['traceability']['materials'][1]
     assert blocked['qa001']['pass_blockers']
     before = database_state(api)
@@ -125,7 +124,7 @@ def test_one_missing_evidence_field_blocks_entire_batch_with_named_piece(api, fi
     errors = response.json()['detail']['piece_blockers']
     assert len(errors) == 1 and errors[0]['piece_key'] == blocked['piece_key']
     assert errors[0]['piece_identifier'] == blocked['piece_identifier']
-    assert ('heat number' if field == 'heat_number' else 'MTR reference') in ' '.join(errors[0]['blockers'])
+    assert 'MTR reference' in ' '.join(errors[0]['blockers'])
     assert database_state(api) == before
 
 

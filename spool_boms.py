@@ -37,6 +37,8 @@ _CATALOG = json.loads(_CATALOG_BYTES)
 _CATALOG_HASH = hashlib.sha256(_CATALOG_BYTES).hexdigest()
 _DEFINITIONS = {_key(row['spool_number']): row for row in _CATALOG['spools']}
 MATERIAL_FIELDS = ('supplier', 'supplier_piece_id', 'heat_number', 'mtr_reference', 'mtr_url', 'notes')
+HEAT_REQUIRED_FROM_STEP = 15
+HEAT_REQUIRED_AT_LABEL = 'QA/QC-003 - Inspect Welds'
 
 
 class SpoolBomTrace(Base):
@@ -421,6 +423,32 @@ def spool_bom_scope_basis(s, item_id, seen=None):
     return sorted({basis['spool_id']: basis for basis in bases}.values(), key=lambda basis: basis['spool_id'])
 
 
+@read_cached(lambda s, item, include_children=True: (item.id, include_children))
+def spool_heat_errors(s, item, include_children=True):
+    """Post-fabrication heat completeness for exactly the active physical scope."""
+    from spool_receiving import _scope_items
+    try:
+        require_active_item(s, item.id)
+    except HTTPException as error:
+        if error.status_code != 409:
+            raise
+        # Historical readers retain the record and its block without resolving
+        # an active BOM or making removed material eligible for release.
+        return [f'{item.id}: {error.detail}']
+    errors = []
+    for spool in _scope_items(s, item, include_children):
+        state = physical_bom_state(s, spool.id)
+        if not state['trace'] or not state['materials']:
+            errors.append(f'{spool.id}: Save the physical material-piece register and heat numbers before {HEAT_REQUIRED_AT_LABEL}.')
+            continue
+        if state['source_status']['changed']:
+            errors.append(f'{spool.id}: Adopt the current BOM before verifying post-fabrication heat numbers.')
+        for piece in state['materials']:
+            if not piece['persisted'] or not piece['heat_number'].strip():
+                errors.append(f'{spool.id}: Record the heat number for {piece["piece_identifier"]} before {HEAT_REQUIRED_AT_LABEL}.')
+    return list(dict.fromkeys(errors))
+
+
 def _can_edit(user):
     return has_capability(user, 'allocate_parts') or has_capability(user, 'inspect')
 
@@ -476,6 +504,12 @@ def _spool_detail(s, item_id, user):
         'locked_reason': locked or ('Adopt the current BOM before editing its material register.' if source_status['changed'] else source_status['blocked_reason']),
         'complete': bool(trace and materials and not source_status['changed']
                          and all(row['heat_number'] and row['mtr_reference'] for row in materials)),
+        'receiving_complete': bool(trace and materials and not source_status['changed']
+                                  and all(row['persisted'] and row['mtr_reference'].strip() for row in materials)),
+        'heat_numbers_complete': bool(trace and materials and not source_status['changed']
+                                     and all(row['persisted'] and row['heat_number'].strip() for row in materials)),
+        'heat_required_for_receiving': False, 'heat_required_from_step': HEAT_REQUIRED_FROM_STEP,
+        'heat_required_at_label': HEAT_REQUIRED_AT_LABEL,
         'materials': materials, 'history': [{'version': event.version, 'actor': event.actor,
             'at': _stamp(event.at), 'reason': event.reason,
             'detail_url': f'/api/spool-boms/spools/{quote(item.id, safe="")}/history/{event.version}',

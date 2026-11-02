@@ -46,7 +46,7 @@ def record_arrival(api, item_id, *, result='Pass', role='inspector', notes='Synt
     return api.post('/api/spool-boms/spools/' + item_id + '/arrival-inspections', {
         'expected_version': detail['arrival']['version'], 'basis_sha256': detail['arrival']['basis_sha256'],
         'result': result, 'reference': 'LOCAL-RECEIPT-01', 'notes': notes,
-        'checks': CHECKS if result == 'Pass' else {key: False for key in CHECKS}}, role=role)
+        'checks': {check['key']: result == 'Pass' for check in detail['arrival']['checks_catalog']}}, role=role)
 
 
 def approve_materials(api, item_id):

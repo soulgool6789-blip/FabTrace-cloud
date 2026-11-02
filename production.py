@@ -38,6 +38,7 @@ PROCESS_CATALOG = (
     {'key': 'dispatch', 'label': 'Ready for dispatch'},
 )
 PROCESS_NAMES = {row['key']: row['label'] for row in PROCESS_CATALOG}
+POST_FABRICATION_PROCESSES = frozenset(('nde', 'pwht', 'coating', 'final_qa', 'dispatch'))
 EVENT_KEYS = 'id item_id sequence event process_key process_name actor at notes'.split()
 
 
@@ -288,6 +289,13 @@ def with_process_permissions(s, item_id, snapshot, user):
     if 'custom' in keys:
         choices.append({'key': 'custom', 'label': 'Custom support process'})
     current, actions = snapshot['current'], []
+    heat_errors = []
+    if item is not None and (flow is None or (flow.current_step or 0) >= 18):
+        from tracking import post_fabrication_heat_errors
+        heat_errors = post_fabrication_heat_errors(s, item)
+        if heat_errors:
+            choices = [choice for choice in choices if choice['key'] not in POST_FABRICATION_PROCESSES]
+    current_heat_blocked = bool(heat_errors and current and current['process_key'] in POST_FABRICATION_PROCESSES)
     if flow is not None:
         choices = []
         clock_key = current['process_key'] if current else f'clm_{flow.current_step:02d}' if flow.current_step else ''
@@ -295,7 +303,7 @@ def with_process_permissions(s, item_id, snapshot, user):
                 (not item.released or flow.current_step in (16, 23, 24))):
             if current is not None and snapshot['status'] == 'running':
                 actions.append('pause')
-            elif not arrival_blockers:
+            elif not arrival_blockers and not heat_errors:
                 actions.append('resume')
     elif item is not None and not item.released:
         if current is None and choices and not arrival_blockers:
@@ -305,10 +313,10 @@ def with_process_permissions(s, item_id, snapshot, user):
                 actions.append('move')
             if snapshot['status'] == 'running':
                 actions.append('pause')
-            elif not arrival_blockers:
+            elif not arrival_blockers and not current_heat_blocked:
                 actions.append('resume')
             actions.append('finish')
-    return {**snapshot, 'receiving_blockers': arrival_blockers,
+    return {**snapshot, 'receiving_blockers': arrival_blockers, 'heat_blockers': heat_errors,
             'permissions': {'allowed_actions': actions, 'allowed_processes': choices if not arrival_blockers else []}}
 
 
@@ -393,6 +401,14 @@ def sync_flow_process(s, item, actor, step, at, notes=''):
                           'Work timer stopped: current arrival QA Pass is required. ' + notes,
                           at, snapshot['version'])
         return
+    if step['number'] >= 18:
+        from tracking import post_fabrication_heat_errors
+        if post_fabrication_heat_errors(s, item):
+            if current is not None:
+                _append_event(s, item, actor, 'finish', current['process_key'], current['process_name'],
+                              'Work timer stopped: post-fabrication heat numbers are required. ' + notes,
+                              at, snapshot['version'])
+            return
     key = f"clm_{step['number']:02d}"
     name = f"{step['number']}. {step['title']}"
     _append_event(s, item, actor, 'move' if current else 'start', key, name,
@@ -469,6 +485,12 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
         key, name = f'clm_{flow.current_step:02d}', f"{flow.current_step}. {STEP_BY_NUMBER[flow.current_step]['title']}"
     else:
         key, name = current['process_key'], current['process_name']
+    if data.action in ('start', 'move', 'resume') and (
+            key in POST_FABRICATION_PROCESSES or flow is not None and (flow.current_step or 0) >= 18):
+        from tracking import post_fabrication_heat_errors
+        heat_errors = post_fabrication_heat_errors(s, item)
+        if heat_errors:
+            raise HTTPException(409, {'heat_blockers': heat_errors})
     try:
         _append_event(s, item, u.badge, 'start' if restart_flow else data.action,
                       key, name, data.notes, at, snapshot['version'])

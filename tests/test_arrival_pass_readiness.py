@@ -20,7 +20,8 @@ def ready_spool(api):
 def pass_payload(detail, **changes):
     arrival = detail['arrival']
     return {'expected_version': arrival['version'], 'basis_sha256': arrival['basis_sha256'],
-        'result': 'Pass', 'reference': '', 'notes': '', 'checks': dict(CHECKS), **changes}
+        'result': 'Pass', 'reference': '', 'notes': '',
+        'checks': {check['key']: True for check in arrival['checks_catalog']}, **changes}
 
 
 def assert_pass_rejected_without_writes(api, item_id, detail):
@@ -87,7 +88,7 @@ def test_stale_arrival_is_ready_after_affected_piece_evidence_is_reinspected(api
     assert [row['result'] for row in reinspection['arrival']['history']] == ['Pass', 'Pass']
 
 
-def test_missing_bom_heat_mtr_and_piece_qa_remain_authoritative_pass_blockers(api):
+def test_missing_bom_mtr_and_piece_qa_remain_authoritative_pass_blockers(api):
     item_id = create_spool(api)
     missing = receiving_detail(api, item_id)
     blockers = missing['arrival']['pass_blockers']
@@ -97,14 +98,14 @@ def test_missing_bom_heat_mtr_and_piece_qa_remain_authoritative_pass_blockers(ap
     assert 'QA/QC arrival inspection has not been recorded.' not in blockers
     assert_pass_rejected_without_writes(api, item_id, missing)
     upload_receiving_bom(api, item_id)
-    for heat, reference in [('', 'MTR-LOCAL-1'), ('HEAT-LOCAL-1', '')]:
-        incomplete = save_receiving_materials(api, item_id, heat=heat, reference=reference)
-        blockers = incomplete['arrival']['pass_blockers']
-        assert any('Heat number and MTR reference are required' in message for message in blockers)
-        assert any('current QA-001 Pass' in message for message in blockers)
-        assert_pass_rejected_without_writes(api, item_id, incomplete)
-    completed = save_receiving_materials(api, item_id)
-    assert completed['traceability']['complete']
+    incomplete = receiving_detail(api, item_id)
+    blockers = incomplete['arrival']['pass_blockers']
+    assert any('MTR reference is required' in message for message in blockers)
+    assert any('current QA-001 Pass' in message for message in blockers)
+    assert_pass_rejected_without_writes(api, item_id, incomplete)
+    completed = save_receiving_materials(api, item_id, heat='')
+    assert completed['traceability']['receiving_complete']
+    assert not completed['traceability']['complete']
     assert len(completed['arrival']['pass_blockers']) == 1
     assert 'current QA-001 Pass' in completed['arrival']['pass_blockers'][0]
     assert_pass_rejected_without_writes(api, item_id, completed)

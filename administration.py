@@ -282,10 +282,11 @@ def _check_version(s, item, expected):
 def admin_detail(s, item, user):
     from removals import item_is_removed, removal_summary
     from spool_receiving import receiving_errors
+    from tracking import post_fabrication_heat_errors
     version, blockers, plan, _ = decision_basis(s, item)
     release = release_summary(s, item)
     actions = ['custody_correction']
-    if not item.released and not receiving_errors(s, item):
+    if not item.released and not receiving_errors(s, item) and not post_fabrication_heat_errors(s, item):
         actions.append('release_override')
     elif item.released and (not plan or plan.status not in ('shipped', 'delivered')):
         actions.append('return_to_work')
@@ -358,6 +359,10 @@ def release_override(item_id: str, data: DecisionIn, u: Employee = Depends(auth)
         raise HTTPException(409, 'This item is already released. Review its current release record.')
     from spool_receiving import require_receiving_pass
     require_receiving_pass(s, item)
+    from tracking import post_fabrication_heat_errors
+    heat_errors = post_fabrication_heat_errors(s, item)
+    if heat_errors:
+        raise HTTPException(409, {'release_blockers': heat_errors})
     now = _utc(utcnow())
     details = {'reason': data.reason, 'reference': data.reference, 'bypassed_blockers': blockers,
         'prior_flow': prior_flow, 'prior_release': {'released': item.released,

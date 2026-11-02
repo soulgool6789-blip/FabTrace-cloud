@@ -20,7 +20,7 @@ from main import Base, Employee, Item, Rework, asdict, audit, auth, db, lock_ite
 from permissions import flow_step_roles
 from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
     _production_complete, _requirement_satisfied, _reset_requirements,
-    tracking_release_errors)
+    tracking_release_errors, post_fabrication_heat_errors)
 from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES
 
 
@@ -435,6 +435,8 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     step = plan.current_step
     from spool_receiving import receiving_errors
     errors = receiving_errors(s, item)
+    if step >= 15:
+        errors.extend(post_fabrication_heat_errors(s, item))
     if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21, 23, 24):
         errors.extend(_physical_hold_errors(s, item))
     if plan.route == 'spool':
@@ -594,6 +596,9 @@ def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, statio
     blocked = bool(_physical_hold_errors(s, item)
                    or _exceptions(s, item.id, True) or override
                    or arrival.get('required') and not arrival.get('can_proceed'))
+    if item.released or plan and ((plan.current_step or 0) >= 15
+                                  or plan.route == 'spool' and plan.status == 'completed'):
+        blocked = blocked or bool(post_fabrication_heat_errors(s, item))
     if (own['key'] == 'ready_to_ship' or plan and plan.current_step in (23, 24)) and not item.released:
         blocked = True
     if plan and route == 'assembly' and (own['key'] == 'ready_to_ship' or plan.current_step in (23, 24)
@@ -798,6 +803,10 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
         raise HTTPException(409, 'A post-QA baseline requires an existing final quality release; earlier steps require an unreleased item')
     if post_qa:
         errors = tracking_release_errors(s, item)
+        if errors:
+            raise HTTPException(409, {'flow_blockers': errors})
+    elif data.route == 'assembly' and step > 17:
+        errors = post_fabrication_heat_errors(s, item)
         if errors:
             raise HTTPException(409, {'flow_blockers': errors})
     existing_children = _component_ids(s, item.id) if data.route == 'spool' else _spool_ids(s, item.id) if data.route == 'assembly' else []

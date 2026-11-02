@@ -110,7 +110,7 @@ def test_omitted_optional_details_do_not_bypass_required_materials_or_arrival_ch
     if kind == 'arrival':
         body['checks']['condition'] = False
     else:
-        detail = edit_piece(api, ITEM, 0, heat_number='')
+        detail = edit_piece(api, ITEM, 0, mtr_reference='')
         path, body = request_for(detail, kind)
     before = database_state(api)
     response = api.post(path, body, role='inspector')

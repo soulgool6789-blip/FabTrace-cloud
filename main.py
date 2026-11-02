@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.02-arrival-pass-choice.1'
+APP_VERSION='2026.11.02-heat-after-fabrication.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -479,6 +479,10 @@ def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Dep
     permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
     if is_tracked(s,r) and data.kind=='Weld':
         raise HTTPException(409,'Review each weld requirement in Projects & welds. Aggregate weld inspection cannot accept individual welds.')
+    if data.kind=='Weld' and data.result=='Pass':
+        from tracking import post_fabrication_heat_errors
+        heat_errors=post_fabrication_heat_errors(s,r)
+        if heat_errors:raise HTTPException(409,{'inspection_blockers':heat_errors})
     t=utcnow();s.add(Inspection(item_id=r.id,kind=data.kind,result=data.result,inspector=u.badge,report=data.report,measurements=data.measurements,at=t))
     if data.kind=='Dimensional':r.dimensional=data.result;r.dimension_at=t
     else:r.weld=data.result;r.weld_at=t
@@ -540,7 +544,9 @@ def release_blockers(s,r,flow_step=None,for_update=False):
         if r.last_work_at and (not r.dimension_at or r.dimension_at<=r.last_work_at or not r.weld_at or r.weld_at<=r.last_work_at):reasons.append('Inspections predate latest work')
         if s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):reasons.append('Open rework exists')
     from spool_receiving import receiving_errors
+    from tracking import post_fabrication_heat_errors
     reasons.extend(receiving_errors(s,r))
+    reasons.extend(post_fabrication_heat_errors(s,r))
     reasons.extend(flow_release_errors(s,r,approving_step=flow_step,for_update=for_update))
     return list(dict.fromkeys(reasons))
 

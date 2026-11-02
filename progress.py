@@ -16,7 +16,8 @@ from read_projection import prime_projection, read_response
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import (Project, Subproject, SpoolPlan, Weld, WeldRequirement,
     RequirementEvidence, RequirementReview, WeldWork, TrackingHold,
-    _production_complete, _qa_accepted, _weld_blockers, _requirement_satisfied, _after)
+    _production_complete, _qa_accepted, _weld_blockers, _requirement_satisfied, _after,
+    post_fabrication_heat_errors)
 from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, ROUTE_BY_ID, STEP_BY_NUMBER
 
 router = APIRouter(prefix='/api/progress', tags=['project progress'])
@@ -185,6 +186,7 @@ def project_rows(s, project_id=None):
                         errors.append('Final quality release is not recorded')
                 elif not flow or flow.route != 'component':
                     errors.append('Set up the structured spool plan or component route')
+                errors.extend(post_fabrication_heat_errors(s, item))
                 completed, total, unrecorded = _recorded_steps(flow, flow_events[item.id])
                 kind = 'assembly' if plan and item.kind == 'Assembly' else 'spool' if plan else 'component' if flow and flow.route == 'component' else 'unplanned'
                 raw[item.id] = {'id': item.id, 'description': item.description,

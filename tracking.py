@@ -23,7 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from read_projection import (PROJECTION_MISSING, prime_projection, prime_rows,
-    projection_enabled, projection_get, projection_put, read_get, read_projection)
+    projection_enabled, projection_get, projection_put, read_get, read_projection, read_cached)
 
 from main import (
     Audit, Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item,
@@ -358,7 +358,7 @@ class CloseHoldIn(InputModel):
 
 
 DEFAULT_REQUIREMENTS = [
-    {'code': 'MATERIALS', 'label': 'Both-side material / heat / MTR traceability',
+    {'code': 'MATERIALS', 'label': 'Both-side component / MTR traceability (heat required after fabrication)',
      'stage': 'before_welding', 'check': 'materials'},
     {'code': 'PROCEDURE', 'label': 'WPS and welder qualification applicability verified',
      'stage': 'before_welding', 'check': 'procedure'},
@@ -657,33 +657,91 @@ def _production_complete(s, weld):
     return 'complete' in operations and set(weld.required_operations or []).issubset(operations) and bool(weld.required_operations)
 
 
-def _material_errors(weld):
-    names = [('component_a', 'Component A piece / lot identity'), ('heat_a', 'Component A heat'),
+def _material_errors(weld, *, include_heat=True):
+    names = [('component_a', 'Component A piece / lot identity'),
              ('mtr_a', 'Component A MTR reference'), ('component_b', 'Component B piece / lot identity'),
-             ('heat_b', 'Component B heat'), ('mtr_b', 'Component B MTR reference')]
+             ('mtr_b', 'Component B MTR reference')]
+    if include_heat:
+        names += [('heat_a', 'Component A heat'), ('heat_b', 'Component B heat')]
     return [label + ' missing' for key, label in names if not (getattr(weld, key) or '').strip()]
 
 
-def _check_errors(s, req, weld=None):
-    if req.check_kind == 'none':
+def _weld_heat_errors(weld):
+    return [label + ' is required after fabrication, before post-weld QA/testing/release'
+            for key, label in (('heat_a', 'Component A heat number'), ('heat_b', 'Component B heat number'))
+            if not (getattr(weld, key) or '').strip()]
+
+
+def _physical_heat_errors(s, item):
+    """Reuse physical-piece reads only within the existing one-calculation snapshot."""
+    from spool_boms import spool_heat_errors
+    snapshot = _snapshot(s, item.id)
+    if snapshot is None:
+        return spool_heat_errors(s, item)
+    if 'physical_heat_errors' not in snapshot:
+        snapshot['physical_heat_errors'] = spool_heat_errors(s, item)
+    return list(snapshot['physical_heat_errors'])
+
+
+@read_cached(lambda s, item, include_children=True: (item.id, include_children))
+def post_fabrication_heat_errors(s, item, *, include_children=True):
+    """Independent heat deadline; custom/NA weld requirements cannot waive it.
+
+    Fabrication work and completion do not call this acceptance gate. Assemblies
+    include their own welds and the exact active physical descendant scope.
+    """
+    from order_spools import effective_children
+    from spool_boms import spool_heat_errors
+    errors = (_physical_heat_errors(s, item) if include_children
+              else spool_heat_errors(s, item, include_children=False))
+    pending, seen = [item], set()
+    while pending:
+        current = pending.pop()
+        if current.id in seen:
+            continue
+        seen.add(current.id)
+        if read_get(s, SpoolPlan, current.id) is not None:
+            for weld in _welds(s, current.id):
+                errors.extend(f'{current.id}, {weld.number}: {message}' for message in _weld_heat_errors(weld))
+        if include_children and current.kind == 'Assembly':
+            pending.extend(child for child, _ in effective_children(s, current.id, include_removed=False))
+    return list(dict.fromkeys(errors))
+
+
+def _requirement_heat_errors(s, req, weld=None):
+    if req.stage not in ('after_welding', 'release') and req.code != 'FINAL_QA':
         return []
     if weld is None and req.weld_id:
         weld = read_get(s, Weld, req.weld_id)
+    item = read_get(s, Item, req.item_id)
+    if weld is not None:
+        return _weld_heat_errors(weld) + _physical_heat_errors(s, item)
+    return post_fabrication_heat_errors(s, item)
+
+
+def _check_errors(s, req, weld=None):
+    if weld is None and req.weld_id:
+        weld = read_get(s, Weld, req.weld_id)
+    errors = _requirement_heat_errors(s, req, weld)
+    if req.check_kind == 'none':
+        return errors
     if req.check_kind in ('materials', 'procedure') and weld is None:
-        return ['This check requires an individual weld record']
+        return errors + ['This check requires an individual weld record']
     if req.check_kind == 'materials':
-        return _material_errors(weld)
-    if req.check_kind == 'procedure':
-        return [label + ' missing' for key, label in [('wps', 'WPS identifier'), ('wps_revision', 'WPS revision')]
-                if not (getattr(weld, key) or '').strip()]
-    if req.check_kind == 'welding_complete':
+        errors.extend(_material_errors(weld, include_heat=req.stage != 'before_welding'))
+    elif req.check_kind == 'procedure':
+        errors.extend(label + ' missing' for key, label in [('wps', 'WPS identifier'), ('wps_revision', 'WPS revision')]
+                      if not (getattr(weld, key) or '').strip())
+    elif req.check_kind == 'welding_complete':
         if weld is not None:
-            return [] if _production_complete(s, weld) else ['Configured welding operations are not complete']
-        plan = read_get(s, SpoolPlan, req.item_id)
-        welds = _welds(s, req.item_id)
-        if not plan or len(welds) != plan.planned_welds or any(not _production_complete(s, w) for w in welds):
-            return ['Spool weld scope or configured welding operations are incomplete']
-    return []
+            if not _production_complete(s, weld):
+                errors.append('Configured welding operations are not complete')
+        else:
+            plan = read_get(s, SpoolPlan, req.item_id)
+            welds = _welds(s, req.item_id)
+            if not plan or len(welds) != plan.planned_welds or any(not _production_complete(s, w) for w in welds):
+                errors.append('Spool weld scope or configured welding operations are incomplete')
+    return list(dict.fromkeys(errors))
 
 
 def _latest_evidence(s, req):
@@ -707,7 +765,8 @@ def _latest_review(s, req):
 def _requirement_satisfied(s, req, weld=None):
     if req.status == 'not_applicable':
         review = _latest_review(s, req)
-        return bool(req.allow_na and review and review.decision == 'not_applicable' and review.notes.strip())
+        return bool(req.allow_na and review and review.decision == 'not_applicable' and review.notes.strip()
+                    and not _requirement_heat_errors(s, req, weld))
     if req.status != 'accepted' or _check_errors(s, req, weld):
         return False
     latest = _latest_evidence(s, req)
@@ -722,7 +781,7 @@ def _requirement_satisfied(s, req, weld=None):
 
 
 def _weld_blockers(s, weld, include_production=True, *, requirement_stages=None):
-    errors = []
+    errors = _weld_heat_errors(weld)
     if include_production and not _production_complete(s, weld):
         errors.append('Welding operations incomplete')
     rows = _requirements(s, weld.item_id, weld.id)
@@ -791,7 +850,7 @@ def tracking_release_errors(s, item, *, requirement_stages=None):
     plan = read_get(s, SpoolPlan, item.id)
     if not plan:
         return ['Item is not enrolled in weld tracking']
-    errors = _arrival_errors(s, item)
+    errors = _arrival_errors(s, item) + post_fabrication_heat_errors(s, item)
     project = read_get(s, Project, plan.project_id)
     if not project:
         errors.append('Project assignment missing')
@@ -1396,6 +1455,9 @@ def review_requirement(requirement_id: int, data: ReviewIn, u: Employee = Depend
             raise HTTPException(409, 'This required control cannot be marked not applicable')
         if evidence and evidence.result == 'fail':
             raise HTTPException(409, 'A failing result cannot be dismissed as not applicable; resolve its corrective disposition first')
+        heat_errors = _requirement_heat_errors(s, req, weld)
+        if heat_errors:
+            raise HTTPException(409, {'requirement_blockers': heat_errors})
     elif data.decision == 'accepted':
         blockers = _check_errors(s, req, weld)
         if req.evidence_required and evidence is None:
