@@ -108,6 +108,13 @@ def _rebuild_sqlite_order_gpns(c):
             c.exec_driver_sql(sql)
 
 
+def _migrate_gpn_labels_v1(c):
+    """Add current GPN metadata without modifying any retained identity."""
+    columns = {column['name'] for column in inspect(c).get_columns('order_gpns')}
+    if 'gpn_label' not in columns:
+        c.execute(text('ALTER TABLE order_gpns ADD COLUMN gpn_label VARCHAR(160)'))
+
+
 def _migrate_assembly_numbers_v1(c):
     """Add separate, initially unknown assembly numbers; retain every identity.
 
@@ -157,6 +164,8 @@ def initialize():
             from flow import TOPOLOGY_LOCK
             c.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': TOPOLOGY_LOCK})
         Base.metadata.create_all(c)
+        # The legacy SQLite rebuild uses the complete current model schema.
+        _migrate_gpn_labels_v1(c)
         _migrate_assembly_numbers_v1(c)
         if c.dialect.name == 'postgresql':
             c.execute(text('''CREATE OR REPLACE FUNCTION fabtrace_no_audit_mutation()
@@ -177,11 +186,14 @@ def initialize():
                 print('Created bootstrap administrator')
             else:
                 print('Employee accounts already exist; bootstrap skipped')
+            from gpn_label_corrections import apply_confirmed_gpn_label_corrections
+            label_corrections=apply_confirmed_gpn_label_corrections(s)
             from order_spools import backfill_spool_qr_identities
             assigned=backfill_spool_qr_identities(s)
             from spool_boms import backfill_material_piece_records
             material_records=backfill_material_piece_records(s)
             s.flush()
+            print(f'Confirmed GPN labels ready: {label_corrections}')
             print(f"Spool QR labels ready: {assigned['created']} permanent labels added; {assigned['missing_spool_number']} records still need a spool number")
             print(f'Individual material records ready: {material_records}')
     print('Schema ready: legacy records preserved; purchase orders, administration, weld, timing, process flow, transfers, audit readiness and Job Packet tables available')

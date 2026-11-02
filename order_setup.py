@@ -8,7 +8,7 @@ from collections import defaultdict
 from itertools import groupby
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from sqlalchemy import (Boolean, CheckConstraint, Column, DateTime, ForeignKey,
                         Integer, String, UniqueConstraint, select)
 from sqlalchemy.orm import Session
@@ -18,7 +18,7 @@ from tracking import Project, new_id
 from flow import lock_topology
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _event,
                     _flush, _gpn, _key, _locked, _guard_group_number,
-                    _set_assembly_number, read_snapshot)
+                    _set_assembly_number, business_gpn, read_snapshot)
 from permissions import has_capability
 from removals import (gpn_not_removed, item_not_removed, project_is_removed,
                       project_not_removed)
@@ -116,7 +116,15 @@ class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
 class EditAssemblyIdentityIn(Input):
     expected_version: int = Field(ge=1, strict=True)
     assembly_number: str = Field(max_length=160)
+    gpn_label: str | None = Field(default=None, min_length=1, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
+
+    @field_validator('gpn_label')
+    @classmethod
+    def provided_gpn_label_is_not_null(cls, value):
+        if value is None:
+            raise ValueError('Provide a nonblank current GPN label, or omit it to retain the existing value')
+        return value
 
 
 def _requirement_weld_progress(s, requirements, plans, weld_counts):
@@ -288,6 +296,7 @@ def _groups(s, project_ids, *, include_status=False):
     for group in groups:
         plan = plans.get(group.id)
         rows[group.project_id].append({'gpn_id': group.id, 'gpn': group.gpn,
+            'gpn_label': business_gpn(group),
             'assembly_number': group.assembly_number, 'assembly_number_editable': True,
             'planned': plan is not None, 'legacy_scope': plan is None,
             'assembly_quantity': plan['assembly_quantity'] if plan else None,
@@ -328,7 +337,7 @@ def _list(s, user):
 
 def _basis(s, group):
     plan = requirements_by_gpn(s, {group.id}).get(group.id)
-    return {'gpn_id': group.id, 'gpn': group.gpn,
+    return {'gpn_id': group.id, 'gpn': group.gpn, 'gpn_label': group.gpn_label,
             'assembly_number': group.assembly_number, 'requirements': plan}
 
 
@@ -576,15 +585,19 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
 @router.patch('/{project_id}/assemblies/{gpn_id}/identity')
 def edit_assembly_identity(project_id: str, gpn_id: str, data: EditAssemblyIdentityIn,
                            user: Employee = Depends(auth), s: Session = Depends(db)):
-    """Correct descriptive assembly metadata without rewriting production scope."""
+    """Correct current business labels without rewriting production identities."""
     order = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
     _guard_group_number(s, project_id, group.gpn, data.assembly_number, excluding=group.id)
-    before = {'gpn_id': group.id, 'gpn': group.gpn, 'assembly_number': group.assembly_number}
+    before = {'gpn_id': group.id, 'gpn': group.gpn, 'gpn_label': group.gpn_label,
+              'business_gpn': business_gpn(group), 'assembly_number': group.assembly_number}
     _set_assembly_number(group, data.assembly_number)
+    if data.gpn_label is not None:
+        group.gpn_label = data.gpn_label
     group.updated_at = utcnow()
     _event(s, order, user, 'SETUP_ASSEMBLY_IDENTITY_UPDATED', before=before,
-        after={'gpn_id': group.id, 'gpn': group.gpn, 'assembly_number': group.assembly_number},
+        after={'gpn_id': group.id, 'gpn': group.gpn, 'gpn_label': group.gpn_label,
+               'business_gpn': business_gpn(group), 'assembly_number': group.assembly_number},
         reason=data.reason)
     _commit(s)
     return _saved_detail(s, project_id, user, [group.id])

@@ -21,7 +21,7 @@ from main import (Employee, Item, audit, auth, db, phone_link, phone_qr_ready,
                   require_phone_qr_ready)
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit,
                     _event, _flush, _gpn, _key, _locked, _validate_assembly_scope,
-                    read_snapshot)
+                    business_gpn, read_snapshot)
 from order_setup import guard_assembly_registration, requirements_by_gpn
 from order_spools import (OrderSpool, SpoolQrIdentity, effective_children_by_assembly,
                           ensure_spool_qr_identity, guard_registered_spool, pending_declared_spools,
@@ -104,7 +104,7 @@ def _overview(s, scope, user, kind='Spool'):
         plan = plans.get(group.id)
         assembly_quantity = plan['assembly_quantity'] if plan is not None else None
         quantity = plan['total_spools'] if plan is not None else None
-        rows.append({'gpn_id': group.id, 'gpn': group.gpn,
+        rows.append({'gpn_id': group.id, 'gpn': business_gpn(group),
             'assembly_number': group.assembly_number or '',
             'assembly_quantity': assembly_quantity, 'planned_quantity': quantity,
             'registered_assembly_quantity': assembly_counts[group.id],
@@ -169,7 +169,7 @@ def list_labels(project_id: str,
                 'welds_per_spool': requirement['welds_per_spool'] if requirement else None,
                 'planned_welds': planned_welds,
                 'bom': item_bom_summary(item, snapshot),
-                'purchase_order': order.purchase_order, 'gpn_id': group.id, 'gpn': group.gpn,
+                'purchase_order': order.purchase_order, 'gpn_id': group.id, 'gpn': business_gpn(group),
                 'assembly_number': group.assembly_number or '',
                 'handler': item.handler, 'handler_name': handler_name or '',
                 'qr_url': phone_link('spool', alias) if ready and alias else
@@ -299,7 +299,7 @@ def item_label_projections(s, item_ids):
         result[item.id] = {'id': item.id, 'kind': 'Spool' if physical_spool else item.kind,
             'display_code': code, 'qr_alias': identity.display_code if identity else None,
             'purchase_order': order.purchase_order if order else '',
-            'gpn': group.gpn if group else '', 'assembly_number': group.assembly_number if group else '',
+            'gpn': business_gpn(group) if group else '', 'assembly_number': group.assembly_number if group else '',
             'part_number': '' if physical_spool else item.google_part_number or '',
             'handler': item.handler, 'handler_name': employee_name or '',
             'qr_url': (phone_link('spool', code) if identity else phone_link('item', item.id)) if ready else None,
@@ -355,7 +355,7 @@ def download_label(project_id: str, item_id: str,
         code = identity.display_code if identity else item.id
         payload = phone_link('spool', code) if identity else phone_link('item', item.id)
         fields = dict(code=code, purchase_order=order.purchase_order,
-            gpn=group.gpn, assembly_number=group.assembly_number or '',
+            gpn=business_gpn(group), assembly_number=group.assembly_number or '',
             handler=item.handler, handler_name=handler_name or '', qr_url=payload)
     return _label_attachment(**fields)
 

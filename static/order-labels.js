@@ -9,7 +9,7 @@
   const spoolText=item=>window.FabFlowStatus?.spoolText?.(item)||esc(labelCode(item));
   const labelFilename=item=>labelCode(item).replace(/[\\/\x00-\x1f\x7f]/g,'_')+'-label.svg';
   const assemblyNumber=item=>typeof item.assembly_number==='string'?item.assembly_number.trim():'';
-  const groupText=group=>(assemblyNumber(group)?'Assembly Number '+assemblyNumber(group):'Assembly Number not entered')+' · GPN '+group.gpn;
+  const groupText=group=>(assemblyNumber(group)?'Assembly Number '+assemblyNumber(group):'Assembly Number not entered')+' · GPN '+(group.gpn_label||group.gpn);
   const downloadUrl=item=>ROOT+'/'+enc(state.po)+'/labels/'+enc(item.id)+'/download.svg';
   const canManage=()=>window.FabPermissions?.can('manage_production')===true&&state.overview?.permissions?.can_manage===true;
   const button=(action,label,disabled=false,cls='')=>`<button type="button" data-ol-action="${action}" class="${cls}"${disabled?' disabled':''}>${esc(label)}</button>`;

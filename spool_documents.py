@@ -30,7 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from isometric_ocr import ImageNormalizationError, normalize_image_pdf
 from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
 from flow import lock_topology
-from orders import OrderAssembly, OrderGpn, PurchaseOrder, _key, read_snapshot
+from orders import OrderAssembly, OrderGpn, PurchaseOrder, _key, business_gpn, read_snapshot
 from order_setup import OrderSpoolRequirement
 from order_spools import OrderSpool, effective_children, effective_parent_id, guard_registered_spool
 from permissions import has_capability
@@ -235,7 +235,7 @@ def _assembly_identity(s, context):
     It remains unchanged because it is part of recorded acceptance evidence.
     """
     group = read_get(s, OrderGpn, context['gpn_id']) if context.get('gpn_id') else None
-    return {'gpn': group.gpn if group else (context.get('assembly_number') or ''),
+    return {'gpn': business_gpn(group) if group else (context.get('assembly_number') or ''),
             'assembly_number': group.assembly_number if group else ''}
 
 

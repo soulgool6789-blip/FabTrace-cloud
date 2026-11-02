@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import SpoolPlan, TrackingHold
 from flow import FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER, flow_stage_for_item
-from orders import PurchaseOrder, OrderGpn, OrderAssembly, read_snapshot
+from orders import PurchaseOrder, OrderGpn, OrderAssembly, business_gpn, read_snapshot
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
 from order_setup import requirements_by_gpn
@@ -373,7 +373,7 @@ def _tree(s, selected_project_id=''):
             summary = _finish_summary(summary)
             planned_gaps['missing_assemblies'] += missing_assemblies
             planned_gaps['missing_spools'] += unregistered_spools
-            gpns.append({'id': group.id, 'gpn': group.gpn, 'assembly_number': group.assembly_number,
+            gpns.append({'id': group.id, 'gpn': business_gpn(group), 'assembly_number': group.assembly_number,
                 'setup_needed': setup_needed,
                 'quantity_plan': quantity_plan, 'registered_assemblies': len(assemblies),
                 'registration_needed': bool(missing_assemblies),

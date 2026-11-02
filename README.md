@@ -1,5 +1,13 @@
 # FabTrace Cloud
 
+## Separate current GPN and Assembly Number on every label
+
+Release `2026.11.02-gpn-label.1` corrects the confirmed Kelvion-01 label metadata: **GPN 1193403** and **Assembly Number 643-777**. The prior combined value `1193403643-777` stays in retained production/document identity fields; the current GPN is stored independently. All label cards, Print all/search/import sheets, and both SVG download routes use the current business GPN. Spool numbers such as `643-777-PCW-03-01-[001]` and their QR links remain unchanged.
+
+Use **Edit GPN / Assembly Number** on the exact saved setup entry for a later correction. The existing permission, P.O. version, reason, uniqueness and audit controls apply. Structural quantity/weld/registration requests keep their retained identity values. Current labels are outside the signed historical document and inspection basis.
+
+Initialization adds one nullable metadata column and applies only the explicitly confirmed saved Kelvion-01 group. The one-time correction records its system migration actor and before/after labels, increments the current P.O. version once, and preserves all physical records and QA decisions. An immutable audit marker prevents later deployments from overwriting subsequent authorized label edits. Other GPNs are not parsed, truncated or inferred.
+
 ## Shop positions and employee badges
 
 Release `2026.11.02-shop-positions.1` renames **Supervisor** to **Shop Foreman** and **Finisher** to **Fab Prep Technician** while preserving their existing role IDs and permissions. **Pressure Testing Technician** and **NDT** are available as separate positions. **Fit-up welder** and **Process welder** remain separate choices. Generic **Welder** and **Miscellaneous** are retired from new assignments; existing accounts keep those positions and their existing permissions until an administrator explicitly selects a replacement. A name or access edit can retain the account's current retired position. No employee records or assignments are migrated automatically.
@@ -18,7 +26,7 @@ Release `2026.11.02-label-no-assignment.1` removes the complete Assigned to line
 
 ## Separate Assembly Number, GPN, and QR labels
 
-Release `2026.11.02-assembly-gpn-labels.1` records **Assembly Number** and **GPN** independently in setup and production records. GPN is required; an unknown Assembly Number stays blank. Existing values remain in the GPN field until the actual separate Assembly Number is entered. Use **Edit assembly number** on a saved setup entry to add or correct it, including after its physical spools have been registered. Distinct named assemblies can share a GPN; document and label selection uses each exact saved assembly entry.
+Release `2026.11.02-assembly-gpn-labels.1` records **Assembly Number** and **GPN** independently in setup and production records. GPN is required; an unknown Assembly Number stays blank. Existing values remain in the GPN field until the actual separate Assembly Number is entered. Use **Edit GPN / Assembly Number** on a saved setup entry to add or correct it, including after its physical spools have been registered. Distinct named assemblies can share a GPN; document and label selection uses each exact saved assembly entry.
 
 Spool labels show their readable spool code, P.O., GPN, and actual Assembly Number when supplied. Internal `ASM-…` identifiers stay in the tracking records. **Print labels** refreshes label data, and **Download label** provides a complete printable label.
 
@@ -139,7 +147,7 @@ Open **Orders** (`/?order-setup=1`) and choose **New P.O.** This is the ordinary
 
 Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. The setup save records the numbers, quantities, and weld counts together; optional documents are saved separately to the selected spool scope. Physical records and custody are entered later.
 
-The saved P.O. shows **Assembly numbers**, **Assemblies needed** and **Total spools needed**. Use **Add assembly number** for another branch or **Edit quantities** for an eligible correction with a reason. Existing undeclared quantities show **Not entered**. Once a branch has physical assembly history, its initial quantity setup is locked. **Edit assembly number** remains available for an authorized metadata correction with a reason. All supported active employees can view the quantities; administrators retain the existing removal and restoration controls.
+The saved P.O. shows **Assembly numbers**, **Assemblies needed** and **Total spools needed**. Use **Add assembly number** for another branch or **Edit quantities** for an eligible correction with a reason. Existing undeclared quantities show **Not entered**. Once a branch has physical assembly history, its initial quantity setup is locked. **Edit GPN / Assembly Number** remains available for an authorized metadata correction with a reason. All supported active employees can view the quantities; administrators retain the existing removal and restoration controls.
 
 Version `2026.10.30-setup.1` adds two quantity-planning tables without changing existing columns or filling in quantities for old records. Saving requirements creates no physical assembly/spool IDs, receipt, production steps or QA approval. The **Production records** links retain the detailed physical workflows at `/?orders=1`.
 

@@ -52,8 +52,11 @@ class OrderGpn(Base):
     project_id = Column(String(80), ForeignKey('purchase_orders.project_id'), nullable=False, index=True)
     gpn = Column(String(160), nullable=False)
     normalized_gpn = Column(String(480), nullable=False)
-    # Existing combined values remain GPNs. A separate assembly number is
-    # unknown until explicitly supplied; it is never inferred from an ID/GPN.
+    # Keep the recorded GPN as the physical/document identity basis. Current
+    # business labels may be corrected without rewriting that retained basis.
+    gpn_label = Column(String(160), nullable=True)
+    # A separate assembly number is unknown until explicitly supplied; it is
+    # never inferred from a recorded GPN or physical ID.
     assembly_number = Column(String(160), nullable=False, default='', server_default='')
     normalized_assembly_number = Column(String(480), nullable=True)
     description = Column(String(500), nullable=False, default='')
@@ -177,6 +180,11 @@ def _key(value):
     return ' '.join(value.split()).casefold()
 
 
+def business_gpn(group):
+    """Current business label; the original GPN remains the identity basis."""
+    return group.gpn_label or group.gpn
+
+
 def _assembly_number_key(value):
     return _key(value) or None
 
@@ -222,7 +230,7 @@ def _row(obj, keys):
 
 
 ORDER_FIELDS = 'project_id purchase_order customer notes version created_by created_at updated_at'.split()
-GPN_FIELDS = 'id project_id gpn assembly_number description created_by created_at updated_at'.split()
+GPN_FIELDS = 'id project_id gpn gpn_label assembly_number description created_by created_at updated_at'.split()
 ASSEMBLY_FIELDS = 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at'.split()
 
 
@@ -462,7 +470,8 @@ def _assembly_detail(s, mapping, group, progress_rows, *, presentation=False, pr
         blockers.append('Set up the purchase-order assembly traveler before ordinary final QA release')
     if flow and flow.expected_children != mapping.required_spools:
         blockers.append('Traveler count does not match the purchase-order requirement')
-    return {**_row(mapping, ASSEMBLY_FIELDS), 'gpn': group.gpn, 'assembly_number': group.assembly_number,
+    return {**_row(mapping, ASSEMBLY_FIELDS), 'gpn': group.gpn, 'gpn_label': business_gpn(group),
+            'assembly_number': group.assembly_number,
             'removal': item_removal,
             'description': item.description, 'google_part_number': item.google_part_number, 'drawing': item.drawing,
             'linked_spools': linked, 'missing_spools': max(0, mapping.required_spools - linked),
@@ -548,7 +557,8 @@ def order_detail(s, project_id, user=None):
             child['number_editable'] = child['count_editable'] and physical_count == 1
             child['combined_number_matches'] = _key(child['assembly_part_number']) == group.normalized_gpn
             child['assembly_number_editable'] = assembly_number_editable
-        gpns.append({**_row(group, GPN_FIELDS), 'assemblies': children, 'assembly_count': len(children),
+        gpns.append({**_row(group, GPN_FIELDS), 'gpn_label': business_gpn(group),
+                     'assemblies': children, 'assembly_count': len(children),
                      'quantity_plan': quantity_plans.get(group.id),
                      'removal': group_removal, 'assembly_number_editable': assembly_number_editable,
                      **{key: sum(child[key] for child in children) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools')}})
