@@ -1,10 +1,14 @@
 # FabTrace Cloud
 
-## Separate Assembly Number, GPN, and employee labels
+## QR labels without assignment captions
+
+Release `2026.11.02-label-no-assignment.1` removes the complete Assigned to line, employee name, and badge from all item QR label cards, print sheets, and SVG downloads. Normal employee assignments and custody history remain in FabTrace.
+
+## Separate Assembly Number, GPN, and QR labels
 
 Release `2026.11.02-assembly-gpn-labels.1` records **Assembly Number** and **GPN** independently in setup and production records. GPN is required; an unknown Assembly Number stays blank. Existing values remain in the GPN field until the actual separate Assembly Number is entered. Use **Edit assembly number** on a saved setup entry to add or correct it, including after its physical spools have been registered. Distinct named assemblies can share a GPN; document and label selection uses each exact saved assembly entry.
 
-Spool labels show their readable spool code, P.O., GPN, actual Assembly Number when supplied, and **Assigned to** employee name and badge. Internal `ASM-…` identifiers stay in the tracking records. **Print labels** refreshes current assignments, and **Download label** provides a complete printable label. Reprint a paper label when its employee caption needs to reflect a later handoff.
+Spool labels show their readable spool code, P.O., GPN, and actual Assembly Number when supplied. Internal `ASM-…` identifiers stay in the tracking records. **Print labels** refreshes label data, and **Download label** provides a complete printable label.
 
 The database update adds empty assembly-number fields and independent uniqueness checks while preserving existing group IDs, spool links, QR aliases, uploaded files, material records, and inspection history. Scoped BOM exports have separate GPN and Assembly number columns; the backend export retains both fields. Current label metadata stays outside signed historical inspection/document contexts.
 
@@ -104,7 +108,7 @@ Open **Orders → Open P.O. → Generate spool QR labels**. Choose the actual cu
 
 Each physical copy receives a permanent code such as **643-777-PCW-03-01-[001]**. Eighteen new copies of that spool number receive **[001] through [018]** when no earlier copies exist. Numbering continues globally for the same spool number across purchase orders. Removed spools retain their numbers; replacement copies receive new numbers. Reprinting never renumbers existing spools.
 
-Labels show the readable spool code, P.O., GPN, separately entered Assembly Number when known, and the assigned employee name and badge. The internal assembly tracking ID is omitted from the label. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
+Labels show the readable spool code, P.O., GPN, and separately entered Assembly Number when known. The internal assembly tracking ID is omitted from the label. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
 
 Print all labels or filter to one assembly setup record, shown with its GPN and Assembly Number, in pages of 100. Generation creates up to 500 physical items per batch, including parent assemblies. Declared weld counts produce independent numbered weld records with inspections pending. An inherited valid uploaded BOM creates blank material-piece records; generation supplies no heat/MTR values, receipts or QA approvals. Active employees can view and reprint; administrators and supervisors can generate missing records.
 

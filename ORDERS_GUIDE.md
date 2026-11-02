@@ -19,9 +19,9 @@ GPN is the Google part number. Assembly Number is the separate assembly identifi
 
 Use **Edit assembly number** on the saved setup entry to enter or correct its number with a reason. This metadata action remains available after physical registration without changing quantities, spool identities or inspection evidence. Each named Assembly Number is unique within its P.O.; different named assemblies may share a GPN. Select the exact assembly entry when opening files or labels.
 
-### Employee names on spool labels
+### Spool label contents
 
-The full label shows the readable spool code, P.O., GPN, separately entered Assembly Number when known, and **Assigned to** with that spool's current employee name and badge. The internal assembly ID is omitted. **Print labels** refreshes the assignment before printing; **Download label** saves a complete printable label. Paper labels reflect the assignment when printed, so reprint after a handoff when the printed name needs updating.
+The full label shows the readable spool code, P.O., GPN, and separately entered Assembly Number when known. The internal assembly ID and employee assignment are omitted. **Print labels** refreshes label data before printing; **Download label** saves a complete printable label. View the spool's item record for its current employee assignment and custody history.
 
 ### Weld progress, material pieces and arrival QA/QC
 
@@ -93,7 +93,7 @@ A spool number such as `643-777-PCW-03-01` receives permanent labels `643-777-PC
 
 The code is saved to the physical spool. Reopening, filtering, sorting or printing cannot change it. Its original internal ID, welds, custody, material history and issued packets stay associated with that same record. Both the new QR and an older printed QR open it. A legacy record with no spool number keeps its original code until a real number is entered; after the readable label is allocated, its spool number is fixed.
 
-Choose **Print labels** at **100% scale**, or **Save as PDF** in the print dialog. **Download label** saves the complete label image named for the readable spool code; **Open spool** opens the record. Labels show the readable code, P.O., GPN, the actual Assembly Number when entered, and the spool's currently assigned employee name and badge. Internal assembly IDs are omitted from the labels. **Technical ID** on the screen exposes the retained spool ID if needed for support. Print pages contain up to **100 labels**; use **Next 100** for the following page. Printing refreshes assignments; reprint a paper label after a handoff when its employee caption needs updating.
+Choose **Print labels** at **100% scale**, or **Save as PDF** in the print dialog. **Download label** saves the complete label image named for the readable spool code; **Open spool** opens the record. Labels show the readable code, P.O., GPN, and the actual Assembly Number when entered. Internal assembly IDs are omitted from the labels. **Technical ID** on the screen exposes the retained spool ID if needed for support. Print pages contain up to **100 labels**; use **Next 100** for the following page. Printing refreshes current label data.
 
 A generation request creates at most **500 items**, including parent assemblies. Continue with another batch for larger orders. Existing spools linked to the exact assembly count toward its requirement; unassigned records with the same part number are not claimed. Repeating generation for complete scope creates nothing.
 

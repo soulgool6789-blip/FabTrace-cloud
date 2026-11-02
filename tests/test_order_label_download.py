@@ -1,4 +1,4 @@
-"""Current-assignment QR labels are read-only views of permanent spool identity."""
+"""QR labels omit assignment while retaining permanent identity and custody metadata."""
 import importlib
 import io
 import re
@@ -80,7 +80,7 @@ def test_label_response_separates_real_assembly_gpn_and_current_spool_employee(a
 
 
 def test_full_download_contains_escaped_captions_and_the_existing_bare_qr_matrix(api):
-    setup, rows = registered(api)
+    setup, rows = registered(api, assembly_number='ACTUAL-000321 <script> & "A"')
     project, row = setup['order']['project_id'], rows[0]
     with api.session_factory() as session:
         session.get(api.application.Employee, BADGES['handler']).name = 'A <script> & B'
@@ -96,8 +96,10 @@ def test_full_download_contains_escaped_captions_and_the_existing_bare_qr_matrix
     assert captions(root, 'spool') == row['qr_alias']
     assert captions(root, 'purchase-order') == 'P.O. 000123'
     assert captions(root, 'gpn') == 'GPN GPN-009876'
-    assert captions(root, 'assembly-number') == 'Assembly Number ACTUAL-000321'
-    assert captions(root, 'assigned-to') == 'Assigned to A <script> & B · ' + BADGES['handler']
+    assert captions(root, 'assembly-number') == 'Assembly Number ' + row['assembly_number']
+    assert captions(root, 'assigned-to') == ''
+    rendered = ' '.join(root.itertext())
+    assert all(value not in rendered for value in ('Assigned', 'A <script> & B', BADGES['handler']))
     assert row['assembly_id'] not in result.text
     assert '&lt;script&gt;' in result.text and not root.findall('.//svg:script', NS)
     assert not root.findall('.//svg:image', NS)
@@ -115,18 +117,24 @@ def test_full_download_contains_escaped_captions_and_the_existing_bare_qr_matrix
     assert database_state(api) == before
 
 
-def test_redownload_uses_latest_assigned_employee_without_replacing_qr_or_qa(api):
+def test_redownload_is_identical_after_assignment_changes_without_replacing_qr_or_qa(api):
     setup, rows = registered(api)
     project, row = setup['order']['project_id'], rows[0]
-    original = ElementTree.fromstring(download(api, project, row['id']).content)
+    original_content = download(api, project, row['id']).content
+    original = ElementTree.fromstring(original_content)
     with api.session_factory() as session:
         session.get(api.application.Item, row['id']).handler = BADGES['welder']
         session.get(api.application.Employee, BADGES['welder']).name = 'New current employee'
         session.commit()
     before = database_state(api)
-    refreshed = ElementTree.fromstring(download(api, project, row['id']).content)
-    assert captions(original, 'assigned-to') == 'Assigned to Test handler · ' + BADGES['handler']
-    assert captions(refreshed, 'assigned-to') == 'Assigned to New current employee · ' + BADGES['welder']
+    refreshed_content = download(api, project, row['id']).content
+    refreshed = ElementTree.fromstring(refreshed_content)
+    assert original_content == refreshed_content
+    assert captions(original, 'assigned-to') == captions(refreshed, 'assigned-to') == ''
+    for root in (original, refreshed):
+        rendered = ' '.join(root.itertext())
+        assert all(value not in rendered for value in (
+            'Assigned', 'Test handler', 'New current employee', BADGES['handler'], BADGES['welder']))
     assert svg_matrix(original) == svg_matrix(refreshed)
     assert captions(original, 'spool') == captions(refreshed, 'spool')
     assert database_state(api) == before
@@ -212,17 +220,21 @@ def test_download_does_not_offer_an_unconfigured_qr_and_does_not_write(api, monk
 
 def test_long_unicode_captions_wrap_without_truncation_or_unsafe_markup(api):
     module = importlib.import_module('order_labels')
-    name = 'Élodie Chloë O’Connell <Lead> & 長い名前 ' + 'W' * 80
+    assembly_number = 'Étage 組立 <script> & 長い識別番号 ' + 'W' * 80
+    name = 'Hidden <employee> & name'
     number = '0123456789' * 16
     source = module._label_svg(code=number + '-[001]', purchase_order='PO-' + number,
-        gpn='GPN-' + number, assembly_number='A-' + number,
+        gpn='GPN-' + number, assembly_number=assembly_number,
         handler='TRAINING-EMPLOYEE', handler_name=name,
         qr_url='https://fabtrace-label-tests.example/?spool=training')
     root = ElementTree.fromstring(source)
     height = int(root.attrib['viewBox'].split()[-1])
     assert root.attrib['width'] == '2.4in' and height > 735
-    assert captions(root, 'assigned-to').replace(' ', '') == (
-        'Assigned to ' + name + ' · TRAINING-EMPLOYEE').replace(' ', '')
+    assert captions(root, 'assembly-number').replace(' ', '') == (
+        'Assembly Number ' + assembly_number).replace(' ', '')
+    assert captions(root, 'assigned-to') == ''
+    assert all(value not in ' '.join(root.itertext()) for value in ('Assigned', name, 'TRAINING-EMPLOYEE'))
+    assert b'&lt;script&gt;' in source
     assert captions(root, 'spool').replace(' ', '') == number + '-[001]'
     for node in root.findall('svg:text', NS):
         assert float(node.attrib['y']) < height - 20
@@ -248,13 +260,17 @@ def test_item_detail_and_generic_download_share_canonical_order_fields_and_assig
     generic_root = ElementTree.fromstring(generic.content)
     order_root = ElementTree.fromstring(download(api, project, row['id']).content)
     assert svg_matrix(generic_root) == svg_matrix(order_root)
-    for field in ('kind', 'spool', 'purchase-order', 'gpn', 'assembly-number', 'assigned-to'):
+    for field in ('kind', 'spool', 'purchase-order', 'gpn', 'assembly-number'):
         assert captions(generic_root, field) == captions(order_root, field)
+    for root in (generic_root, order_root):
+        assert captions(root, 'assigned-to') == ''
+        assert all(value not in ' '.join(root.itertext()) for value in (
+            'Assigned', 'Current <Welder> & team', BADGES['welder']))
     assert database_state(api) == before
 
 
 @pytest.mark.parametrize('kind', ['Spool', 'Part'])
-def test_unmapped_item_labels_show_real_kind_assignment_and_no_invented_order_fields(api, kind):
+def test_unmapped_item_labels_show_real_kind_without_assignment_or_invented_order_fields(api, kind):
     setup = create_setup(api)
     item_id = 'UNMAPPED-' + kind.upper()
     created = ok(api.post('/api/items', {'id': item_id, 'kind': kind,
@@ -271,7 +287,8 @@ def test_unmapped_item_labels_show_real_kind_assignment_and_no_invented_order_fi
     assert response.status_code == 200
     root = ElementTree.fromstring(response.content)
     assert captions(root, 'kind') == kind.upper()
-    assert captions(root, 'assigned-to') == 'Assigned to Test welder · ' + BADGES['welder']
+    assert captions(root, 'assigned-to') == ''
+    assert all(value not in ' '.join(root.itertext()) for value in ('Assigned', 'Test welder', BADGES['welder']))
     assert captions(root, 'purchase-order') == captions(root, 'gpn') == captions(root, 'assembly-number') == ''
     if kind == 'Part':
         assert captions(root, 'item') == item_id

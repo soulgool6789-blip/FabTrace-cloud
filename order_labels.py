@@ -255,8 +255,6 @@ def _label_svg(*, code, purchase_order, gpn, assembly_number, handler, handler_n
         caption('GPN ' + gpn, 30, 34, field='gpn')
     if assembly_number:
         caption('Assembly Number ' + assembly_number, 30, 34, field='assembly-number')
-    assigned = ' · '.join(_label_text(value) for value in (handler_name, handler) if _label_text(value)) or 'Not assigned'
-    caption('Assigned to ' + assigned, 30, 34, field='assigned-to')
     height = max(735, y + 20)
     root.set('height', f'{height / 300:.3f}in')
     root.set('viewBox', f'0 0 720 {height}')
