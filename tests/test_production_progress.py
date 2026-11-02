@@ -164,6 +164,36 @@ def test_shared_legacy_gpn_keeps_distinct_assembly_ids_without_double_counting(a
     assert result['summary']['total_steps'] == 12 and result['summary']['missing_spools'] == 4
 
 
+def test_repeated_gpn_progress_keeps_actual_assembly_numbers_and_exact_group_scope(api):
+    from test_order_setup import branch, create_setup
+
+    saved = create_setup(api, assemblies=[
+        {**branch('000-SHARED-GPN', 1), 'assembly_number': number}
+        for number in ('000-ASM-A', '000-ASM-B', '')])
+    project = saved['order']['project_id']
+    expected = {}
+    current_version = saved['order']['version']
+    for index, group_row in enumerate(saved['assemblies']):
+        item_id = f'PROGRESS-NAMED-ASSEMBLY-{index}'
+        registered = ok(api.post(f'/api/orders/{project}/gpn-assemblies', {
+            'expected_version': current_version, 'gpn_id': group_row['gpn_id'],
+            'gpn': group_row['gpn'], 'assembly_number': group_row['assembly_number'],
+            'required_spools': group_row['spools_per_assembly'],
+            'create_item': {'id': item_id, 'handler': BADGES['handler'], 'location': 'Receiving'}}), 201)
+        current_version = registered['order']['version']
+        expected[group_row['gpn_id']] = (group_row['assembly_number'], item_id)
+    before = database_state(api)
+    result = report(api, project)
+    rows = result['orders'][0]['gpns']
+    assert len(rows) == 3 and {row['gpn'] for row in rows} == {'000-SHARED-GPN'}
+    assert {row['id']: (row['assembly_number'], row['assemblies'][0]['id'])
+            for row in rows} == expected
+    assert all(len(row['assemblies']) == row['summary']['items'] == 1 for row in rows)
+    assert {row['assembly_number'] for row in rows} == {'000-ASM-A', '000-ASM-B', ''}
+    assert len(flatten(result)) == result['summary']['items'] == 3
+    assert database_state(api) == before
+
+
 def test_missing_spools_leave_their_unknown_material_stages_visible(api):
     project, _, _ = setup(api, count=2)
     ok(weld_plan(api, 'ORDER-ASM-01', project))

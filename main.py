@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.02-traceability-after-fabrication.1'
+APP_VERSION='2026.11.02-assembly-gpn-labels.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -177,6 +177,8 @@ def item_dict(s,r,user=None):
     d['inspections']=[asdict(i,'id kind result inspector report measurements at'.split()) for i in s.scalars(select(Inspection).where(Inspection.item_id==r.id).order_by(Inspection.id.desc()).limit(100)).all()]
     d['qr_eligible']=r.kind != 'Assembly'
     d['qr_url']=(phone_link('spool',d['qr_alias']) if identity else phone_link('item',r.id)) if d['qr_eligible'] and phone_qr_ready() else None
+    from order_labels import item_label_projections
+    d['qr_label']=item_label_projections(s,[r.id]).get(r.id) if d['qr_eligible'] else None
     d['tracking_enabled']=is_tracked(s,r)
     d['tracking']=tracking_summary(s,r) if d['tracking_enabled'] else None
     flow=s.get(FlowPlan,r.id)

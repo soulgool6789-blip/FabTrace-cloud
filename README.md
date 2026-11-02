@@ -1,5 +1,13 @@
 # FabTrace Cloud
 
+## Separate Assembly Number, GPN, and employee labels
+
+Release `2026.11.02-assembly-gpn-labels.1` records **Assembly Number** and **GPN** independently in setup and production records. GPN is required; an unknown Assembly Number stays blank. Existing values remain in the GPN field until the actual separate Assembly Number is entered. Use **Edit assembly number** on a saved setup entry to add or correct it, including after its physical spools have been registered. Distinct named assemblies can share a GPN; document and label selection uses each exact saved assembly entry.
+
+Spool labels show their readable spool code, P.O., GPN, actual Assembly Number when supplied, and **Assigned to** employee name and badge. Internal `ASM-…` identifiers stay in the tracking records. **Print labels** refreshes current assignments, and **Download label** provides a complete printable label. Reprint a paper label when its employee caption needs to reflect a later handoff.
+
+The database update adds empty assembly-number fields and independent uniqueness checks while preserving existing group IDs, spool links, QR aliases, uploaded files, material records, and inspection history. Scoped BOM exports have separate GPN and Assembly number columns; the backend export retains both fields. Current label metadata stays outside signed historical inspection/document contexts.
+
 ## Heat numbers and MTRs after fabrication
 
 Release `2026.11.02-traceability-after-fabrication.1` makes both heat numbers and MTR references optional through receiving, preparation, fit-up, and **step 14 — Complete Welds**. Both become required at **step 15 — QA/QC-003: Inspect Welds**, before acceptance, testing, or release. The deadline covers each saved physical material piece and both material sides of every weld. Current BOMs, component identities, and actual QA approvals remain required at their existing stages. The step 2 checklist reviews available documentation and allows heat/MTR verification to be deferred; earlier event definitions remain recorded as originally confirmed.
@@ -96,9 +104,9 @@ Open **Orders → Open P.O. → Generate spool QR labels**. Choose the actual cu
 
 Each physical copy receives a permanent code such as **643-777-PCW-03-01-[001]**. Eighteen new copies of that spool number receive **[001] through [018]** when no earlier copies exist. Numbering continues globally for the same spool number across purchase orders. Removed spools retain their numbers; replacement copies receive new numbers. Reprinting never renumbers existing spools.
 
-Labels show the readable code, P.O., parent GPN and exact assembly context. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
+Labels show the readable spool code, P.O., GPN, separately entered Assembly Number when known, and the assigned employee name and badge. The internal assembly tracking ID is omitted from the label. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
 
-Print all labels or filter to one GPN, in pages of 100. Generation creates up to 500 physical items per batch, including parent assemblies. Declared weld counts produce independent numbered weld records with inspections pending. An inherited valid uploaded BOM creates blank material-piece records; generation supplies no heat/MTR values, receipts or QA approvals. Active employees can view and reprint; administrators and supervisors can generate missing records.
+Print all labels or filter to one assembly setup record, shown with its GPN and Assembly Number, in pages of 100. Generation creates up to 500 physical items per batch, including parent assemblies. Declared weld counts produce independent numbered weld records with inspections pending. An inherited valid uploaded BOM creates blank material-piece records; generation supplies no heat/MTR values, receipts or QA approvals. Active employees can view and reprint; administrators and supervisors can generate missing records.
 
 ## Change an employee's position
 
@@ -109,13 +117,13 @@ An administrator can open **Employees → Change position**, select the new posi
 Open **Orders** (`/?order-setup=1`) and choose **New P.O.** This is the ordinary signed-in landing screen; creation and edits retain their existing permissions. Setup has three entry steps followed by an optional document step:
 
 1. **P.O. number** — enter the purchase-order number.
-2. **Assemblies** — add each **Google part number / Assembly number** and answer **How many assemblies?** Use **+ Add another assembly number** for additional numbers on the same P.O.
+2. **Assemblies** — enter **Assembly Number** and **GPN** separately and answer **How many assemblies?** Use **+ Add another assembly number** for additional numbers on the same P.O.
 3. **Spools** — under each assembly number, enter its spool numbers, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** as needed, then **Save & add files**.
 4. **Drawings & BOMs (optional)** — upload/view the BOM and all pages of the corresponding isometric for each selected spool. Finish setup or choose **Do this later**; the P.O. and quantities are already saved.
 
 Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. The setup save records the numbers, quantities, and weld counts together; optional documents are saved separately to the selected spool scope. Physical records and custody are entered later.
 
-The saved P.O. shows **Assembly numbers**, **Assemblies needed** and **Total spools needed**. Use **Add assembly number** for another branch or **Edit quantities** for an eligible correction with a reason. Existing undeclared quantities show **Not entered**. Once a branch has physical assembly history, its initial quantity setup is locked. All supported active employees can view the quantities; administrators retain the existing removal and restoration controls.
+The saved P.O. shows **Assembly numbers**, **Assemblies needed** and **Total spools needed**. Use **Add assembly number** for another branch or **Edit quantities** for an eligible correction with a reason. Existing undeclared quantities show **Not entered**. Once a branch has physical assembly history, its initial quantity setup is locked. **Edit assembly number** remains available for an authorized metadata correction with a reason. All supported active employees can view the quantities; administrators retain the existing removal and restoration controls.
 
 Version `2026.10.30-setup.1` adds two quantity-planning tables without changing existing columns or filling in quantities for old records. Saving requirements creates no physical assembly/spool IDs, receipt, production steps or QA approval. The **Production records** links retain the detailed physical workflows at `/?orders=1`.
 

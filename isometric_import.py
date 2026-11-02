@@ -36,7 +36,7 @@ from isometric_bom import extract_isometric_boms
 from spool_documents import (
     BOM_COLUMNS, MAX_LINES, MAX_SCOPE_BYTES, XLSX_MEDIA, SpoolDocument,
     SpoolDocumentFile, SpoolDocumentFileLink, SpoolDocumentSet, _bom_grid,
-    _can_upload, _detail, _fail, _locked_reason, _metadata,
+    _assembly_identity, _can_upload, _detail, _fail, _locked_reason, _metadata,
     _prepare, _safe_filename, _set_for, _stamp, _stored_file, _target, _text,
 )
 
@@ -365,8 +365,10 @@ def build_bom_excel(bom, context, *, source=None, revision='', provenance=None):
     sheet['A1'].font = Font(name='Aptos', size=17, bold=True, color='FFFFFF')
     sheet['A1'].fill = PatternFill('solid', fgColor='17304B')
     sheet.row_dimensions[1].height = 32
+    identity = bom.get('assembly_identity') or {'gpn': context.get('assembly_number', ''), 'assembly_number': ''}
     meta = [('Spool', context.get('spool_number', '')), ('Purchase order', context.get('purchase_order', '')),
-            ('Assembly', context.get('assembly_number', '')), ('Document revision', revision),
+            ('GPN', identity.get('gpn', '')), ('Assembly Number', identity.get('assembly_number', '')),
+            ('Document revision', revision),
             ('Source drawing', (source or {}).get('filename', 'Uploaded BOM')),
             ('Source pages', ', '.join(str(page) for page in bom.get('source_pages', []))),
             ('Quantity basis', 'One spool; quantities are not multiplied by assembly or order quantity.')]
@@ -561,6 +563,7 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
                 'warnings': candidate.get('warnings', []),
                 'source_validation_errors': candidate.get('validation_errors', [])}
             bom['provenance'] = provenance
+            bom['assembly_identity'] = _assembly_identity(s, context)
             content = build_bom_excel(bom, context, source=claim['source'],
                                       revision=revision or candidate.get('revision', ''), provenance=provenance)
             size = len(content) + (0 if keep_source else prepared['size_bytes'])

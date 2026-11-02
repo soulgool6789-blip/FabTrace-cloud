@@ -10,7 +10,7 @@ from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, and_, func, or_, select
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from read_projection import prime_projection, read_get, read_projection
@@ -40,11 +40,22 @@ class PurchaseOrder(Base):
 
 class OrderGpn(Base):
     __tablename__ = 'order_gpns'
-    __table_args__ = (UniqueConstraint('project_id', 'normalized_gpn', name='uq_order_gpn_number'),)
+    __table_args__ = (
+        Index('uq_order_named_assembly_number', 'project_id', 'normalized_assembly_number', unique=True,
+              postgresql_where=text('normalized_assembly_number IS NOT NULL'),
+              sqlite_where=text('normalized_assembly_number IS NOT NULL')),
+        Index('uq_order_legacy_gpn_number', 'project_id', 'normalized_gpn', unique=True,
+              postgresql_where=text('normalized_assembly_number IS NULL'),
+              sqlite_where=text('normalized_assembly_number IS NULL')),
+    )
     id = Column(String(60), primary_key=True)
     project_id = Column(String(80), ForeignKey('purchase_orders.project_id'), nullable=False, index=True)
     gpn = Column(String(160), nullable=False)
     normalized_gpn = Column(String(480), nullable=False)
+    # Existing combined values remain GPNs. A separate assembly number is
+    # unknown until explicitly supplied; it is never inferred from an ID/GPN.
+    assembly_number = Column(String(160), nullable=False, default='', server_default='')
+    normalized_assembly_number = Column(String(480), nullable=True)
     description = Column(String(500), nullable=False, default='')
     created_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -96,10 +107,12 @@ class EditOrderIn(VersionIn):
 
 class CreateGpnIn(VersionIn):
     gpn: str = Field(min_length=1, max_length=160)
+    assembly_number: str = Field(default='', max_length=160)
     description: str = Field(default='', max_length=500)
 
 
 class EditGpnIn(CreateGpnIn):
+    assembly_number: str | None = Field(default=None, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
 
@@ -138,6 +151,7 @@ class CombinedAssemblyItemIn(Input):
 
 class CombinedAssemblyFields(VersionIn):
     gpn: str = Field(min_length=1, max_length=160)
+    assembly_number: str = Field(default='', max_length=160)
     required_spools: int = Field(ge=1, le=10000, strict=True)
     notes: str = Field(default='', max_length=3000)
 
@@ -155,11 +169,44 @@ class CreateCombinedAssemblyIn(CombinedAssemblyFields):
 
 
 class EditCombinedAssemblyIn(CombinedAssemblyFields):
+    assembly_number: str | None = Field(default=None, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
 
 def _key(value):
     return ' '.join(value.split()).casefold()
+
+
+def _assembly_number_key(value):
+    return _key(value) or None
+
+
+def _group_number_conflict(s, project_id, gpn, assembly_number, *, excluding=None):
+    query = select(OrderGpn).where(OrderGpn.project_id == project_id)
+    number = _assembly_number_key(assembly_number)
+    if number is not None:
+        query = query.where(OrderGpn.normalized_assembly_number == number)
+    else:
+        query = query.where(OrderGpn.normalized_assembly_number.is_(None),
+                            OrderGpn.normalized_gpn == _key(gpn))
+    if excluding is not None:
+        query = query.where(OrderGpn.id != excluding)
+    return s.scalar(query)
+
+
+def _guard_group_number(s, project_id, gpn, assembly_number, *, excluding=None):
+    duplicate = _group_number_conflict(s, project_id, gpn, assembly_number, excluding=excluding)
+    if duplicate is not None:
+        from removals import gpn_is_removed
+        label = 'Assembly Number' if assembly_number else 'GPN with an unspecified Assembly Number'
+        if gpn_is_removed(s, duplicate.id):
+            raise HTTPException(409, f'That {label} is in Removed records. Restore its existing entry to retain its identity.')
+        raise HTTPException(409, f'That {label} already exists in this P.O. Open its existing setup.')
+
+
+def _set_assembly_number(group, value):
+    group.assembly_number = value
+    group.normalized_assembly_number = _assembly_number_key(value)
 
 
 def _row(obj, keys):
@@ -175,7 +222,7 @@ def _row(obj, keys):
 
 
 ORDER_FIELDS = 'project_id purchase_order customer notes version created_by created_at updated_at'.split()
-GPN_FIELDS = 'id project_id gpn description created_by created_at updated_at'.split()
+GPN_FIELDS = 'id project_id gpn assembly_number description created_by created_at updated_at'.split()
 ASSEMBLY_FIELDS = 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at'.split()
 
 
@@ -415,7 +462,7 @@ def _assembly_detail(s, mapping, group, progress_rows, *, presentation=False, pr
         blockers.append('Set up the purchase-order assembly traveler before ordinary final QA release')
     if flow and flow.expected_children != mapping.required_spools:
         blockers.append('Traveler count does not match the purchase-order requirement')
-    return {**_row(mapping, ASSEMBLY_FIELDS), 'gpn': group.gpn,
+    return {**_row(mapping, ASSEMBLY_FIELDS), 'gpn': group.gpn, 'assembly_number': group.assembly_number,
             'removal': item_removal,
             'description': item.description, 'google_part_number': item.google_part_number, 'drawing': item.drawing,
             'linked_spools': linked, 'missing_spools': max(0, mapping.required_spools - linked),
@@ -494,13 +541,16 @@ def order_detail(s, project_id, user=None):
         # A removed physical instance still owns its retained identity. Do not
         # offer a shared-number correction that would rewrite its history.
         physical_count = physical_counts.get(group.id, 0)
+        group_removal = removal_summary(s, 'gpn', group.id)
+        assembly_number_editable = not removed and not (group_removal and group_removal['removed'])
         for child in children:
             child['count_editable'] = child['count_editable'] and not removed and group.id not in quantity_plans
             child['number_editable'] = child['count_editable'] and physical_count == 1
             child['combined_number_matches'] = _key(child['assembly_part_number']) == group.normalized_gpn
+            child['assembly_number_editable'] = assembly_number_editable
         gpns.append({**_row(group, GPN_FIELDS), 'assemblies': children, 'assembly_count': len(children),
                      'quantity_plan': quantity_plans.get(group.id),
-                     'removal': removal_summary(s, 'gpn', group.id),
+                     'removal': group_removal, 'assembly_number_editable': assembly_number_editable,
                      **{key: sum(child[key] for child in children) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools')}})
         assemblies.extend(children)
     available = []
@@ -612,8 +662,10 @@ def edit_order(project_id: str, data: EditOrderIn, user: Employee = Depends(auth
 @router.post('/{project_id}/gpns', status_code=201)
 def create_gpn(project_id: str, data: CreateGpnIn, user: Employee = Depends(auth), s: Session = Depends(db)):
     row = _locked(s, project_id, data.expected_version, user)
+    _guard_group_number(s, project_id, data.gpn, data.assembly_number)
     group = OrderGpn(id=new_id('OGPN'), project_id=project_id, gpn=data.gpn, normalized_gpn=_key(data.gpn),
                      description=data.description, created_by=user.badge)
+    _set_assembly_number(group, data.assembly_number)
     s.add(group)
     _flush(s)
     _event(s, row, user, 'GPN_CREATED', after=_row(group, GPN_FIELDS))
@@ -630,13 +682,16 @@ def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Dep
     if data.gpn != group.gpn:
         from order_setup import OrderAssemblyRequirement
         if s.get(OrderAssemblyRequirement, group.id):
-            raise HTTPException(409, 'Correct this Google part number / assembly number from P.O. setup before registering its physical assemblies')
+            raise HTTPException(409, 'Correct this Google part number from P.O. setup before registering its physical assemblies')
         for mapping in s.scalars(select(OrderAssembly).where(OrderAssembly.gpn_id == group.id)):
             item = lock_item(s, mapping.item_id)
             if item.released or s.get(FlowPlan, item.id):
                 raise HTTPException(409, 'Correct the GPN before its assemblies enter a traveler or receive final release')
     before = _row(group, GPN_FIELDS)
+    assembly_number = group.assembly_number if data.assembly_number is None else data.assembly_number
+    _guard_group_number(s, project_id, data.gpn, assembly_number, excluding=group.id)
     group.gpn, group.normalized_gpn, group.description = data.gpn, _key(data.gpn), data.description
+    _set_assembly_number(group, assembly_number)
     group.updated_at = utcnow()
     _event(s, row, user, 'GPN_UPDATED', before=before, after=_row(group, GPN_FIELDS), reason=data.reason)
     _commit(s)
@@ -719,18 +774,30 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
     if data.gpn_id:
         group = _gpn(s, project_id, data.gpn_id)
         if group.normalized_gpn != _key(data.gpn):
-            raise HTTPException(409, 'The GPN / assembly number must match the existing entry being completed')
+            raise HTTPException(409, 'The GPN must match the existing entry being completed')
+        if 'assembly_number' in data.model_fields_set and data.assembly_number != group.assembly_number:
+            raise HTTPException(409, 'The Assembly Number must match the selected setup. Edit its Assembly Number separately before registration.')
     else:
-        group = s.scalar(select(OrderGpn).where(OrderGpn.project_id == project_id,
-                                               OrderGpn.normalized_gpn == _key(data.gpn)))
+        if 'assembly_number' in data.model_fields_set:
+            group = _group_number_conflict(s, project_id, data.gpn, data.assembly_number)
+        else:
+            matches = list(s.scalars(select(OrderGpn).where(OrderGpn.project_id == project_id,
+                OrderGpn.normalized_gpn == _key(data.gpn)).limit(2)))
+            if len(matches) > 1:
+                raise HTTPException(409, 'This GPN belongs to more than one assembly setup. Select its Assembly Number or exact setup entry.')
+            group = matches[0] if matches else None
         if group:
             require_active_gpn(s, group.id)
+            if group.normalized_gpn != _key(data.gpn):
+                raise HTTPException(409, 'That Assembly Number already has a different GPN. Open its existing setup.')
     previous_group = _row(group, GPN_FIELDS) if group else None
     if group and not s.get(OrderAssemblyRequirement, group.id) and s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
         raise HTTPException(409, 'That GPN / assembly already exists in this P.O. Open its existing spool list instead of creating a duplicate.')
     if group is None:
+        _guard_group_number(s, project_id, data.gpn, data.assembly_number)
         group = OrderGpn(id=new_id('OGPN'), project_id=project_id, gpn=data.gpn,
                          normalized_gpn=_key(data.gpn), description='', created_by=user.badge)
+        _set_assembly_number(group, data.assembly_number)
         s.add(group)
         _flush(s)
 
@@ -772,7 +839,7 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
 @router.patch('/{project_id}/gpn-assemblies/{item_id}')
 def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAssemblyIn,
                            user: Employee = Depends(auth), s: Session = Depends(db)):
-    """Correct one combined number without rewriting unrelated legacy identities."""
+    """Edit independent assembly metadata while retaining physical GPN guards."""
     from order_setup import guard_assembly_registration, OrderAssemblyRequirement
     order = _locked(s, project_id, data.expected_version, user)
     mapping = _assembly(s, project_id, item_id)
@@ -781,6 +848,7 @@ def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAsse
     guard_document_requirement_identity(s, group, gpn=data.gpn)
     item = lock_item(s, item_id)
     number_changed = data.gpn != group.gpn
+    assembly_number = group.assembly_number if data.assembly_number is None else data.assembly_number
     guard_assembly_registration(s, group, data.required_spools, item_id=item_id)
     if number_changed and s.get(OrderAssemblyRequirement, group.id):
         raise HTTPException(409, 'This planned assembly number is locked by registered physical records; its P.O. setup and identities are preserved')
@@ -791,11 +859,7 @@ def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAsse
         if s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id,
                                                         OrderAssembly.item_id != item.id).limit(1)):
             raise HTTPException(409, 'This existing GPN is shared by multiple physical assemblies. Its number cannot be changed from one assembly record.')
-        duplicate = s.scalar(select(OrderGpn.id).where(OrderGpn.project_id == project_id,
-                                                      OrderGpn.normalized_gpn == _key(data.gpn),
-                                                      OrderGpn.id != group.id).limit(1))
-        if duplicate:
-            raise HTTPException(409, 'That GPN / assembly number already exists in this P.O')
+    _guard_group_number(s, project_id, data.gpn, assembly_number, excluding=group.id)
     _validate_assembly_scope(s, order, item, data.required_spools)
     before = {'gpn': _row(group, GPN_FIELDS), 'assembly': _row(mapping, ASSEMBLY_FIELDS),
               'physical_part_number': item.google_part_number}
@@ -806,6 +870,9 @@ def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAsse
         mapping.assembly_part_number = data.gpn
         if not item.google_part_number or _key(item.google_part_number) == old_key:
             item.google_part_number = data.gpn
+    if assembly_number != group.assembly_number:
+        _set_assembly_number(group, assembly_number)
+        group.updated_at = utcnow()
     mapping.required_spools, mapping.notes = data.required_spools, data.notes
     mapping.updated_at = utcnow()
     _event(s, order, user, 'GPN_ASSEMBLY_UPDATED', before=before,

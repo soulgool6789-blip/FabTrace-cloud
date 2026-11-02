@@ -100,9 +100,9 @@ def test_bom_scope_quantities_gaps_and_literal_identifiers(api, order_scope):
     assert list(book.sheets) == ['Assembly summary', 'Bill of materials', 'Spool register', 'Export info']
     summary = values(book, 'Assembly summary')
     first = next(row for row in summary if row['Assembly ID'] == 'ASM-A')
-    assert first['PO number'] == '000012345' and first['GPN / Assembly number'] == '000007'
+    assert first['PO number'] == '000012345' and first['GPN'] == '000007'
     assert first['Retained assembly part number'] == '000099-ASM-A'
-    assert 'GPN' not in first and 'Assembly part number' not in first
+    assert first['Assembly number'] == '' and 'Assembly part number' not in first
     assert 'Assembly description' not in first
     assert all('Spool description' not in row for row in values(book, 'Spool register'))
     assert (first['Required spools'], first['Linked spools'], first['Missing spools']) == (2, 1, 1)
@@ -123,7 +123,7 @@ def test_bom_scope_quantities_gaps_and_literal_identifiers(api, order_scope):
 
 
 @pytest.mark.parametrize('suffix', ('bom.xlsx', 'bom-template.xlsx'))
-def test_combined_number_is_one_column_with_drafts_and_leading_zeros(api, suffix):
+def test_separate_numbers_preserve_unknown_assembly_drafts_and_leading_zeros(api, suffix):
     detail = make_order(api)
     detail, gpn_id = add_gpn(api, detail, '000007')
     detail = add_assembly(api, detail, gpn_id, 'COMBINED-ASM', required=3, part_number='000007')
@@ -137,26 +137,61 @@ def test_combined_number_is_one_column_with_drafts_and_leading_zeros(api, suffix
     material_sheet = 'BOM template' if suffix == 'bom-template.xlsx' else 'Bill of materials'
     for sheet in ('Assembly summary', material_sheet, 'Spool register'):
         headers = book.headers(sheet)
-        assert headers[:3] == ['PO number', 'GPN / Assembly number', 'Assembly ID']
-        assert all(name not in headers for name in ('GPN', 'Assembly part number', 'Retained assembly part number'))
+        assert headers[:4] == ['PO number', 'GPN', 'Assembly number', 'Assembly ID']
+        assert all(name not in headers for name in ('GPN / Assembly number', 'Assembly part number', 'Retained assembly part number'))
         rows = book.records(sheet)
         identity = next(row for row in rows if row['Assembly ID'].value == 'COMBINED-ASM')
-        assert identity['GPN / Assembly number'].value == '000007'
-        assert identity['GPN / Assembly number'].kind == 'inlineStr'
-        draft = next(row for row in rows if row['GPN / Assembly number'].value == '000008')
+        assert identity['GPN'].value == '000007'
+        assert identity['GPN'].kind == 'inlineStr'
+        assert identity['Assembly number'].value == ''
+        draft = next(row for row in rows if row['GPN'].value == '000008')
         assert draft['Assembly ID'].value == ''
     summary = values(book, 'Assembly summary')
     planned = next(row for row in summary if row['Assembly ID'] == 'COMBINED-ASM')
     assert (planned['Required spools'], planned['Linked spools'], planned['Missing spools']) == (3, 1, 2)
-    draft = next(row for row in summary if row['GPN / Assembly number'] == '000008')
-    assert draft['Required spools'] is None and 'Finish GPN / Assembly setup' in draft['Planning status']
+    draft = next(row for row in summary if row['GPN'] == '000008')
+    assert draft['Required spools'] is None and 'Finish assembly setup' in draft['Planning status']
     rows = [row for row in values(book, material_sheet) if row['Spool ID'] == 'COMBINED-SP']
     if suffix == 'bom.xlsx':
         assert [row['Required quantity'] for row in rows] == [2, 1]  # Never multiply by three required spools.
     else:
         assert len(rows) == 1 and rows[0]['Required quantity'] is None
     scoped_draft = download(api, project, suffix=suffix, gpn_id=draft_id)
-    assert all(row['GPN / Assembly number'] == '000008' for row in values(scoped_draft, material_sheet))
+    assert all(row['GPN'] == '000008' for row in values(scoped_draft, material_sheet))
+    assert snapshot(api) == before
+
+
+@pytest.mark.parametrize('suffix', ('bom.xlsx', 'bom-template.xlsx'))
+def test_distinct_assembly_numbers_share_gpn_without_mixing_export_scope(api, suffix, monkeypatch):
+    monkeypatch.setattr(importlib.import_module('main'), 'PUBLIC_BASE_URL', 'https://fabtrace.example')
+    response = api.post('/api/order-setup', {
+        'purchase_order': 'SPLIT-NUMBERS-PO',
+        'assemblies': [
+            {'gpn': '000007', 'assembly_number': number, 'assembly_quantity': 1,
+             'spools': [{'spool_number': 'SPOOL-' + number, 'quantity_per_assembly': 1,
+                         'welds_per_spool': 0}]}
+            for number in ('000123', '000124')],
+    })
+    assert response.status_code == 201, response.text
+    saved = response.json()
+    project = saved['order']['project_id']
+    generated = api.post(f'/api/order-labels/{project}/generate', {
+        'expected_version': saved['order']['version'], 'kind': 'Spool',
+        'location': 'Receiving', 'handler': BADGES['handler']})
+    assert generated.status_code == 200, generated.text
+    before = snapshot(api)
+    material_sheet = 'BOM template' if suffix == 'bom-template.xlsx' else 'Bill of materials'
+    for group in saved['assemblies']:
+        book = download(api, project, suffix=suffix, gpn_id=group['gpn_id'])
+        for sheet in ('Assembly summary', material_sheet, 'Spool register', 'Setup quantities'):
+            rows = book.records(sheet)
+            assert rows
+            assert all(row['GPN'].value == '000007' for row in rows)
+            assert all(row['Assembly number'].value == group['assembly_number'] for row in rows)
+            assert all(row['GPN'].kind == row['Assembly number'].kind == 'inlineStr' for row in rows)
+        setup = values(book, 'Setup quantities')
+        assert {row['Spool number'] for row in setup} == {'SPOOL-' + group['assembly_number']}
+        assert not book.formulas
     assert snapshot(api) == before
 
 
@@ -242,8 +277,8 @@ def test_new_empty_order_and_unplanned_gpn_have_usable_blank_template(api):
     detail, gpn_id = add_gpn(api, detail, 'FUTURE-GPN')
     book = download(api, project, gpn_id=gpn_id)
     row = values(book, 'Bill of materials')[0]
-    assert row['GPN / Assembly number'] == 'FUTURE-GPN' and row['Required quantity'] is None
-    assert 'Finish GPN / Assembly setup' in row['Planning status']
+    assert row['GPN'] == 'FUTURE-GPN' and row['Required quantity'] is None
+    assert 'Finish assembly setup' in row['Planning status']
 
 
 def test_legacy_unmapped_spools_and_assemblies_are_visible_unfiltered(api, order_scope):
@@ -286,7 +321,7 @@ def test_full_admin_export_includes_order_models_with_exact_raw_columns(api, ord
     assert book.headers('Purchase orders') == ['project_id', 'purchase_order', 'normalized_number',
         'customer', 'normalized_customer', 'notes', 'version', 'created_by', 'created_at', 'updated_at']
     assert book.headers('Order GPNs') == ['id', 'project_id', 'gpn', 'normalized_gpn',
-        'description', 'created_by', 'created_at', 'updated_at']
+        'assembly_number', 'normalized_assembly_number', 'description', 'created_by', 'created_at', 'updated_at']
     assert book.headers('Order assemblies') == ['item_id', 'gpn_id', 'assembly_part_number',
         'required_spools', 'notes', 'created_by', 'created_at', 'updated_at']
     assert values(book, 'Purchase orders')[0]['purchase_order'] == '000012345'

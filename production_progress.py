@@ -373,7 +373,8 @@ def _tree(s, selected_project_id=''):
             summary = _finish_summary(summary)
             planned_gaps['missing_assemblies'] += missing_assemblies
             planned_gaps['missing_spools'] += unregistered_spools
-            gpns.append({'id': group.id, 'gpn': group.gpn, 'setup_needed': setup_needed,
+            gpns.append({'id': group.id, 'gpn': group.gpn, 'assembly_number': group.assembly_number,
+                'setup_needed': setup_needed,
                 'quantity_plan': quantity_plan, 'registered_assemblies': len(assemblies),
                 'registration_needed': bool(missing_assemblies),
                 'summary': summary, 'stages': _stages(nodes, identifiers, summary),

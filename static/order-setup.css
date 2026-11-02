@@ -76,7 +76,8 @@
 #orderSetupPage .os-entry-card{margin:16px 0}
 #orderSetupPage .os-entry-top{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;margin-bottom:20px}
 #orderSetupPage .os-entry-top .os-eyebrow{display:block;margin-bottom:5px}
-#orderSetupPage .os-assembly-fields{display:grid;grid-template-columns:2fr 1fr;gap:20px}
+#orderSetupPage .os-assembly-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(120px,.65fr);gap:20px}
+#orderSetupPage .os-identity-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
 #orderSetupPage .os-small{font-size:12px;padding:7px 9px;color:#647d90;border-color:#cfdae4;background:#fff;min-height:35px}
 #orderSetupPage .os-add-row{margin:20px 0}
 #orderSetupPage .os-quantity-tag{display:inline-block;white-space:nowrap;background:#eaf4fb;border:1px solid #cbe0ee;border-radius:7px;font-size:13px;font-weight:650;color:#426b85;padding:8px 10px}

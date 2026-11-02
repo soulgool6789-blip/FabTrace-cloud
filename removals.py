@@ -51,7 +51,7 @@ class ChangeIn(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     expected_version: int = Field(ge=0, strict=True)
     preview_token: str = Field(min_length=64, max_length=64, pattern=r'^[0-9a-f]{64}$')
-    confirmation: str = Field(min_length=1, max_length=200)
+    confirmation: str = Field(min_length=1, max_length=400)
     reason: str = Field(min_length=4, max_length=3000)
 
     @field_validator('*', mode='before')
@@ -215,7 +215,11 @@ def _identity(s, kind, record_id):
     if kind == 'order':
         title, confirmation = 'P.O. ' + row.purchase_order, row.purchase_order
     elif kind == 'gpn':
-        title, confirmation = 'GPN / Assembly ' + row.gpn, row.gpn
+        if row.assembly_number:
+            title = 'Assembly Number ' + row.assembly_number + ' · GPN ' + row.gpn
+            confirmation = row.assembly_number + ' / ' + row.gpn
+        else:
+            title, confirmation = 'GPN / Assembly ' + row.gpn, row.gpn
     else:
         title = row.kind + ' ' + row.id
         if row.google_part_number:

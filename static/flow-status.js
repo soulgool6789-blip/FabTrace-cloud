@@ -84,8 +84,11 @@
       (stage ? groups.get(stage.key) : unknown).push(entry);
     }
     const card = row => {
+      const assembly = typeof row.gpn === 'string'
+        ? ['Assembly Number: ' + (row.assembly_number || 'Not entered'), 'GPN: ' + (row.gpn || 'Not entered')]
+        : [row.assembly_number || row.assembly_id];
       const context = [row.purchase_order ? 'P.O. ' + row.purchase_order : row.project_name || row.project_id,
-        row.assembly_number || row.assembly_id].filter(Boolean);
+        ...assembly].filter(Boolean);
       return `<li data-process-spool="${escape(row.item_id)}"><button type="button" class="fst-spool-link" ${attribute}="${escape(row.item_id)}" data-spool-project="${escape(row.project_id || '')}" aria-label="Open process flow for ${escape(spoolNumber(row))}">${spoolText(row, spoolNumber(row), 'strong')}</button>${context.length ? `<small class="fst-spool-context">${context.map(escape).join(' · ')}</small>` : ''}${row.flow_stage?.needs_station_selection ? `<small class="fst-spool-context">Recorded location: ${escape(row.flow_stage.recorded_location_label || 'Unmapped station')}. Select a flow station on the next transfer.</small>` : ''}${row.flow_stage?.blocked || row.on_hold || Number(row.open_exceptions) > 0 ? `<span class="fst-spool-blocked">${row.flow_stage?.key === 'ready_to_ship' ? 'Release blocked' : 'Work blocked'}</span>` : ''}</li>`;
     };
     const section = (stage, entries, index) => {

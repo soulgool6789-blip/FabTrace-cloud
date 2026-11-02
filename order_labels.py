@@ -4,10 +4,16 @@ Reads never create inventory. Versioned generation registers only missing
 physical identities using actual custody, without inventing production or QA.
 """
 from collections import defaultdict
+import re
 from typing import Literal
+import unicodedata
+from urllib.parse import quote
+from xml.etree import ElementTree
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import Field
+import qrcode
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -99,6 +105,7 @@ def _overview(s, scope, user, kind='Spool'):
         assembly_quantity = plan['assembly_quantity'] if plan is not None else None
         quantity = plan['total_spools'] if plan is not None else None
         rows.append({'gpn_id': group.id, 'gpn': group.gpn,
+            'assembly_number': group.assembly_number or '',
             'assembly_quantity': assembly_quantity, 'planned_quantity': quantity,
             'registered_assembly_quantity': assembly_counts[group.id],
             'remaining_assembly_quantity': max(0, assembly_quantity - assembly_counts[group.id]) if plan is not None else None,
@@ -145,14 +152,15 @@ def list_labels(project_id: str,
         requirements = {group_id: {_key(line['spool_number']): line for line in plan['spools']}
                         for group_id, plan in plans.items()}
         query = _spool_query(Item, OrderGpn, OrderAssembly.item_id, SpoolPlan.item_id,
-            SpoolPlan.planned_welds, SpoolQrIdentity).outerjoin(
-                SpoolQrIdentity, SpoolQrIdentity.item_id == Item.id)
+            SpoolPlan.planned_welds, SpoolQrIdentity, Employee.name).outerjoin(
+                SpoolQrIdentity, SpoolQrIdentity.item_id == Item.id).outerjoin(
+                Employee, Employee.badge == Item.handler)
         rows = snapshot.execute(query.where(OrderGpn.id.in_(ids))
             .order_by(OrderGpn.gpn, Item.google_part_number, SpoolQrIdentity.sequence, Item.created_at, Item.id)
             .offset(offset).limit(limit)).all() if ids else []
         from spool_presentation import item_presentations
         displays = item_presentations(snapshot, [row[0] for row in rows])
-        for item, group, parent_id, plan_id, planned_welds, identity in rows:
+        for item, group, parent_id, plan_id, planned_welds, identity, handler_name in rows:
             requirement = requirements.get(group.id, {}).get(_key(item.google_part_number or ''))
             alias = identity.display_code if identity else None
             items.append({'id': item.id, 'kind': 'Spool',
@@ -162,11 +170,196 @@ def list_labels(project_id: str,
                 'planned_welds': planned_welds,
                 'bom': item_bom_summary(item, snapshot),
                 'purchase_order': order.purchase_order, 'gpn_id': group.id, 'gpn': group.gpn,
+                'assembly_number': group.assembly_number or '',
+                'handler': item.handler, 'handler_name': handler_name or '',
                 'qr_url': phone_link('spool', alias) if ready and alias else
                           phone_link('item', item.id) if ready else None})
         total = snapshot.scalar(_spool_query(func.count(Item.id)).where(OrderGpn.id.in_(ids))) if ids else 0
         return {'order': _order_dict(order), 'kind': kind, 'items': items,
                 'total': total, 'offset': offset, 'limit': limit, 'qr_ready': ready}
+
+
+def _label_text(value):
+    # Captions are text, never markup. Normalize whitespace and replace the few
+    # control characters XML cannot represent, including in legacy names.
+    text = ''.join(character if (0x20 <= ord(character) <= 0xD7FF or
+        0xE000 <= ord(character) <= 0xFFFD or 0x10000 <= ord(character) <= 0x10FFFF)
+        else ' ' for character in str(value or ''))
+    return ' '.join(text.split())
+
+
+def _label_lines(value, width):
+    """Wrap all caption text, including long identifiers, without truncation."""
+    lines, current, used = [], '', 0
+    for word in _label_text(value).split(' '):
+        word_width = sum(0 if unicodedata.combining(char) else
+                         2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+                         for char in word)
+        if current and used + 1 + word_width > width:
+            lines.append(current)
+            current, used = '', 0
+        elif current:
+            current += ' '
+            used += 1
+        for char in word:
+            size = 0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+            if current and used + size > width:
+                lines.append(current)
+                current, used = '', 0
+            current += char
+            used += size
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _label_svg(*, code, purchase_order, gpn, assembly_number, handler, handler_name, qr_url,
+               kind='Spool', part_number=''):
+    """A standalone printable label; no remote images, scripts or new identity."""
+    namespace = 'http://www.w3.org/2000/svg'
+    root = ElementTree.Element('svg', {
+        'xmlns': namespace, 'width': '2.4in', 'role': 'img', 'aria-labelledby': 'label-title',
+        'font-family': 'DejaVu Sans Mono, Liberation Mono, Courier New, monospace',
+        'fill': '#142e40'})
+    ElementTree.SubElement(root, 'title', {'id': 'label-title'}).text = _label_text(kind + ' label ' + code)
+    background = ElementTree.SubElement(root, 'rect', {'width': '720', 'fill': 'white'})
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=4)
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    qr_group = ElementTree.SubElement(root, 'svg', {
+        'id': 'label-qr', 'x': '195', 'y': '24', 'width': '330', 'height': '330',
+        'viewBox': f'0 0 {len(matrix)} {len(matrix)}', 'shape-rendering': 'crispEdges'})
+    ElementTree.SubElement(qr_group, 'path', {'fill': 'black', 'd': ''.join(
+        f'M{x} {y}h1v1h-1z' for y, row in enumerate(matrix)
+        for x, dark in enumerate(row) if dark)})
+    y = 380
+
+    def caption(value, size, width, *, weight='normal', field=''):
+        nonlocal y
+        for line in _label_lines(value, width):
+            ElementTree.SubElement(root, 'text', {
+                'x': '360', 'y': str(y), 'text-anchor': 'middle',
+                'font-size': str(size), 'font-weight': weight,
+                'data-field': field}).text = line
+            y += size + 10
+        y += 5
+
+    caption(kind.upper(), 24, 40, weight='bold', field='kind')
+    caption(code, 40, 27, weight='bold', field='spool' if kind == 'Spool' else 'item')
+    if part_number:
+        caption('Google part number ' + part_number, 30, 34, field='part-number')
+    if purchase_order:
+        caption('P.O. ' + purchase_order, 30, 34, field='purchase-order')
+    if gpn:
+        caption('GPN ' + gpn, 30, 34, field='gpn')
+    if assembly_number:
+        caption('Assembly Number ' + assembly_number, 30, 34, field='assembly-number')
+    assigned = ' · '.join(_label_text(value) for value in (handler_name, handler) if _label_text(value)) or 'Not assigned'
+    caption('Assigned to ' + assigned, 30, 34, field='assigned-to')
+    height = max(735, y + 20)
+    root.set('height', f'{height / 300:.3f}in')
+    root.set('viewBox', f'0 0 720 {height}')
+    background.set('height', str(height))
+    return ElementTree.tostring(root, encoding='utf-8', xml_declaration=True)
+
+
+def _label_attachment(**fields):
+    filename = re.sub(r'[\\/\x00-\x1f\x7f]', '_', fields['code']) + '-label.svg'
+    return Response(_label_svg(**fields), media_type='image/svg+xml', headers={
+        'Content-Disposition': "attachment; filename=\"item-label.svg\"; filename*=UTF-8''" + quote(filename, safe=''),
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
+
+
+def item_label_projections(s, item_ids):
+    """Current caption data for exact active items, in one bounded read query.
+
+    Registered ownership wins over a later plan. Unmapped free-text Item.project
+    and a spool's part number never stand in for a purchase order or assembly GPN.
+    """
+    ids = list(dict.fromkeys(item_ids))
+    if not ids:
+        return {}
+    parent_id = func.coalesce(OrderSpool.assembly_id, SpoolPlan.assembly_id)
+    project_id = func.coalesce(OrderGpn.project_id, SpoolPlan.project_id)
+    rows = s.execute(select(Item, Employee.name, SpoolQrIdentity, OrderSpool.item_id,
+            SpoolPlan.item_id, OrderGpn, PurchaseOrder)
+        .select_from(Item)
+        .outerjoin(Employee, Employee.badge == Item.handler)
+        .outerjoin(SpoolQrIdentity, SpoolQrIdentity.item_id == Item.id)
+        .outerjoin(OrderSpool, OrderSpool.item_id == Item.id)
+        .outerjoin(SpoolPlan, SpoolPlan.item_id == Item.id)
+        .outerjoin(OrderAssembly, OrderAssembly.item_id == parent_id)
+        .outerjoin(OrderGpn, OrderGpn.id == OrderAssembly.gpn_id)
+        .outerjoin(PurchaseOrder, PurchaseOrder.project_id == project_id)
+        .where(Item.id.in_(ids), Item.kind != 'Assembly', item_not_removed(Item.id),
+               item_not_removed(parent_id), gpn_not_removed(OrderGpn.id), project_not_removed(project_id))).all()
+    ready, result = phone_qr_ready(), {}
+    for item, employee_name, identity, registration, plan, group, order in rows:
+        physical_spool = bool(item.kind == 'Spool' or identity or registration or plan)
+        code = identity.display_code if identity else item.id
+        result[item.id] = {'id': item.id, 'kind': 'Spool' if physical_spool else item.kind,
+            'display_code': code, 'qr_alias': identity.display_code if identity else None,
+            'purchase_order': order.purchase_order if order else '',
+            'gpn': group.gpn if group else '', 'assembly_number': group.assembly_number if group else '',
+            'part_number': '' if physical_spool else item.google_part_number or '',
+            'handler': item.handler, 'handler_name': employee_name or '',
+            'qr_url': (phone_link('spool', code) if identity else phone_link('item', item.id)) if ready else None,
+            'download_url': '/api/order-labels/items/' + quote(item.id, safe='') + '/download.svg' if ready else None}
+    return result
+
+
+@router.get('/items/preview')
+def preview_item_labels(item_id: list[str] = Query(min_length=1, max_length=100),
+                        user: Employee = Depends(auth), s: Session = Depends(db)):
+    ids = list(dict.fromkeys(item_id))
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        projections = item_label_projections(snapshot, ids)
+        if len(projections) != len(ids):
+            raise HTTPException(404, 'Some selected items no longer have active printable labels. Refresh the selection.')
+        return {'items': [projections[identifier] for identifier in ids], 'qr_ready': phone_qr_ready()}
+
+
+@router.get('/items/{item_id}/download.svg')
+def download_item_label(item_id: str, user: Employee = Depends(auth), s: Session = Depends(db)):
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        item = snapshot.get(Item, item_id)
+        if item is not None and item.kind == 'Assembly':
+            raise HTTPException(409, 'QR labels belong to individual spools. Open this assembly\'s spool records to print their labels.')
+        label = item_label_projections(snapshot, [item_id]).get(item_id)
+        if label is None:
+            raise HTTPException(404, 'Active item label not found')
+        require_phone_qr_ready()
+    return _label_attachment(code=label['display_code'], purchase_order=label['purchase_order'],
+        gpn=label['gpn'], assembly_number=label['assembly_number'], handler=label['handler'],
+        handler_name=label['handler_name'], qr_url=label['qr_url'], kind=label['kind'],
+        part_number=label['part_number'])
+
+
+@router.get('/{project_id}/labels/{item_id}/download.svg')
+def download_label(project_id: str, item_id: str,
+                   user: Employee = Depends(auth), s: Session = Depends(db)):
+    """Read the exact active spool and current assignment without touching QA."""
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        order, groups, _, _ = _scope(snapshot, project_id)
+        ids = [group.id for group in groups]
+        row = snapshot.execute(_spool_query(Item, OrderGpn, SpoolQrIdentity, Employee.name)
+            .outerjoin(SpoolQrIdentity, SpoolQrIdentity.item_id == Item.id)
+            .outerjoin(Employee, Employee.badge == Item.handler)
+            .where(Item.id == item_id, OrderGpn.id.in_(ids))).first() if ids else None
+        if row is None:
+            raise HTTPException(404, 'Active spool label not found on this purchase order')
+        require_phone_qr_ready()
+        item, group, identity, handler_name = row
+        code = identity.display_code if identity else item.id
+        payload = phone_link('spool', code) if identity else phone_link('item', item.id)
+        fields = dict(code=code, purchase_order=order.purchase_order,
+            gpn=group.gpn, assembly_number=group.assembly_number or '',
+            handler=item.handler, handler_name=handler_name or '', qr_url=payload)
+    return _label_attachment(**fields)
 
 
 def _spool_deficits(s, order, groups, plans):

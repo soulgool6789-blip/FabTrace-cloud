@@ -476,6 +476,7 @@ def _spool(s, item_id):
 
 
 def _spool_detail(s, item_id, user):
+    from spool_documents import _assembly_identity
     from spool_receiving import _physical_summary, mtr_detail, material_qa_states
     from flow import flow_stage_for_item
     from flow_stages import stage_status
@@ -501,7 +502,8 @@ def _spool_detail(s, item_id, user):
         and state['source_status']['adoptable'] and _can_edit(user) and not locked)}
     base = definition or {'spool_number': context['spool_number'], 'revision': '', 'lines': [],
                            'line_count': 0, 'total_pieces': None, 'traceable': False}
-    return {**base, 'context': display_context, 'bom_available': definition is not None,
+    return {**base, 'context': display_context, 'assembly_identity': _assembly_identity(s, context),
+        'bom_available': definition is not None,
         'flow_stage': flow_stage,
         'source_status': source_status, 'arrival': arrival,
         'mtr_documents': mtr_detail(s, item, user), 'traceability': {
@@ -557,7 +559,8 @@ def requirement_bom(requirement_id: str, user: Employee = Depends(auth), s: Sess
         if definition is None:
             raise HTTPException(404, 'No approved bill of materials is linked to this spool number')
         order = snapshot.get(PurchaseOrder, group.project_id)
-        return {**definition, 'context': {'kind': 'requirement', 'requirement_id': requirement.id,
+        return {**definition, 'assembly_identity': {'gpn': group.gpn, 'assembly_number': group.assembly_number},
+            'context': {'kind': 'requirement', 'requirement_id': requirement.id,
             'assembly_id': None, 'assembly_number': group.gpn, 'project_id': group.project_id,
             'purchase_order': order.purchase_order if order else None}}
 

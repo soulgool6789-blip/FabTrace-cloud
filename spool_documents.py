@@ -172,7 +172,7 @@ def guard_document_requirement_identity(s, group, *, gpn=None, spool_numbers=Non
     if not backed:
         return
     if gpn is not None and _key(gpn) != _key(group.gpn):
-        _fail('This assembly has uploaded spool BOM or drawing documents. Retain its saved assembly number '
+        _fail('This assembly has uploaded spool BOM or drawing documents. Retain its saved GPN '
               'so the uploaded files and revision history stay associated with the correct assembly and spools. '
               'Quantities and weld counts can still be edited before physical registration.', 409)
     if spool_numbers is not None:
@@ -226,6 +226,17 @@ def _target(s, scope, identity):
                'gpn_id': group.id if group else None, 'project_id': project_id,
                'purchase_order': order.purchase_order if order else None}
     return context, item, requirement
+
+
+def _assembly_identity(s, context):
+    """Current business labels, kept outside retained document/QA contexts.
+
+    The legacy context's assembly_number contains the previously combined GPN.
+    It remains unchanged because it is part of recorded acceptance evidence.
+    """
+    group = read_get(s, OrderGpn, context['gpn_id']) if context.get('gpn_id') else None
+    return {'gpn': group.gpn if group else (context.get('assembly_number') or ''),
+            'assembly_number': group.assembly_number if group else ''}
 
 
 def _locked_reason(s, scope, identity, item, requirement):
@@ -347,7 +358,8 @@ def _detail(s, scope, identity, user):
     for metadata, row in (local_documents + inherited_documents)[:100]:
         history.append(_metadata(row, inherited if metadata['inherited'] else local,
                                  metadata['inherited'], include_bom=False))
-    return {'context': context, **stage, 'version': local.version if local else 0,
+    return {'context': context, 'assembly_identity': _assembly_identity(s, context),
+            **stage, 'version': local.version if local else 0,
             'editable': _can_upload(user) and not locked, 'locked_reason': locked,
             'active': active, 'history': history,
             'inherited_from': ({'requirement_id': requirement.id, 'spool_number': requirement.spool_number}
@@ -460,7 +472,8 @@ ALIASES = {
     'drawing': ('drawing', 'drawingnumber', 'drawingno'),
     'revision': ('revision', 'rev', 'drawingrevision'),
     'source_page': ('sourcepage', 'sourcepages', 'sourcesheet', 'sheet', 'page'),
-    'assembly_number': ('assemblynumber', 'assembly', 'gpn', 'googlepartnumber'),
+    'assembly_number': ('assemblynumber', 'assembly'),
+    'gpn': ('gpn', 'googlepartnumber'),
 }
 HEADER_MAP = {alias: field for field, aliases in ALIASES.items() for alias in aliases}
 
@@ -479,7 +492,7 @@ def _text(value, maximum=1000):
     return text
 
 
-def _bom_grid(rows, spool_number, assembly_number, sheet=''):
+def _bom_grid(rows, spool_number, assembly_number, sheet='', *, gpn=None):
     header_index, fields = None, None
     for index, row in enumerate(rows[:30]):
         mapped = [_header(value) for value in row]
@@ -505,8 +518,14 @@ def _bom_grid(rows, spool_number, assembly_number, sheet=''):
             if _key(number) != _key(spool_number or ''):
                 skipped += 1
                 continue
-        if values.get('assembly_number') and assembly_number and _key(str(values['assembly_number'])) != _key(assembly_number):
-            _fail(f'BOM row {index} belongs to a different assembly number. Choose the corresponding spool in that assembly.')
+        if values.get('assembly_number'):
+            if gpn is not None and not assembly_number:
+                _fail(f'BOM row {index} declares an Assembly Number. Enter the actual Assembly Number in setup before uploading this BOM.')
+            if assembly_number and _key(str(values['assembly_number'])) != _key(assembly_number):
+                _fail(f'BOM row {index} belongs to a different assembly number. Choose the corresponding spool in that assembly.')
+        expected_gpn = gpn if gpn is not None else assembly_number
+        if values.get('gpn') and expected_gpn and _key(str(values['gpn'])) != _key(expected_gpn):
+            _fail(f'BOM row {index} belongs to a different GPN. Choose the corresponding spool in that assembly.')
         try:
             quantity = Decimal(str(values.get('quantity', '')).strip())
             if not quantity.is_finite() or quantity <= 0 or quantity > 100_000_000:
@@ -520,7 +539,7 @@ def _bom_grid(rows, spool_number, assembly_number, sheet=''):
         line['item'] = line['item'] or str(len(lines) + 1)
         line['quantity'] = int(quantity) if quantity == quantity.to_integral_value() else float(quantity)
         line['unit'] = line['unit'] or 'EA'
-        for key in ('spool_number', 'drawing', 'revision', 'source_page', 'assembly_number'):
+        for key in ('spool_number', 'drawing', 'revision', 'source_page', 'assembly_number', 'gpn'):
             if key in values:
                 line[key] = _text(values[key])
         lines.append(line)
@@ -650,15 +669,18 @@ def _read_files(files):
     return sources
 
 
-def _prepare(files, kind, sheet, context):
+def _prepare(files, kind, sheet, context, *, assembly_identity=None):
     if kind not in ('bom', 'isometric'):
         _fail('Choose Bill of material or Isometric drawings.')
     sources = _read_files(files)
     if kind == 'bom' and len(sources) != 1 and any(
             source['filename'].rsplit('.', 1)[-1].lower() in ('xlsx', 'csv', 'tsv') for source in sources):
         _fail('Upload one spreadsheet BOM at a time. Scanned PDF and image BOM pages can be selected together.')
-    selection = hashlib.sha256(json.dumps({'kind': kind, 'sheet': sheet, 'files': [
-        {key: value for key, value in source.items() if key != 'content'} for source in sources]},
+    selection_basis = {'kind': kind, 'sheet': sheet, 'files': [
+        {key: value for key, value in source.items() if key != 'content'} for source in sources]}
+    if assembly_identity is not None:
+        selection_basis['assembly_identity'] = assembly_identity
+    selection = hashlib.sha256(json.dumps(selection_basis,
         sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     first = sources[0]
     filename = first['filename']
@@ -682,7 +704,13 @@ def _prepare(files, kind, sheet, context):
                 _fail('The BOM must be a UTF-8 CSV/TSV file or an Excel .xlsx workbook.', 415)
             selected_sheet, media_type = '', 'text/tab-separated-values' if extension == '.tsv' else 'text/csv'
         if not sheet_required:
-            bom = _bom_grid(rows, context['spool_number'], context['assembly_number'], selected_sheet)
+            if assembly_identity is None:
+                bom = _bom_grid(rows, context['spool_number'], context.get('assembly_number'), selected_sheet)
+            else:
+                bom = _bom_grid(rows, context['spool_number'], assembly_identity.get('assembly_number'),
+                                selected_sheet, gpn=assembly_identity.get('gpn'))
+            if assembly_identity is not None:
+                bom['assembly_identity'] = dict(assembly_identity)
     else:
         writer = PdfWriter()
         normalized_bytes = 0
@@ -778,7 +806,8 @@ def preview_documents(scope: str, identity: str, kind: str = Form(...),
     locked = _locked_reason(s, scope, identity, item, requirement)
     if locked:
         _fail(locked, 409)
-    prepared = _prepare(files, kind, sheet.strip(), context)
+    prepared = _prepare(files, kind, sheet.strip(), context,
+                        assembly_identity=_assembly_identity(s, context))
     return {key: value for key, value in prepared.items() if key != 'content'}
 
 
@@ -800,7 +829,8 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
     # Parse without holding the topology lock, then re-check scope and version
     # under the same lock used by release, removal and production writers.
     initial_context, _, _ = _target(s, scope, identity)
-    prepared = _prepare(files, kind, sheet, initial_context)
+    initial_identity = _assembly_identity(s, initial_context)
+    prepared = _prepare(files, kind, sheet, initial_context, assembly_identity=initial_identity)
     if prepared['sheet_required']:
         _fail('Choose the worksheet containing the selected spool BOM, then preview it again.')
     if prepared['selection_sha256'] != expected_sha256:
@@ -812,7 +842,7 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
     if scope == 'spools':
         lock_item(s, identity)
     context, item, requirement = _target(s, scope, identity)
-    if context != initial_context:
+    if context != initial_context or _assembly_identity(s, context) != initial_identity:
         _fail('The selected spool scope changed while these files were being read. Reopen the spool and preview again.', 409)
     locked = _locked_reason(s, scope, identity, item, requirement)
     if locked:

@@ -1,6 +1,6 @@
 """Simple order quantities, before physical inventory or production is registered.
 
-One GPN identifies an assembly type. Its quantity describes the number to build;
+An assembly setup has independent Assembly Number and GPN fields. Its quantity describes the number to build;
 spool requirements describe quantities per assembly. These additive planning
 records never create physical IDs, custody, travelers, work or QA acceptance.
 """
@@ -17,7 +17,8 @@ from main import Base, Employee, Item, auth, db, permit, utcnow
 from tracking import Project, new_id
 from flow import lock_topology
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _event,
-                    _flush, _gpn, _key, _locked, read_snapshot)
+                    _flush, _gpn, _key, _locked, _guard_group_number,
+                    _set_assembly_number, read_snapshot)
 from permissions import has_capability
 from removals import (gpn_not_removed, item_not_removed, project_is_removed,
                       project_not_removed)
@@ -75,6 +76,7 @@ class SpoolRequirementIn(Input):
 
 class AssemblyRequirementIn(Input):
     gpn: str = Field(min_length=1, max_length=160)
+    assembly_number: str = Field(default='', max_length=160)
     assembly_quantity: int = Field(ge=1, le=10000, strict=True)
     spools: list[SpoolRequirementIn] = Field(min_length=1, max_length=200)
 
@@ -95,9 +97,10 @@ class CreateSetupIn(Input):
 
     @model_validator(mode='after')
     def unique_assembly_numbers(self):
-        keys = [_key(row.gpn) for row in self.assemblies]
+        keys = [('assembly', _key(row.assembly_number)) if row.assembly_number
+                else ('gpn', _key(row.gpn)) for row in self.assemblies]
         if len(keys) != len(set(keys)):
-            raise ValueError('Enter each Google part number / assembly number once and use its quantity')
+            raise ValueError('Enter each Assembly Number once per P.O.; when it is unknown, enter each GPN once and use its quantity')
         return self
 
 
@@ -106,6 +109,13 @@ class AddAssemblyRequirementIn(AssemblyRequirementIn):
 
 
 class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
+    assembly_number: str | None = Field(default=None, max_length=160)
+    reason: str = Field(min_length=4, max_length=3000)
+
+
+class EditAssemblyIdentityIn(Input):
+    expected_version: int = Field(ge=1, strict=True)
+    assembly_number: str = Field(max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
 
@@ -278,6 +288,7 @@ def _groups(s, project_ids, *, include_status=False):
     for group in groups:
         plan = plans.get(group.id)
         rows[group.project_id].append({'gpn_id': group.id, 'gpn': group.gpn,
+            'assembly_number': group.assembly_number, 'assembly_number_editable': True,
             'planned': plan is not None, 'legacy_scope': plan is None,
             'assembly_quantity': plan['assembly_quantity'] if plan else None,
             'spools_per_assembly': plan['spools_per_assembly'] if plan else None,
@@ -301,6 +312,10 @@ def setup_detail(s, project_id, user):
             'assemblies': rows, 'totals': _totals(rows), 'permissions': _permissions(user)}
 
 
+def _saved_detail(s, project_id, user, gpn_ids):
+    return {**setup_detail(s, project_id, user), 'saved_gpn_ids': list(gpn_ids)}
+
+
 def _list(s, user):
     orders = s.scalars(select(PurchaseOrder).where(project_not_removed(PurchaseOrder.project_id))
         .order_by(PurchaseOrder.purchase_order, PurchaseOrder.project_id)).all()
@@ -313,7 +328,8 @@ def _list(s, user):
 
 def _basis(s, group):
     plan = requirements_by_gpn(s, {group.id}).get(group.id)
-    return {'gpn_id': group.id, 'gpn': group.gpn, 'requirements': plan}
+    return {'gpn_id': group.id, 'gpn': group.gpn,
+            'assembly_number': group.assembly_number, 'requirements': plan}
 
 
 def _save_requirements(s, group, data, user):
@@ -364,15 +380,10 @@ def _save_requirements(s, group, data, user):
 
 
 def _add_group(s, order, data, user):
-    duplicate = s.scalar(select(OrderGpn).where(OrderGpn.project_id == order.project_id,
-                                               OrderGpn.normalized_gpn == _key(data.gpn)))
-    if duplicate:
-        from removals import gpn_is_removed
-        if gpn_is_removed(s, duplicate.id):
-            raise HTTPException(409, 'That assembly number is in Removed records. Restore its existing entry to use the same number.')
-        raise HTTPException(409, 'That Google part number / assembly number already exists in this P.O. Open its existing setup.')
+    _guard_group_number(s, order.project_id, data.gpn, data.assembly_number)
     group = OrderGpn(id=new_id('OGPN'), project_id=order.project_id, gpn=data.gpn,
                      normalized_gpn=_key(data.gpn), description='', created_by=user.badge)
+    _set_assembly_number(group, data.assembly_number)
     s.add(group)
     _flush(s)
     _save_requirements(s, group, data, user)
@@ -386,7 +397,7 @@ def guard_assembly_registration(s, group, required_spools, item_id=None):
         return
     item = s.get(Item, item_id) if item_id is not None else None
     if item is not None and _key(item.google_part_number or '') != group.normalized_gpn:
-        raise HTTPException(409, 'The physical assembly part number must match its planned Google part number / assembly number.')
+        raise HTTPException(409, 'The physical assembly part number must match its planned Google part number.')
     if not plan['spools_per_assembly'] or required_spools != plan['spools_per_assembly']:
         raise HTTPException(409, f'This assembly number requires {plan["spools_per_assembly"]} spools per assembly from its saved setup.')
     query = select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id,
@@ -449,7 +460,8 @@ def _declare_registered_weld_counts(s, order, group, data, user):
     saved = requirements_by_gpn(s, {group.id}).get(group.id)
     message = ('Physical assembly records already exist. Only previously undeclared weld counts can be set here; '
                'assembly numbers, quantities, spool numbers and declared weld counts are locked.')
-    if saved is None or data.gpn != group.gpn or data.assembly_quantity != saved['assembly_quantity']:
+    if (saved is None or data.gpn != group.gpn or data.assembly_quantity != saved['assembly_quantity']
+            or (data.assembly_number is not None and data.assembly_number != group.assembly_number)):
         raise HTTPException(409, message)
     incoming = {_key(line.spool_number): line for line in data.spools}
     if set(incoming) != {_key(line['spool_number']) for line in saved['spools']}:
@@ -480,7 +492,7 @@ def _declare_registered_weld_counts(s, order, group, data, user):
                'created_weld_count': created_welds,
                'remaining_weld_spools': len(pending) - len(initialized)}, reason=data.reason)
     _commit(s)
-    result = setup_detail(s, order.project_id, user)
+    result = _saved_detail(s, order.project_id, user, [group.id])
     result.update(initialized_weld_spool_count=len(initialized), created_weld_count=created_welds,
                   remaining_weld_spools=len(pending) - len(initialized))
     return result
@@ -527,7 +539,7 @@ def create_setup(data: CreateSetupIn, user: Employee = Depends(auth), s: Session
     _event(s, order, user, 'SETUP_CREATED', first=True, after={
         'purchase_order': order.purchase_order, 'assemblies': [_basis(s, group) for group in groups]})
     _commit(s)
-    return setup_detail(s, project.id, user)
+    return _saved_detail(s, project.id, user, [group.id for group in groups])
 
 
 @router.post('/{project_id}/assemblies', status_code=201)
@@ -537,7 +549,7 @@ def add_assembly_requirement(project_id: str, data: AddAssemblyRequirementIn,
     group = _add_group(s, order, data, user)
     _event(s, order, user, 'SETUP_ASSEMBLY_ADDED', after=_basis(s, group))
     _commit(s)
-    return setup_detail(s, project_id, user)
+    return _saved_detail(s, project_id, user, [group.id])
 
 
 @router.patch('/{project_id}/assemblies/{gpn_id}')
@@ -549,15 +561,31 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
     guard_document_requirement_identity(s, group, gpn=data.gpn)
     if s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
         return _declare_registered_weld_counts(s, order, group, data, user)
-    duplicate = s.scalar(select(OrderGpn.id).where(OrderGpn.project_id == project_id,
-        OrderGpn.normalized_gpn == _key(data.gpn), OrderGpn.id != group.id).limit(1))
-    if duplicate:
-        raise HTTPException(409, 'That assembly number already exists in this P.O., including retained removed entries.')
+    assembly_number = group.assembly_number if data.assembly_number is None else data.assembly_number
+    _guard_group_number(s, project_id, data.gpn, assembly_number, excluding=group.id)
     before = _basis(s, group)
     group.gpn, group.normalized_gpn, group.updated_at = data.gpn, _key(data.gpn), utcnow()
+    _set_assembly_number(group, assembly_number)
     _save_requirements(s, group, data, user)
     _event(s, order, user, 'SETUP_ASSEMBLY_UPDATED', before=before,
            after=_basis(s, group), reason=data.reason)
     _commit(s)
-    return setup_detail(s, project_id, user)
+    return _saved_detail(s, project_id, user, [group.id])
+
+
+@router.patch('/{project_id}/assemblies/{gpn_id}/identity')
+def edit_assembly_identity(project_id: str, gpn_id: str, data: EditAssemblyIdentityIn,
+                           user: Employee = Depends(auth), s: Session = Depends(db)):
+    """Correct descriptive assembly metadata without rewriting production scope."""
+    order = _locked(s, project_id, data.expected_version, user)
+    group = _gpn(s, project_id, gpn_id)
+    _guard_group_number(s, project_id, group.gpn, data.assembly_number, excluding=group.id)
+    before = {'gpn_id': group.id, 'gpn': group.gpn, 'assembly_number': group.assembly_number}
+    _set_assembly_number(group, data.assembly_number)
+    group.updated_at = utcnow()
+    _event(s, order, user, 'SETUP_ASSEMBLY_IDENTITY_UPDATED', before=before,
+        after={'gpn_id': group.id, 'gpn': group.gpn, 'assembly_number': group.assembly_number},
+        reason=data.reason)
+    _commit(s)
+    return _saved_detail(s, project_id, user, [group.id])
 

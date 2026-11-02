@@ -95,7 +95,7 @@ TABLE_SPECS = (
     _spec(TransferLocation, 'Transfer locations', 'id label normalized_label active version created_by created_at updated_by updated_at'),
     _spec(Project, 'Projects', 'id name client description created_by created_at'),
     _spec(PurchaseOrder, 'Purchase orders', 'project_id purchase_order normalized_number customer normalized_customer notes version created_by created_at updated_at', 'project_id'),
-    _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn description created_by created_at updated_at'),
+    _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn assembly_number normalized_assembly_number description created_by created_at updated_at'),
     _spec(OrderAssembly, 'Order assemblies', 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at', 'item_id'),
     _spec(OrderAssemblyRequirement, 'Assembly quantity plans', 'gpn_id assembly_quantity created_by created_at updated_at', 'gpn_id'),
     _spec(OrderSpool, 'Registered order spools', 'item_id assembly_id requirement_id created_by created_at', 'item_id'),
@@ -329,7 +329,7 @@ def _width(header):
         return 64
     if header in ('Assembly description', 'Spool description', 'Material description', 'Planning status'):
         return 44
-    if header in ('PO number', 'GPN', 'Assembly ID', 'Assembly part number', 'Spool ID',
+    if header in ('PO number', 'GPN', 'Assembly number', 'Assembly ID', 'Assembly part number', 'Retained assembly part number', 'Spool ID',
                   'Spool part number', 'Material part number', 'Assigned component IDs', 'BOM reference'):
         return 28
     if header == 'Entry':

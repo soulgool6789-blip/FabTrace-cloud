@@ -70,6 +70,69 @@ def test_remove_and_restore_empty_po_with_draft_gpns_retains_original_identity(a
     assert stable_business_state(api) == before
 
 
+def test_named_assembly_removal_distinguishes_repeated_gpns_and_preserves_legacy_confirmation(api):
+    from test_order_setup import branch, create_setup
+
+    saved = create_setup(api, assemblies=[
+        {**branch('000-SHARED-GPN', 1), 'assembly_number': number}
+        for number in ('000-ASM-A', '000-ASM-B', '')])
+    project_id = saved['order']['project_id']
+    ids = {row['assembly_number']: row['gpn_id'] for row in saved['assemblies']}
+    first = preview(api, 'gpn', ids['000-ASM-A'])
+    second = preview(api, 'gpn', ids['000-ASM-B'])
+    legacy = preview(api, 'gpn', ids[''])
+    assert first['title'] == 'Assembly Number 000-ASM-A · GPN 000-SHARED-GPN'
+    assert first['confirmation'] == '000-ASM-A / 000-SHARED-GPN'
+    assert second['title'] == 'Assembly Number 000-ASM-B · GPN 000-SHARED-GPN'
+    assert second['confirmation'] == '000-ASM-B / 000-SHARED-GPN'
+    assert legacy['title'] == 'GPN / Assembly 000-SHARED-GPN'
+    assert legacy['confirmation'] == '000-SHARED-GPN'
+    assert first['counts'] == {'orders': 0, 'gpns': 1, 'items': 0}
+    assert [row['record_id'] for row in first['affected']] == [ids['000-ASM-A']]
+    before = database_state(api)
+    for wrong in (second['confirmation'], legacy['confirmation']):
+        response = api.post(f'{ROOT}/gpn/{ids["000-ASM-A"]}/remove', body(first, confirmation=wrong))
+        assert response.status_code == 422 and database_state(api) == before
+    retained = stable_business_state(api)
+    change(api, 'gpn', ids['000-ASM-A'])
+    assert {row['id'] for row in current(api, project_id)['gpns']} == {ids['000-ASM-B'], ids['']}
+    assert stable_business_state(api) == retained
+    removed = ok(api.get(ROOT))['records']
+    assert len(removed) == 1 and removed[0]['record_id'] == ids['000-ASM-A']
+    assert removed[0]['title'] == first['title'] and removed[0]['confirmation'] == first['confirmation']
+    change(api, 'gpn', ids['000-ASM-A'], 'restore')
+    assert {row['id'] for row in current(api, project_id)['gpns']} == set(ids.values())
+    assert stable_business_state(api) == retained
+
+
+def test_assembly_number_edit_requires_a_new_removal_preview(api):
+    project_id = new_order(api)['order']['project_id']
+    group_id = group(api, project_id, '000-SHARED-GPN')
+    old = preview(api, 'gpn', group_id)
+    ok(api.patch(f'/api/order-setup/{project_id}/assemblies/{group_id}/identity', {
+        'expected_version': version(api, project_id), 'assembly_number': '000-ASM-NAMED',
+        'reason': 'Record the separately verified assembly identity'}))
+    before = database_state(api)
+    response = api.post(f'{ROOT}/gpn/{group_id}/remove', body(old))
+    assert response.status_code == 409 and database_state(api) == before
+    fresh = preview(api, 'gpn', group_id)
+    assert fresh['expected_version'] == old['expected_version']
+    assert fresh['preview_token'] != old['preview_token']
+    assert fresh['confirmation'] == '000-ASM-NAMED / 000-SHARED-GPN'
+    change(api, 'gpn', group_id)
+
+
+def test_named_assembly_removal_accepts_full_length_business_numbers(api):
+    project_id = new_order(api)['order']['project_id']
+    result = ok(api.post(f'/api/orders/{project_id}/gpns', {
+        'expected_version': version(api, project_id), 'assembly_number': 'A' * 160, 'gpn': 'G' * 160}), 201)
+    group_id = result['gpns'][0]['id']
+    record = preview(api, 'gpn', group_id)
+    assert record['confirmation'] == 'A' * 160 + ' / ' + 'G' * 160
+    changed = ok(api.post(f'{ROOT}/gpn/{group_id}/remove', body(record)))
+    assert changed['record_id'] == group_id and changed['removed']
+
+
 def test_item_removal_preserves_work_inspection_and_qr_identity(api):
     item_id = api.item('REMOVE-LEGACY-PART', welds_required=1)['id']
     ok(api.post(f'/api/items/{item_id}/weld', {'count': 1, 'weld_ids': 'W01', 'notes': 'Retained synthetic completed weld'}, role='welder'))
