@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, select, func, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from pwdlib import PasswordHash
-from permissions import Role, role_catalog, role_label, user_permissions, has_capability, require_capability
+from permissions import AssignableRole, role_catalog, legacy_role_catalog, role_label, user_permissions, has_capability, require_capability
 from upload_limits import SpoolDocumentUploadLimit
 from read_projection import prime_projection, read_projection
 
@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.02-employee-badge-name.1'
+APP_VERSION='2026.11.02-shop-positions.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -257,23 +257,26 @@ def me(u:Employee=Depends(auth)):
 @app.get('/api/permissions')
 def permissions(u:Employee=Depends(auth)):
     from permissions import VERSION
-    return {'version':VERSION,'roles':role_catalog(),'current':user_permissions(u)}
+    # Keep retired values present for already-open clients editing saved owners.
+    # Current clients filter selectable=False; employee writes enforce assignment.
+    legacy=legacy_role_catalog()
+    return {'version':VERSION,'roles':role_catalog()+legacy,'legacy_roles':legacy,'current':user_permissions(u)}
 
 class EmployeeIn(BaseModel):
     badge:str=Field(min_length=2,max_length=80,pattern=r'^[A-Za-z0-9_-]+$')
     name:str=Field(min_length=2,max_length=160)
     pin:str=Field(min_length=8,max_length=128)
-    role:Role
+    role:AssignableRole
 @app.get('/api/employees')
 def employees(u:Employee=Depends(auth),s:Session=Depends(db)):
     from administration import employee_not_removed
-    permit(u,'admin');return [asdict(x,'badge name role active'.split()) for x in s.scalars(
+    permit(u,'admin');return [{**asdict(x,'badge name role active'.split()),'role_label':role_label(x)} for x in s.scalars(
         select(Employee).where(employee_not_removed()).order_by(Employee.name)).all()]
 @app.get('/api/employees/directory')
 def employee_directory(u:Employee=Depends(auth),s:Session=Depends(db)):
     from administration import employee_not_removed
-    # Public-to-staff identity lookups expose only active badge, name and role.
-    return [asdict(x,'badge name role'.split()) for x in s.scalars(
+    # Staff identity lookups expose only active badge, name and position.
+    return [{**asdict(x,'badge name role'.split()),'role_label':role_label(x)} for x in s.scalars(
         select(Employee).where(Employee.active.is_(True),employee_not_removed()).order_by(Employee.name)).all()]
 
 @app.get('/api/employees/{badge}/qr.png')

@@ -10,13 +10,17 @@ const vm = require('node:vm');
 
 const elements = new Map();
 class Element {
-  constructor(id) { this.id=id;this.listeners={};this.dataset={};this.value='';this.disabled=false;this.open=false;this.attributes={};this.classes=new Set();this.classList={add:k=>this.classes.add(k),remove:k=>this.classes.delete(k),contains:k=>this.classes.has(k)}; }
+  constructor(id) { this.id=id;this.listeners={};this.dataset={};this.children=[];this.value='';this.disabled=false;this.open=false;this.attributes={};this.classes=new Set();this.classList={add:k=>this.classes.add(k),remove:k=>this.classes.delete(k),contains:k=>this.classes.has(k)}; }
   set innerHTML(value) {
     this.html=value;
     for(const match of value.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) {
       const el=new Element(match[1]);
       const attr=match[0].match(/\bvalue="([^"]*)"/);if(attr)el.value=attr[1];
       elements.set(match[1],el);
+    }
+    for(const match of value.matchAll(/<select[^>]+id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)){
+      const options=[...match[2].matchAll(/<option value="([^"]*)"([^>]*)>/g)],select=elements.get(match[1]);
+      select.html=match[2];select.value=(options.find(row=>row[2].includes('selected'))||options[0])?.[1]||'';
     }
   }
   get innerHTML() { return this.html||''; }
@@ -27,6 +31,10 @@ class Element {
   focus() {}
   setSelectionRange() {}
   scrollIntoView() {}
+  append(child) {this.children.push(child);child.parent=this;}
+  remove() {if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);}
+  querySelector(selector) {if(selector==='[data-remove-template]')return this.removeButton||(this.removeButton=new Element('remove-template'));return null;}
+  querySelectorAll(selector) {return selector==='[data-template-row]'?this.children.filter(child=>child.dataset.templateRow):[];}
 }
 for(const id of ['trackingContent','trackingDialog','trackingDialogTitle','trackingDialogFields','trackingDialogForm','trackingDialogSubmit','trackingDialogError','trackingDialogClose','trackingDialogCancel','navTracking','itemTrackingBtn'])elements.set(id,new Element(id));
 
@@ -42,7 +50,7 @@ function scopedWeld(){const row=structuredClone(weld),p=require('./ui_permission
 function scopedSpool(){const row=structuredClone(spool);row.welds=[scopedWeld()];return row;}
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const context={
-  document:{getElementById:id=>elements.get(id)||null},
+  document:{getElementById:id=>elements.get(id)||null,createElement:tag=>new Element(tag)},
   me:{badge:'ADMIN',name:'Administrator',role:'admin'},current:null,
   URL,URLSearchParams,Date,console,esc,AbortController,
   setTimeout:(fn,delay)=>{readTimeouts.set(++timeoutId,{fn,delay});return timeoutId},clearTimeout:id=>readTimeouts.delete(id),
@@ -123,7 +131,7 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   assert.doesNotMatch(html(),/data-ft-action="evidence"/,'an inspector-owned requirement is read-only to a welder');
   assert.match(html(),/data-ft-id="fill_cap"/);
 
-  for(const [position,expected] of [['fitup_welder',['fitup']],['process_welder',['fill_cap','complete']],['painter',[]],['finisher',[]],['handler',[]],['supervisor',[]],['misc',[]]]){
+  for(const [position,expected] of [['fitup_welder',['fitup']],['process_welder',['fill_cap','complete']],['painter',[]],['finisher',[]],['handler',[]],['supervisor',[]],['misc',[]],['pressure_testing_technician',[]],['ndt',[]]]){
     context.me.role=position;await context.FabTracking.open({spool:'S1',weld:'WLD1'});
     assert.deepEqual([...html().matchAll(/data-ft-action="work" data-ft-id="([^"]+)"/g)].map(x=>x[1]),expected,position+' sees only its authorized welding operations');
     if(!expected.length){const before=calls.filter(c=>c.method).length;await click('work','fill_cap');assert.equal(elements.get('trackingDialog').open,false);assert.equal(calls.filter(c=>c.method).length,before);}
@@ -138,6 +146,37 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   context.me.role='inspector';await context.FabTracking.open({spool:'S1'});
   assert.match(html(),/data-ft-action="dimensional"/);
   assert.match(html(),/data-ft-action="release"/);
+
+  // New testing positions can supply their assigned evidence without gaining QA or welding controls.
+  for(const position of ['pressure_testing_technician','ndt']){
+    requirement.owner_role=position;context.me.role=position;await context.FabTracking.open({spool:'S1',weld:'WLD1'});
+    assert.match(html(),/data-ft-action="evidence"/);assert.doesNotMatch(html(),/data-ft-action="(?:review-accept|work|edit-weld)"/);
+    const before=calls.filter(c=>c.method).length;await click('review-accept','11');assert.equal(elements.get('trackingDialog').open,false);assert.equal(calls.filter(c=>c.method).length,before);
+    await click('evidence','11');await submit({reference:'TEST-'+position,result:'pass',notes:'Recorded result for QA review'});
+    assert.equal(calls.filter(c=>c.method).at(-1).url,'/api/tracking/requirements/11/evidence');
+  }
+  requirement.owner_role='inspector';context.me.role='admin';await context.FabTracking.open({spool:'S1',weld:'WLD1'});
+  await click('new-requirement');
+  const newOwner=elements.get('ft-field-owner_role');assert.equal(newOwner.value,'inspector');
+  assert.doesNotMatch(newOwner.innerHTML,/value="(?:welder|misc)"/);
+  assert.match(newOwner.innerHTML,/value="pressure_testing_technician"/);assert.match(newOwner.innerHTML,/value="ndt"/);
+  assert.match(newOwner.innerHTML,/>Shop Foreman<|>Fab Prep Technician</);
+  elements.get('trackingDialog').close();
+
+  // A next revision retains an actual historical owner; unrelated edits never default to Administrator.
+  for(const retired of ['welder','misc']){
+    const template={id:'TPL-'+retired,code:'JOB-'+retired,name:'Retained owner',revision:1,required_operations:['fill_cap'],requirements:[{code:'CUSTOM',label:'Recorded check',stage:'after_welding',owner_role:retired,check:'none',source:'Original source',evidence_required:true}]};
+    overview.templates=[template];await context.FabTracking.open({view:'templates'});await click('copy-template',template.id);
+    const owner=elements.get('ft-field-req1_owner_role'),other=retired==='welder'?'misc':'welder';
+    assert.equal(owner.value,retired);assert.match(owner.innerHTML,/retained owner/);assert.ok(!owner.innerHTML.includes('value="'+other+'"'));
+    assert.ok(owner.innerHTML.includes('value="'+retired+'" selected>'));
+    elements.get('ftAddTemplateRequirement').onclick();const nextOwner=elements.get('ft-field-req2_owner_role');
+    assert.equal(nextOwner.value,'inspector');assert.doesNotMatch(nextOwner.innerHTML,/value="(?:welder|misc)"/);
+    await submit({code:template.code,name:template.name,revision:'2',source:'Updated specification',operation_fill_cap:'on',req1_code:'CUSTOM',req1_label:'Recorded check',req1_stage:'after_welding',req1_owner_role:owner.value,req1_check:'none',req1_source:'Corrected reference',req1_evidence_required:'on',req2_code:'NDT',req2_label:'Assigned NDT',req2_stage:'after_welding',req2_owner_role:'ndt',req2_check:'none',req2_source:'New test instruction',req2_evidence_required:'on'});
+    const call=calls.filter(c=>c.method).at(-1);assert.equal(call.url,'/api/tracking/templates');
+    const payload=JSON.parse(call.body);assert.equal(payload.requirements[0].owner_role,retired);assert.equal(payload.requirements[0].source,'Corrected reference');assert.equal(payload.requirements[1].owner_role,'ndt');assert.equal(template.requirements[0].source,'Original source');
+  }
+  overview.templates=[];context.me.role='inspector';await context.FabTracking.open({spool:'S1'});
 
   failSpool=true;await context.FabTracking.open({spool:'S1'});
   assert.match(html(),/Tracking records could not be loaded/);
@@ -177,5 +216,5 @@ const submit=async(values)=>{const form=elements.get('trackingDialogForm');form.
   readHook=url=>url==='/api/tracking/spools/S1'?Promise.resolve({...scopedSpool(),item:{...spool.item,id:'OTHER-COPY'}}):undefined;
   await context.FabTracking.open({spool:'S1'});assert.match(html(),/does not match the selected item/);assert.doesNotMatch(html(),/data-ft-action="release"/);
   readHook=null;context.FabTracking.cancelPending();assert.equal(readTimeouts.size,0);
-  console.log('PASS: routes, metrics, role actions, configured production stages, evidence escaping, safe links, optimistic-write payload, failed-write recovery, focused spool/weld reads with planning catalogs, cancellation, bounded loading, exact-copy identity, and deep-link retry.');
+  console.log('PASS: routes, metrics, scoped trade/QA actions, new testing evidence, current-only new requirement owners, exact retired template-owner retention, configured production stages, evidence escaping, safe links, optimistic-write payload, failed-write recovery, focused spool/weld reads with planning catalogs, cancellation, bounded loading, exact-copy identity, and deep-link retry.');
 })().catch(error=>{console.error(error);process.exitCode=1});

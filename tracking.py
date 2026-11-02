@@ -1628,7 +1628,7 @@ def _item_exceptions(s, item):
     for weld in welds:
         if not _production_complete(s, weld):
             result.append({**base, 'weld_id': weld.id, 'weld_number': weld.number, 'type': 'work',
-                'label': 'Configured welding operations incomplete', 'status': 'pending', 'owner_role': 'welder'})
+                'label': 'Configured welding operations incomplete', 'status': 'pending', 'owner_role': 'process_welder'})
     for hold in _holds(s, item.id, all_scopes=True):
         if hold.closed_at is None:
             weld = weld_by_id.get(hold.weld_id)

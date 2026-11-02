@@ -128,9 +128,13 @@ async function check(name,fn){await fn();checks.push(name);}
   });
   await check('roles explain ownership without granting mutations',async()=>{
     setProjects(complete());
-    const roles={handler:/Material coordination/,welder:/root and fill/,fitup_welder:/Fit-up and tack/,process_welder:/PWHT/,painter:/Sandblast and paint/,finisher:/Component preparation/,misc:/General support/,supervisor:/specialized work and QA acceptance/,inspector:/QA\/QC inspections/,admin:/Full site administration/};
+    const roles={handler:/Material coordination/,welder:/root and fill/,fitup_welder:/Fit-up and tack/,process_welder:/PWHT/,painter:/Sandblast and paint/,finisher:/Component preparation/,pressure_testing_technician:/pressure-test evidence/,ndt:/Assigned NDE evidence/,misc:/General support/,supervisor:/specialized work and QA acceptance/,inspector:/QA\/QC inspections/,admin:/Full site administration/};
     const allowed=new Set(['topic','refresh','project','tracking','progress','dossier','item','flow-item','packet','print','clear','items','flow','quality','parts','admin','orders','order-setup','production-progress']);
     for(const [role,expectation] of Object.entries(roles)){context.me.role=role;await context.FabGuide.open({project:'P1'});const note=html().match(/<p class="fg-role">([\s\S]*?)<\/p>/)[1];assert.match(note,expectation);assert.match(note,/only reads existing records/);for(const m of html().matchAll(/data-guide-action="([^"]+)"/g))assert.ok(allowed.has(m[1]),'guide must navigate to the permission-enforcing screen: '+m[1]);}
+    await context.FabGuide.open({project:'P1',section:'signin'});
+    for(const label of ['Shop Foreman','Fab Prep Technician','Pressure Testing Technician','NDT'])assert.ok(html().includes('<td>'+label+'</td>'),label+' guidance');
+    assert.doesNotMatch(html(),/<td>(?:Supervisor|Finisher|Welder|Miscellaneous[^<]*)<\/td>/);
+    assert.match(html(),/QA\/QC reviews the results and records acceptance/);
     assert.equal(calls.filter(c=>c.method&&c.method!=='GET').length,0);
   });
   await check('dynamic labels, IDs, errors and query values are escaped',async()=>{

@@ -4,7 +4,7 @@
   const ROOT='/api/flow', node=id=>document.getElementById(id), encode=encodeURIComponent;
   const arr=value=>Array.isArray(value)?value:[], num=value=>Number.isFinite(Number(value))?Number(value):0;
   const stamp=value=>value?new Date(value).toLocaleString():'—';
-  const roles={admin:'Administrator',supervisor:'Supervisor',handler:'Material coordinator',welder:'Welder',fitup_welder:'Fit-up welder',process_welder:'Process welder',inspector:'QA/QC',painter:'Painter',finisher:'Finisher',misc:'Miscellaneous / support'};
+  const roleLabel=id=>window.FabPermissions?.label(id)||id;
   const flowStatus=()=>window.FabFlowStatus;
   const stageBadge=value=>flowStatus()?.badge(value)||'';
   const isSpool=value=>value?.route?value.route==='spool':value?.kind==='Spool';
@@ -160,7 +160,7 @@
     html+=flowStatus()?.processBoard?.(spools,{attribute:'data-flow-spool',title:'Individual spools by process'})||empty('Individual spool board unavailable','Refresh to load the current spool positions.');
     html+=(flowStatus()?.legend()||'')+lookup();
     html+=`<section class="card"><details class="ff-fold"><summary>Traveler records · ${rows.length} matching records</summary>${counts(rows)}<div class="ff-section-head"><h2>Numbered route records</h2></div>`;
-    html+=rows.length?table(`<table class="ff-table"><thead><tr><th>Item / route</th><th>Project</th><th>Flow status / current step</th><th>Time in process</th><th>Status</th><th>Attention</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${action('item',itemLabel(row),row.item_id,'ff-link',isSpool(row)?row:null)}${secondary(routeNames[row.route]||row.route)}</td><td>${esc(row.project_id||'Unassigned')}${secondary(row.subproject_id||'')}</td><td><div class="ff-stage-label">${stageBadge(row.flow_stage)}</div>${row.current_step?`<strong>${esc(row.current_step)} · ${esc(row.current_title)}</strong>`:'<span class="muted">Route finished</span>'}</td><td>${timingCell(row)}</td><td>${tag(displayStatus(row))}</td><td>${num(row.open_exceptions)?`${num(row.open_exceptions)} open exception${num(row.open_exceptions)===1?'':'s'}`:arr(row.blockers).length?esc(row.blockers[0]):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table>`):empty('No matching process records',state.board.length?'Clear the filters or choose another project.':'Open an existing item above. An administrator or supervisor can start its component, spool, or assembly route.');
+    html+=rows.length?table(`<table class="ff-table"><thead><tr><th>Item / route</th><th>Project</th><th>Flow status / current step</th><th>Time in process</th><th>Status</th><th>Attention</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${action('item',itemLabel(row),row.item_id,'ff-link',isSpool(row)?row:null)}${secondary(routeNames[row.route]||row.route)}</td><td>${esc(row.project_id||'Unassigned')}${secondary(row.subproject_id||'')}</td><td><div class="ff-stage-label">${stageBadge(row.flow_stage)}</div>${row.current_step?`<strong>${esc(row.current_step)} · ${esc(row.current_title)}</strong>`:'<span class="muted">Route finished</span>'}</td><td>${timingCell(row)}</td><td>${tag(displayStatus(row))}</td><td>${num(row.open_exceptions)?`${num(row.open_exceptions)} open exception${num(row.open_exceptions)===1?'':'s'}`:arr(row.blockers).length?esc(row.blockers[0]):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table>`):empty('No matching process records',state.board.length?'Clear the filters or choose another project.':'Open an existing item above. An administrator or Shop Foreman can start its component, spool, or assembly route.');
     html+='</details></section><section class="card"><details class="ff-fold"'+(state.step?' open':'')+'><summary>The 24-step fabrication flow</summary><p class="ff-footer-note">Select a numbered step to filter the board. Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Linked records connect the material history to the finished assembly.</p>'+renderMap(false)+'</details></section>';
     return html;
   }
@@ -226,7 +226,7 @@
     }
     const allowed=can('advance'),qa=step.qa,blocked=arr(flow.blockers).length>0;
     let html=`<section class="card ff-current"><div class="ff-section-head"><div><div class="ff-current-label">Current step ${step.number} of 24 · ${esc(routeNames[flow.route])} route</div><h2>${esc(step.title)}</h2></div>${tag(openExceptions().length?'rework':'active')}</div>${timing()}${blockers()}`;
-    html+=`<p class="ff-footer-note">Recorded by: ${arr(step.roles).map(value=>esc(roles[value]||value)).join(' · ')}</p>`;
+    html+=`<p class="ff-footer-note">Recorded by: ${arr(step.roles).map(value=>esc(roleLabel(value))).join(' · ')}</p>`;
     if(allowed)html+='<form id="flowStepForm"><div id="flowStepError" class="ff-error hidden" role="alert"></div>';
     html+=`<ul class="ff-checklist">${arr(step.checks).map(check=>`<li>${allowed?`<label><input type="checkbox" name="check_${esc(check.id)}" required> <span>${esc(check.label)}</span></label>`:`<span class="ff-check-read">${esc(check.label)}</span>`}</li>`).join('')}</ul>`;
     if(allowed){
@@ -278,7 +278,7 @@
     if(removed())html+='<div class="fr-removed-notice"><strong>Removed record · History only</strong><p>Its process route, checks and timing are retained. Open Item &amp; QR record to review or restore its removed group.</p></div>';
     if(state.notice)html+=`<div class="ff-error" role="alert">${esc(state.notice)}</div>`;
     if(!flow){
-      html+=`<section class="card"><h2>Start a numbered process route</h2>${metadata([['Item type',item.kind],['Project',item.project],['Location',item.location],['Current handler',item.handler]])}<p>Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Begin at the first step, or record a documented starting point for existing work.</p>${can('start')?action('start','Set up process route','','primary'):'<p class="muted">A supervisor or administrator can start this item’s route.</p>'}</section>`;
+      html+=`<section class="card"><h2>Start a numbered process route</h2>${metadata([['Item type',item.kind],['Project',item.project],['Location',item.location],['Current handler',item.handler]])}<p>Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–24. Begin at the first step, or record a documented starting point for existing work.</p>${can('start')?action('start','Set up process route','','primary'):'<p class="muted">A Shop Foreman or administrator can start this item’s route.</p>'}</section>`;
       return html+'<section class="card"><h2>The fabrication flow</h2>'+renderMap(false)+'</section>';
     }
     html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${route(flow.route)?.first_step}–${route(flow.route)?.last_step}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;

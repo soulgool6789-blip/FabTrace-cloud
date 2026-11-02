@@ -22,7 +22,8 @@ from main import (APP_VERSION, Base, Employee, Item, Audit, ITEM_KEYS, audit, au
 router = APIRouter(prefix='/api/admin', tags=['administration'])
 RELEASE_EVENTS = ('FINAL_RELEASE', 'ADMIN_RELEASE_OVERRIDE', 'ADMIN_RETURN_TO_WORK', 'REOPENED')
 ADMIN_EVENTS = ('ADMIN_RELEASE_OVERRIDE', 'ADMIN_RETURN_TO_WORK', 'ADMIN_CUSTODY_CORRECTION')
-from permissions import Role, role_catalog, role_label, user_permissions
+from permissions import (Role, ASSIGNABLE_ROLE_IDS, role_catalog, legacy_role_catalog,
+                         role_label, user_permissions)
 
 
 class EmployeeAccessState(Base):
@@ -504,7 +505,10 @@ def employees(include_removed: bool = False, u: Employee = Depends(auth), s: Ses
     assigned = dict(s.execute(select(Item.handler, func.count()).group_by(Item.handler)).all())
     return {'employees': [_employee_dict(s, row, active_admins=active_admins,
                                         assigned_item_count=assigned.get(row.badge, 0)) for row in rows],
-            'roles': role_catalog(), 'active_admins': active_admins,
+            # Older open pages use this full list to retain an employee's
+            # saved selection. New controls filter selectable:false entries.
+            'roles': role_catalog() + legacy_role_catalog(),
+            'legacy_roles': legacy_role_catalog(), 'active_admins': active_admins,
             'removed_count': s.scalar(select(func.count()).select_from(EmployeeRemovalState)
                 .where(EmployeeRemovalState.removed.is_(True)))}
 
@@ -538,6 +542,8 @@ def update_employee(badge: str, data: EmployeeUpdateIn, u: Employee = Depends(au
     employee, access, actor = _locked_employee(s, badge, u, data.expected_version)
     if employee_is_removed(s, badge):
         raise HTTPException(409, 'Restore this removed employee before editing their account.')
+    if data.role not in ASSIGNABLE_ROLE_IDS and data.role != employee.role:
+        raise HTTPException(422, 'This position is retained only for an existing assignment. Choose a current position.')
     if (employee.name, employee.role, employee.active) == (data.name, data.role, data.active):
         raise HTTPException(409, 'No change to the employee profile or access.')
     if employee.active and employee.role == 'admin' and not (data.active and data.role == 'admin'):

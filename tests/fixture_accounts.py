@@ -12,4 +12,6 @@ BADGES = {
     "painter": "TEST-PAINTER",
     "finisher": "TEST-FINISHER",
     "misc": "TEST-MISC",
+    "pressure_testing_technician": "TEST-PRESSURE-TESTING",
+    "ndt": "TEST-NDT",
 }

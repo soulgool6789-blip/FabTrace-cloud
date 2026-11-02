@@ -3,6 +3,7 @@
     "id": "admin",
     "label": "Administrator",
     "description": "Full site administration, production controls and recorded release exceptions.",
+    "selectable": true,
     "capabilities": [
       "admin",
       "manage_production",
@@ -82,8 +83,9 @@
   },
   {
     "id": "supervisor",
-    "label": "Supervisor",
+    "label": "Shop Foreman",
     "description": "Production planning, logistics, evidence coordination and process timing; specialized work and QA acceptance require their assigned positions.",
+    "selectable": true,
     "capabilities": [
       "manage_production",
       "manage_locations",
@@ -154,6 +156,7 @@
     "id": "handler",
     "label": "Material coordinator",
     "description": "Material coordination, parts allocation, custody handoffs and shipping documentation.",
+    "selectable": true,
     "capabilities": [
       "allocate_parts",
       "handoff",
@@ -175,36 +178,10 @@
     ]
   },
   {
-    "id": "welder",
-    "label": "Welder",
-    "description": "Fit-up and tack work, root and fill/cap welding, and welding completion.",
-    "capabilities": [
-      "handoff",
-      "weld_fitup",
-      "weld_production"
-    ],
-    "weld_operations": [
-      "fitup",
-      "root",
-      "fill_cap",
-      "complete"
-    ],
-    "process_keys": [
-      "fit_up",
-      "welding"
-    ],
-    "dossier_check_codes": [
-      "procedures",
-      "brazing_bonding"
-    ],
-    "dossier_upload_sections": [
-      "03"
-    ]
-  },
-  {
     "id": "fitup_welder",
     "label": "Fit-up welder",
-    "description": "Fit-up and tack work; production welding completion belongs to a process or general welder.",
+    "description": "Fit-up and tack work; production welding completion belongs to a process welder.",
+    "selectable": true,
     "capabilities": [
       "handoff",
       "weld_fitup"
@@ -227,6 +204,7 @@
     "id": "process_welder",
     "label": "Process welder",
     "description": "Root and fill/cap welding, welding completion and welding/PWHT timing.",
+    "selectable": true,
     "capabilities": [
       "handoff",
       "weld_production"
@@ -252,6 +230,7 @@
     "id": "inspector",
     "label": "QA/QC",
     "description": "QA/QC inspections, requirement acceptance, quality holds and final QA/Job Packet approval.",
+    "selectable": true,
     "capabilities": [
       "handoff",
       "inspect",
@@ -312,6 +291,7 @@
     "id": "painter",
     "label": "Painter",
     "description": "Sandblast and paint completion, coating timing and coating evidence for QA review.",
+    "selectable": true,
     "capabilities": [
       "handoff"
     ],
@@ -329,8 +309,9 @@
   },
   {
     "id": "finisher",
-    "label": "Finisher",
+    "label": "Fab Prep Technician",
     "description": "Component preparation, cutting/beveling timing, surface-preparation and packaging evidence.",
+    "selectable": true,
     "capabilities": [
       "handoff"
     ],
@@ -349,9 +330,76 @@
     ]
   },
   {
+    "id": "pressure_testing_technician",
+    "label": "Pressure Testing Technician",
+    "description": "Assigned pressure-test evidence, pressure-testing Job Packet records and testing timers; QA/QC accepts test results.",
+    "selectable": true,
+    "capabilities": [
+      "handoff"
+    ],
+    "weld_operations": [],
+    "process_keys": [
+      "nde"
+    ],
+    "dossier_check_codes": [
+      "pressure"
+    ],
+    "dossier_upload_sections": [
+      "06"
+    ]
+  },
+  {
+    "id": "ndt",
+    "label": "NDT",
+    "description": "Assigned NDE evidence, Inspection and NDE Job Packet records and testing timers; QA/QC accepts test results.",
+    "selectable": true,
+    "capabilities": [
+      "handoff"
+    ],
+    "weld_operations": [],
+    "process_keys": [
+      "nde"
+    ],
+    "dossier_check_codes": [
+      "nde"
+    ],
+    "dossier_upload_sections": [
+      "04"
+    ]
+  },
+  {
+    "id": "welder",
+    "label": "Welder",
+    "description": "Fit-up and tack work, root and fill/cap welding, and welding completion.",
+    "selectable": false,
+    "capabilities": [
+      "handoff",
+      "weld_fitup",
+      "weld_production"
+    ],
+    "weld_operations": [
+      "fitup",
+      "root",
+      "fill_cap",
+      "complete"
+    ],
+    "process_keys": [
+      "fit_up",
+      "welding"
+    ],
+    "dossier_check_codes": [
+      "procedures",
+      "brazing_bonding"
+    ],
+    "dossier_upload_sections": [
+      "03"
+    ]
+  },
+  {
     "id": "misc",
     "label": "Miscellaneous",
     "description": "General support: view records, badge handoffs, custom task timing and explicitly assigned miscellaneous evidence.",
+    "selectable": false,
     "capabilities": [
       "handoff"
     ],

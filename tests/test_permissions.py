@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from conftest import BADGES, TEST_PIN
+from receiving_helpers import accept_arrival
 from tracking_helpers import add_weld, approve, make_spool, ok, spool, weld
 from test_admin import employee_body
 from test_dossier import (
@@ -22,7 +23,15 @@ from test_quality import assembly_at_step
 from test_transfers import transfer_body
 
 
-TRADES = ("welder", "fitup_welder", "process_welder", "painter", "finisher", "misc")
+TESTING_POSITIONS = ("pressure_testing_technician", "ndt")
+TRADES = ("welder", "fitup_welder", "process_welder", "painter", "finisher", "misc", *TESTING_POSITIONS)
+CURRENT_POSITIONS = {
+    "admin": "Administrator", "supervisor": "Shop Foreman", "handler": "Material coordinator",
+    "fitup_welder": "Fit-up welder", "process_welder": "Process welder", "inspector": "QA/QC",
+    "painter": "Painter", "finisher": "Fab Prep Technician",
+    "pressure_testing_technician": "Pressure Testing Technician", "ndt": "NDT",
+}
+LEGACY_POSITIONS = {"welder": "Welder", "misc": "Miscellaneous"}
 
 
 def denied(api, request, status=403):
@@ -40,18 +49,30 @@ def test_authenticated_position_catalog_and_control_hints_are_current_and_read_o
     for role in BADGES:
         catalog = ok(api.get("/api/permissions", role=role))
         identity = ok(api.get("/api/me", role=role))
-        positions = {row["id"]: row for row in catalog["roles"]}
-        assert set(positions) == set(BADGES)
-        assert positions["inspector"]["label"] == "QA/QC"
-        assert identity["role_label"] == positions[role]["label"]
+        all_positions = {row["id"]: row for row in catalog["roles"]}
+        positions = {key: row for key, row in all_positions.items() if row["selectable"] is True}
+        legacy = {row["id"]: row for row in catalog["legacy_roles"]}
+        assert {key: row["label"] for key, row in positions.items()} == CURRENT_POSITIONS
+        assert {key: row["label"] for key, row in legacy.items()} == LEGACY_POSITIONS
+        assert all(row["selectable"] is True for row in positions.values())
+        assert all(row["selectable"] is False for row in legacy.values())
+        # An already-open older select must still find the employee's saved
+        # role instead of defaulting a legacy Welder edit to Administrator.
+        assert {key: row for key, row in all_positions.items() if row["selectable"] is False} == legacy
+        assert set(positions) | set(legacy) == set(BADGES)
+        assert role in all_positions
+        assert identity["role_label"] == {**positions, **legacy}[role]["label"]
         assert identity["permissions"] == catalog["current"]
         item = ok(api.get(f"/api/items/{item_id}", role=role))
         assert item["permissions"]["can_weld"] is (role in ("admin", "welder", "process_welder"))
         assert item["permissions"]["can_inspect"] is (role in ("admin", "inspector"))
+    staff = ok(api.get("/api/admin/employees"))
+    assert staff["roles"] == catalog["roles"] and staff["legacy_roles"] == catalog["legacy_roles"]
+    assert {row["role"] for row in staff["employees"]} <= {row["id"] for row in staff["roles"]}
     assert database_state(api) == before
 
 
-@pytest.mark.parametrize("position", ["fitup_welder", "process_welder", "painter", "finisher", "misc"])
+@pytest.mark.parametrize("position", ["fitup_welder", "process_welder", "painter", "finisher", *TESTING_POSITIONS])
 def test_administrator_can_enroll_each_job_position_without_granting_management(api, position):
     badge = "NEW-" + position.upper().replace("_", "-")
     body = {"badge": badge, "name": "Synthetic " + position, "role": position, "pin": TEST_PIN}
@@ -63,6 +84,63 @@ def test_administrator_can_enroll_each_job_position_without_granting_management(
     denied(api, lambda: api.post("/api/employees", {
         **body, "badge": badge + "-ADMIN", "role": "admin",
     }, role=badge))
+
+
+@pytest.mark.parametrize("position", ["welder", "misc"])
+def test_legacy_positions_may_be_retained_for_profile_edits_but_not_newly_assigned(api, position):
+    denied(api, lambda: api.post("/api/employees", {
+        "badge": "NEW-RETIRED-" + position.upper(), "name": "New retired-position attempt",
+        "role": position, "pin": TEST_PIN,
+    }), 422)
+    target = BADGES["painter"]
+    denied(api, lambda: api.patch(f"/api/admin/employees/{target}",
+        employee_body(api, target, role=position)), 422)
+
+    badge = BADGES[position]
+    changed = ok(api.patch(f"/api/admin/employees/{badge}",
+        employee_body(api, badge, name="Retained historical " + position)))
+    assert changed["badge"] == badge and changed["role"] == position
+    assert changed["role_label"] == LEGACY_POSITIONS[position]
+    assert ok(api.get("/api/me", role=position))["name"] == changed["name"]
+    disabled = ok(api.patch(f"/api/admin/employees/{badge}",
+        employee_body(api, badge, active=False)))
+    assert disabled["role"] == position and disabled["active"] is False
+    enabled = ok(api.patch(f"/api/admin/employees/{badge}",
+        employee_body(api, badge, active=True)))
+    assert enabled["role"] == position and enabled["active"] is True
+    events = [row for row in ok(api.get("/api/audit")) if row["event"] == "EMPLOYEE_UPDATED"]
+    assert len(events) == 3
+    assert all(row["details"]["from"]["role"] == row["details"]["to"]["role"] == position
+               for row in events)
+
+
+def test_roster_and_directory_show_current_name_and_position_without_changing_badge_identity(api, monkeypatch):
+    monkeypatch.setattr(api.application, "PUBLIC_BASE_URL", "https://example.invalid")
+    badge = BADGES["finisher"]
+    qr_path = f"/api/employees/{badge}/qr.png"
+    original_qr = api.get(qr_path)
+    assert original_qr.status_code == 200 and original_qr.headers["content-type"] == "image/png"
+    original_link = api.application.phone_link("badge", badge)
+    original = next(row for row in ok(api.get("/api/employees")) if row["badge"] == badge)
+    assert original["role_label"] == "Fab Prep Technician"
+    assigned = ok(api.post("/api/items", {
+        "id": "POSITION-STABLE-CUSTODY", "kind": "Part", "handler": badge, "welds_required": 0,
+        "location": "Test preparation station",
+    }), 201)
+
+    changed = ok(api.patch(f"/api/admin/employees/{badge}", employee_body(api, badge,
+        name="Updated testing employee", role="pressure_testing_technician")))
+    assert changed["badge"] == badge and changed["role_label"] == "Pressure Testing Technician"
+    for path in ("/api/employees", "/api/employees/directory"):
+        current = next(row for row in ok(api.get(path)) if row["badge"] == badge)
+        assert current["name"] == "Updated testing employee"
+        assert current["role"] == "pressure_testing_technician"
+        assert current["role_label"] == "Pressure Testing Technician"
+    assert api.application.phone_link("badge", badge) == original_link
+    assert api.get(qr_path).content == original_qr.content
+    assert ok(api.get(f"/api/items/{assigned['id']}"))["handler"] == badge
+    event = next(row for row in ok(api.get("/api/audit")) if row["event"] == "EMPLOYEE_UPDATED")
+    assert event["details"]["from"]["badge"] == event["details"]["to"]["badge"] == badge
 
 
 def test_changed_job_assignment_revokes_session_and_new_login_uses_new_controls(api):
@@ -87,7 +165,7 @@ def test_changed_job_assignment_revokes_session_and_new_login_uses_new_controls(
 def test_legacy_weld_logging_requires_a_production_welding_position(api, authorized):
     item_id = api.item(welds_required=1)["id"]
     body = {"count": 1, "weld_ids": "W01", "notes": "Synthetic weld completion"}
-    for role in ("supervisor", "handler", "inspector", "fitup_welder", "painter", "finisher", "misc"):
+    for role in ("supervisor", "handler", "inspector", "fitup_welder", "painter", "finisher", "misc", *TESTING_POSITIONS):
         denied(api, lambda role=role: api.post(f"/api/items/{item_id}/weld", body, role=role))
     result = ok(api.post(f"/api/items/{item_id}/weld", body, role=authorized))
     assert result["welds_done"] == 1
@@ -97,16 +175,17 @@ def test_legacy_weld_logging_requires_a_production_welding_position(api, authori
 
 def test_fitup_and_process_welders_have_distinct_operations_and_keep_real_actor_ids(api):
     item_id = make_spool(api)
+    accept_arrival(api, item_id)
     record = add_weld(api, item_id)
     route = f"/api/tracking/welds/{record['id']}/work"
-    for role in ("process_welder", "supervisor", "handler", "inspector", "painter", "finisher", "misc"):
+    for role in ("process_welder", "supervisor", "handler", "inspector", "painter", "finisher", "misc", *TESTING_POSITIONS):
         denied(api, lambda role=role: api.post(route, {"operation": "fitup"}, role=role))
     ok(api.post(route, {"operation": "fitup", "notes": "Fit-up by assigned trade"}, role="fitup_welder"))
     for requirement in weld(api, item_id, record["id"])["requirements"]:
         if requirement["stage"] == "before_welding":
             approve(api, item_id, requirement["id"])
     for operation in ("root", "fill_cap", "complete"):
-        for role in ("fitup_welder", "supervisor", "handler", "inspector", "painter", "finisher", "misc"):
+        for role in ("fitup_welder", "supervisor", "handler", "inspector", "painter", "finisher", "misc", *TESTING_POSITIONS):
             denied(api, lambda role=role, operation=operation: api.post(route, {"operation": operation}, role=role))
         ok(api.post(route, {"operation": operation}, role="process_welder"))
     result = weld(api, item_id, record["id"])
@@ -170,9 +249,12 @@ def test_trade_badge_handoff_does_not_confer_manufacturing_or_inspection_control
     ("inspector", "nde", "process_welder"),
     ("handler", "dispatch", "misc"),
     ("misc", "custom", "welder"),
+    ("pressure_testing_technician", "nde", "handler"),
+    ("ndt", "nde", "handler"),
 ])
 def test_manual_timing_is_scoped_to_position_for_start_pause_resume_and_finish(api, owner, key, other):
     item_id = make_spool(api, planned=0, zero_weld_reason="Synthetic non-welded fixture")
+    accept_arrival(api, item_id)
     route = f"/api/tracking/spools/{item_id}/process"
     start = {"action": "start", "expected_version": 0, "process_key": key}
     if key == "custom":
@@ -187,8 +269,26 @@ def test_manual_timing_is_scoped_to_position_for_start_pause_resume_and_finish(a
     assert {row["actor"] for row in current["events"]} == {BADGES[owner]}
 
 
+@pytest.mark.parametrize("position", TESTING_POSITIONS)
+def test_testing_timers_retain_arrival_and_post_fabrication_traceability_gates(api, position):
+    from test_heat_deadline import receive
+    item_id = create_item(api, "POSITION-TESTING-TRACEABILITY", kind="Spool")
+    route = f"/api/tracking/spools/{item_id}/process"
+    start = {"action": "start", "expected_version": 0, "process_key": "nde"}
+    rejected = denied(api, lambda: api.post(route, start, role=position), 409)
+    assert "receiving_blockers" in rejected.text
+
+    receive(api, item_id, heat="", reference="")
+    rejected = denied(api, lambda: api.post(route, start, role=position), 409)
+    assert "heat_blockers" in rejected.text and "heat number" in rejected.text and "MTR reference" in rejected.text
+    receive(api, item_id, heat="TEST-CURRENT-HEAT", reference="TEST-CURRENT-MTR")
+    started = ok(api.post(route, start, role=position), 201)
+    assert started["status"] == "running" and started["events"][-1]["actor"] == BADGES[position]
+
+
 def test_manual_move_requires_both_departing_and_receiving_process_authority(api):
     item_id = make_spool(api, planned=0, zero_weld_reason="Synthetic non-welded fixture")
+    accept_arrival(api, item_id)
     route = f"/api/tracking/spools/{item_id}/process"
     current = ok(api.post(route, {"action": "start", "expected_version": 0, "process_key": "welding"}, role="process_welder"), 201)
     body = {"action": "move", "expected_version": current["version"], "process_key": "coating"}
@@ -205,7 +305,7 @@ def test_numbered_timer_permissions_follow_current_step_without_advancing_it(api
     initial = enroll(api, item_id, "component", start_step=7)
     route = f"/api/tracking/spools/{item_id}/process"
     body = {"action": "pause", "expected_version": initial["production_process"]["version"], "notes": "Preparation paused"}
-    for role in ("painter", "welder", "inspector", "misc"):
+    for role in ("painter", "welder", "inspector", "misc", *TESTING_POSITIONS):
         view = ok(api.get(f"/api/flow/items/{item_id}", role=role))
         assert "pause" not in view["allowed_actions"]
         denied(api, lambda role=role: api.post(route, body, role=role))
@@ -215,6 +315,45 @@ def test_numbered_timer_permissions_follow_current_step_without_advancing_it(api
     assert flow_detail(api, item_id)["events"] == initial["events"]
 
 
+@pytest.mark.parametrize("position", TESTING_POSITIONS)
+@pytest.mark.parametrize("step", [17, 18])
+def test_testing_positions_control_only_the_testing_clock_without_flow_or_qa_authority(api, position, step):
+    item_id = assembly_at_step(api, step)
+    initial = flow_detail(api, item_id)
+    route = f"/api/tracking/spools/{item_id}/process"
+    viewer = ok(api.get(f"/api/flow/items/{item_id}", role=position))
+    assert "pause" in viewer["allowed_actions"]
+    assert "advance" not in viewer["allowed_actions"] and "fail" not in viewer["allowed_actions"]
+    denied(api, lambda: api.post(f"/api/flow/items/{item_id}/advance", action_body(api, item_id), role=position))
+    if step == 18:
+        denied(api, lambda: api.post(f"/api/flow/items/{item_id}/fail", {
+            "expected_version": initial["flow"]["version"], "return_step": 17,
+            "reference": "TEST-UNAUTHORIZED-RETURN", "reason": "A testing position cannot sign the QA disposition",
+        }, role=position))
+    denied(api, lambda: api.post(f"/api/items/{item_id}/inspect", {
+        "kind": "Dimensional", "result": "Pass", "report": "TEST-SELF-APPROVAL",
+        "measurements": "A testing position cannot accept dimensions",
+    }, role=position))
+    for action in ("move", "finish"):
+        denied(api, lambda action=action: api.post(route, {
+            "action": action, "expected_version": initial["production_process"]["version"],
+            **({"process_key": "nde"} if action == "move" else {}),
+        }, role=position), 409)
+    paused = ok(api.post(route, {"action": "pause",
+        "expected_version": initial["production_process"]["version"],
+        "notes": "Testing technician paused the current testing work"}, role=position), 201)
+    assert "resume" in paused["permissions"]["allowed_actions"]
+    resumed = ok(api.post(route, {"action": "resume", "expected_version": paused["version"]}, role=position), 201)
+    assert resumed["status"] == "running" and resumed["current"]["process_key"] == f"clm_{step:02d}"
+    assert {row["actor"] for row in resumed["events"][-2:]} == {BADGES[position]}
+    after = flow_detail(api, item_id)
+    assert after["events"] == initial["events"]
+    assert after["flow"]["version"] == initial["flow"]["version"]
+    assert after["flow"]["current_step"] == step
+    assert {key: after["item"].get(key) for key in ("released", "dimensional", "weld")} == {
+        key: initial["item"].get(key) for key in ("released", "dimensional", "weld")}
+
+
 @pytest.mark.parametrize("owner,allowed,forbidden", [
     ("painter", "painter", "welder"),
     ("finisher", "finisher", "painter"),
@@ -222,9 +361,12 @@ def test_numbered_timer_permissions_follow_current_step_without_advancing_it(api
     ("process_welder", "welder", "fitup_welder"),
     ("welder", "welder", "process_welder"),
     ("misc", "misc", "handler"),
+    ("pressure_testing_technician", "pressure_testing_technician", "ndt"),
+    ("ndt", "ndt", "pressure_testing_technician"),
 ])
 def test_requirement_owner_scopes_evidence_without_granting_qa_acceptance(api, owner, allowed, forbidden):
     item_id = make_spool(api, planned=0, zero_weld_reason="Synthetic non-welded fixture")
+    accept_arrival(api, item_id)
     req = ok(api.post(f"/api/tracking/spools/{item_id}/requirements", {
         "code": "POSITION-RECORD", "label": "Assigned-position supporting record", "stage": "release",
         "owner_role": owner, "evidence_required": True, "source": "Synthetic controlled job requirement",
@@ -277,6 +419,8 @@ def test_free_text_legacy_rework_close_is_a_management_decision(api):
     ("fitup_welder", ("procedures", "brazing_bonding"), ("03",)),
     ("process_welder", ("procedures", "brazing_bonding"), ("03",)),
     ("handler", ("materials", "packaging", "packing_slip"), ("02", "09")),
+    ("pressure_testing_technician", ("pressure",), ("06",)),
+    ("ndt", ("nde",), ("04",)),
 ])
 def test_job_packet_writers_are_scoped_to_their_trade_and_cannot_sign_qa(api, role, codes, sections):
     item_id = make_project(api)

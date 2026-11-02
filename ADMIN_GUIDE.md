@@ -10,6 +10,16 @@
 
 This form changes only the employee's position. The name, permanent badge, PIN, active/inactive state, assigned items and recorded work remain attached to the same account. **Edit account** retains the broader name/access controls. Only an active Administrator can change positions, and the last active Administrator cannot be removed or demoted.
 
+### Current and retained positions
+
+Release `2026.11.02-shop-positions.1` uses **Shop Foreman** for the former Supervisor position and **Fab Prep Technician** for the former Finisher position. Their stored IDs remain `supervisor` and `finisher`, with the same existing authority. **Pressure Testing Technician** and **NDT** are new, separate choices. **Fit-up welder** and **Process welder** remain available.
+
+Generic **Welder** and **Miscellaneous** are retired from new assignments. Existing accounts retain their positions and existing permissions until an administrator explicitly chooses a replacement and records a reason. No employee is reassigned during deployment. A retained Welder still has its existing fit-up and production-welding authority; retirement from the selection list does not revoke it.
+
+Use **Edit account** to change a retained employee's name or active access while keeping their current position. The retained choice applies only to that employee's existing role. It cannot be used to create a new account or assign that retired position to another employee. After an explicit change to a current position, the retired position cannot be newly assigned back. Review the actual employee's responsibilities before selecting a replacement; the application does not infer a trade from their name or past work.
+
+Pressure Testing Technician and NDT can record their assigned test evidence and use the NDE/testing timer. Pressure Testing Technician prepares the pressure-test checklist and uploads section 06 records; NDT prepares the NDE checklist and uploads section 04 records. Both can pause/resume steps 17 and 18. They cannot advance the step 17 coordination action, accept step 18, grant QA approval or issue Job Packets. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the complete limits.
+
 ## Removing P.O.s and physical items
 
 Use **Remove** in **Purchase orders**, the GPN / Assembly register, the inventory list or an item's detail screen. Review the affected scope, enter the displayed record number exactly and record a reason before confirming. A P.O. includes its project scope; a GPN / Assembly includes its physical descendants. Open timers and independently linked child items display the action needed before removal. Ordinary work and quality controls continue to apply.
@@ -26,7 +36,7 @@ Sign in with an active **administrator** account and open **Admin controls**. Th
 4. Enter the actual reason for the decision. Add an authorization, disposition or other record reference when applicable.
 5. Select **Record administrative release**.
 
-This action releases an unreleased Part, Spool or Assembly even when normal fabrication, inspection, hold, material, component-scope or process-release checks are incomplete. An administrator does not need to enter passing inspections or pretend the missing work occurred to make the decision.
+This action can release an unreleased Part, Spool or Assembly with outstanding normal fabrication, inspection, hold, component-scope or process-release requirements. Current arrival approval and the applicable final heat-number/MTR completeness checks remain enforced. An administrator does not need to invent passing inspections or claim missing work occurred to record an exception to the other requirements.
 
 The item is labelled **Administrative release**. Its history retains the responsible administrator, server time, reason, optional reference, requirements outstanding at that time and prior process position. The regular **Final release** / numbered QA action still performs the established technical checks and records an ordinary **QA release**.
 
@@ -69,7 +79,7 @@ Open **Admin controls → Employee accounts**. Search by name, badge or role, th
 
 ### Edit an account
 
-Use **Edit account** to correct an employee's name, assign the appropriate job position, or activate/deactivate their account. Record the reason before saving. Positions are Administrator, Supervisor, Material coordinator, Welder, Fit-up welder, Process welder, QA/QC, Painter, Finisher and Miscellaneous. Review the selected position's scope before saving. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the complete work, timing, evidence and packet permissions.
+Use **Edit account** to correct an employee's name, assign the appropriate job position, or activate/deactivate their account. Record the reason before saving. Current positions are Administrator, Shop Foreman, Material coordinator, Fit-up welder, Process welder, QA/QC, Painter, Fab Prep Technician, Pressure Testing Technician and NDT. Review the selected position's scope before saving. A current retired Welder or Miscellaneous role may be retained for that same employee during a name/access edit; it is not offered as a new assignment. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for the complete work, timing, evidence and packet permissions.
 
 Existing accounts keep their current assignment. To apply job restrictions to an account currently assigned Administrator, explicitly select its actual job position. An Administrator account retains full authority. New employee creation requires an explicit position selection; changing a position revokes the employee's old sessions and requires a fresh sign-in.
 
@@ -96,7 +106,11 @@ Select **Reset private PIN**, enter and repeat the new PIN, record the reason, a
 
 Existing sessions for that employee are revoked. The employee must sign in with the new PIN. PIN values, hashes and session tokens are not displayed in account records, administrative audit events or Excel exports. A name-only correction preserves an existing session; changing role or active access requires a fresh sign-in.
 
-**Add employee / print QR badges** opens the existing employee-management screen. Employee QR labels continue to identify the permanent badge and do not contain the private PIN.
+### Print an employee badge
+
+**Add employee / print QR badges** opens the employee-management screen. Select **Print employee QR badge** for the active employee. The print preview fetches the current employee record and shows the employee's **name**, **position** and **permanent badge ID**. If a name or position changes, create a new preview before printing. Inactive or removed accounts cannot be printed as active employee badges.
+
+The employee QR keeps its existing badge identity link and does not contain a private PIN or authentication token. It identifies the employee and does not sign them in. Item and spool QR labels continue to omit the employee-assignment line; ordinary custody details remain in the application.
 
 ## Review changes and resolve conflicts
 

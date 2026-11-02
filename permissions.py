@@ -10,28 +10,38 @@ from typing import Literal, get_args
 from fastapi import HTTPException
 
 
-VERSION = 'CLM-JOBS-v1'
+VERSION = 'CLM-JOBS-v2'
 Role = Literal['admin', 'supervisor', 'handler', 'welder', 'fitup_welder',
-               'process_welder', 'inspector', 'painter', 'finisher', 'misc']
+               'process_welder', 'inspector', 'painter', 'finisher', 'misc',
+               'pressure_testing_technician', 'ndt']
 ROLE_IDS = tuple(get_args(Role))
+AssignableRole = Literal['admin', 'supervisor', 'handler', 'fitup_welder',
+                         'process_welder', 'inspector', 'painter', 'finisher',
+                         'pressure_testing_technician', 'ndt']
+ASSIGNABLE_ROLE_IDS = tuple(get_args(AssignableRole))
+LEGACY_ROLE_IDS = ('welder', 'misc')
+TESTING_ROLES = ('pressure_testing_technician', 'ndt')
 ROLE_LABELS = {
-    'admin': 'Administrator', 'supervisor': 'Supervisor',
+    'admin': 'Administrator', 'supervisor': 'Shop Foreman',
     'handler': 'Material coordinator', 'welder': 'Welder',
     'fitup_welder': 'Fit-up welder', 'process_welder': 'Process welder',
-    'inspector': 'QA/QC', 'painter': 'Painter', 'finisher': 'Finisher',
+    'inspector': 'QA/QC', 'painter': 'Painter', 'finisher': 'Fab Prep Technician',
     'misc': 'Miscellaneous',
+    'pressure_testing_technician': 'Pressure Testing Technician', 'ndt': 'NDT',
 }
 DESCRIPTIONS = {
     'admin': 'Full site administration, production controls and recorded release exceptions.',
     'supervisor': 'Production planning, logistics, evidence coordination and process timing; specialized work and QA acceptance require their assigned positions.',
     'handler': 'Material coordination, parts allocation, custody handoffs and shipping documentation.',
     'welder': 'Fit-up and tack work, root and fill/cap welding, and welding completion.',
-    'fitup_welder': 'Fit-up and tack work; production welding completion belongs to a process or general welder.',
+    'fitup_welder': 'Fit-up and tack work; production welding completion belongs to a process welder.',
     'process_welder': 'Root and fill/cap welding, welding completion and welding/PWHT timing.',
     'inspector': 'QA/QC inspections, requirement acceptance, quality holds and final QA/Job Packet approval.',
     'painter': 'Sandblast and paint completion, coating timing and coating evidence for QA review.',
     'finisher': 'Component preparation, cutting/beveling timing, surface-preparation and packaging evidence.',
     'misc': 'General support: view records, badge handoffs, custom task timing and explicitly assigned miscellaneous evidence.',
+    'pressure_testing_technician': 'Assigned pressure-test evidence, pressure-testing Job Packet records and testing timers; QA/QC accepts test results.',
+    'ndt': 'Assigned NDE evidence, Inspection and NDE Job Packet records and testing timers; QA/QC accepts test results.',
 }
 ALL_PROCESSES = ('material_prep', 'cutting_beveling', 'fit_up', 'welding', 'nde',
                  'pwht', 'dimensional', 'coating', 'final_qa', 'dispatch', 'custom')
@@ -59,6 +69,7 @@ CAPABILITIES = {
     'inspector': ('handoff', 'inspect', 'quality_write', 'quality_review',
                   'dossier_review', 'dossier_handover', 'open_rework', 'view_audit'),
     'painter': ('handoff',), 'finisher': ('handoff',), 'misc': ('handoff',),
+    'pressure_testing_technician': ('handoff',), 'ndt': ('handoff',),
 }
 WELD_OPERATIONS = {
     'admin': ('fitup', 'root', 'fill_cap', 'complete'),
@@ -72,6 +83,7 @@ PROCESS_KEYS = {
     'fitup_welder': ('fit_up',), 'process_welder': ('welding', 'pwht'),
     'inspector': ('nde', 'dimensional', 'final_qa'), 'painter': ('coating',),
     'finisher': ('material_prep', 'cutting_beveling'), 'misc': ('custom',),
+    'pressure_testing_technician': ('nde',), 'ndt': ('nde',),
 }
 DOSSIER_CHECKS = {
     'admin': ALL_CHECKS, 'supervisor': ALL_CHECKS, 'inspector': ALL_CHECKS,
@@ -80,11 +92,13 @@ DOSSIER_CHECKS = {
     'fitup_welder': ('procedures', 'brazing_bonding'),
     'process_welder': ('procedures', 'brazing_bonding'),
     'painter': ('surface', 'coating'), 'finisher': ('surface', 'packaging'),
+    'pressure_testing_technician': ('pressure',), 'ndt': ('nde',),
 }
 DOSSIER_SECTIONS = {
     'admin': ALL_SECTIONS, 'supervisor': ALL_SECTIONS, 'inspector': ALL_SECTIONS,
     'handler': ('02', '09'), 'welder': ('03',), 'fitup_welder': ('03',),
     'process_welder': ('03',), 'painter': ('08',), 'finisher': ('08', '09'),
+    'pressure_testing_technician': ('06',), 'ndt': ('04',),
 }
 
 
@@ -109,7 +123,13 @@ def user_permissions(user):
 
 def role_catalog():
     return [{'id': role, 'label': ROLE_LABELS[role], 'description': DESCRIPTIONS[role],
-             **user_permissions(role)} for role in ROLE_IDS]
+             'selectable': True, **user_permissions(role)} for role in ASSIGNABLE_ROLE_IDS]
+
+
+def legacy_role_catalog():
+    """Retained labels/authority; these roles cannot be assigned to a new user."""
+    return [{'id': role, 'label': ROLE_LABELS[role], 'description': DESCRIPTIONS[role],
+             'selectable': False, **user_permissions(role)} for role in LEGACY_ROLE_IDS]
 
 
 def has_capability(user, key):
@@ -153,6 +173,10 @@ def can_control_process(user, key):
             step = int(key[4:])
         except ValueError:
             return False
+        # Testing staff control only the clock here. The release-to-testing
+        # and QA result decisions keep their separate flow_step_roles guards.
+        if role in TESTING_ROLES and step in (17, 18):
+            return True
         return 1 <= step <= 24 and (role in ('admin', 'supervisor') or role in flow_step_roles(step))
     return key in PROCESS_KEYS.get(role, ())
 

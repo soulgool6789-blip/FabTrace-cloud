@@ -12,32 +12,42 @@ Each employee has one assigned application position. That position determines wh
 
 For a new employee, open **Add employee / print QR badges**, enter the employee details and explicitly choose a position. The form does not automatically choose Administrator. Badge IDs remain permanent. Existing employee assignments are retained during deployment; an account assigned Administrator continues to have full authority until an administrator assigns another position.
 
-The current application assigns one position per account. **Welder** intentionally covers both fit-up and production welding. Use **Fit-up welder** or **Process welder** when those responsibilities should be separated. Changing position changes application access; it does not establish a person's technical qualification, WPS approval or training record.
+The current application assigns one position per account. Use **Fit-up welder** for fit-up/tack work and **Process welder** for production welding. Changing position changes application access; it does not establish a person's technical qualification, WPS approval or training record.
 
-## Position matrix
+### Renamed and retained positions
+
+Release `2026.11.02-shop-positions.1` changes the displayed name **Supervisor** to **Shop Foreman** and **Finisher** to **Fab Prep Technician**. Their stable IDs remain `supervisor` and `finisher`, and their existing permissions are unchanged. Existing employee records, badges, assignments, work and audit history are not migrated or reassigned.
+
+Generic **Welder** (`welder`) and **Miscellaneous** (`misc`) are retired from new assignments. Existing accounts keep those roles and permissions until an administrator explicitly selects a current position. A retained Welder can still perform both welding stages; a retained Miscellaneous account keeps its existing support controls. Historical and existing requirement assignments remain identifiable.
+
+**Edit account** can preserve an employee's current retired position while correcting their name or changing active access. This retained value is specific to that employee; it is not a choice for a new employee or another account. Once an employee changes to a current position, the retired role cannot be newly assigned back. Name-only edits keep existing sessions; a position or active-access change revokes them. New account creation always requires an explicit current position.
+
+## Current assignable positions
 
 | Position | Production responsibilities | Quality and documentation controls |
 | --- | --- | --- |
 | Administrator | All production and management controls, including recorded administrative release and custody correction | All evidence, reviews, Job Packets, employee access and exports |
-| Supervisor | Projects, plans, weld scope, parts lists, logistics and process-timing coordination | Coordinate evidence, audit preparation, packet preparation and handover; open holds/repairs and close general rework tickets; no technical QA acceptance or physical welding/painting completion |
+| Shop Foreman | Projects, plans, weld scope, parts lists, logistics and process-timing coordination | Coordinate evidence, audit preparation, packet preparation and handover; open holds/repairs and close general rework tickets; no technical QA acceptance or physical welding/painting completion |
 | Material coordinator | Receiving and inventory logistics, component allocation, numbered handoffs and shipping | Material, packaging and packing-slip evidence; controlled packet dispatch/receipt |
-| Welder | Fit-up/tack, root, fill/cap and welding completion | Evidence assigned to welding roles and welding-document preparation |
 | Fit-up welder | Fit-up/tack work and fit-up step completion | Evidence specifically assigned to fit-up and welding-document preparation |
 | Process welder | Root, fill/cap and welding completion | Evidence specifically assigned to process welding and welding-document preparation |
 | QA/QC | Incoming dimensional verification, fit-up, weld, assembly and final inspection | Requirement acceptance, hold resolution, ordinary QA release, audit reviews and Job Packet issue |
 | Painter | Combined sandblast/paint process completion | Surface-preparation and coating evidence for subsequent QA review |
-| Finisher | Component preparation, including cleaning/buffing preparation records | Surface-preparation and preservation/packaging evidence for subsequent QA review |
-| Miscellaneous | General support and custom support-process timing | Evidence explicitly assigned to Miscellaneous; no specialized fabrication or QA acceptance |
+| Fab Prep Technician | Component preparation, including cleaning/buffing preparation records | Surface-preparation and preservation/packaging evidence for subsequent QA review |
+| Pressure Testing Technician | Pressure-test work records through assigned evidence; NDE/testing timing | Evidence assigned to this position; pressure-test checklist and section 06 files for subsequent QA review |
+| NDT | Nondestructive-test work records through assigned evidence; NDE/testing timing | Evidence assigned to NDT; NDE checklist and section 04 files for subsequent QA review |
 
-All positions above can use ordinary **Scan & Handoff** with both employee badges. Administrators and supervisors manage custom shop locations. Employee access, private PIN resets, administrative release exceptions and Excel exports remain administrator controls.
+All positions above, and retained legacy accounts, can use ordinary **Scan & Handoff** with both employee badges. Administrators and Shop Foremen manage custom shop locations. Employee access, private PIN resets, administrative release exceptions and Excel exports remain administrator controls.
 
 ## Welding and numbered process steps
 
-Only **Welder**, **Fit-up welder** and **Administrator** can record fit-up/tack work or complete step **10**. Only **Welder**, **Process welder** and **Administrator** can record root/fill-cap/completion, log legacy weld quantities or complete step **14**. A supervisor or material coordinator cannot record those physical operations solely because they manage the job or hold the spool.
+Only **Fit-up welder**, **Administrator** and retained legacy **Welder** accounts can record fit-up/tack work or complete step **10**. Only **Process welder**, **Administrator** and retained legacy **Welder** accounts can record root/fill-cap/completion, log legacy weld quantities or complete step **14**. A Shop Foreman or material coordinator cannot record those physical operations solely because they manage the job or hold the spool.
 
-**Finisher** or Administrator completes component-preparation step **7**. **Painter** or Administrator completes combined sandblast/paint step **21**. That combined step includes painting; a finisher's preparation responsibility does not authorize its completion.
+**Fab Prep Technician** or Administrator completes component-preparation step **7**. **Painter** or Administrator completes combined sandblast/paint step **21**. That combined step includes painting; a Fab Prep Technician's preparation responsibility does not authorize its completion.
 
-QA steps **2, 11, 15, 19 and 22** require **QA/QC** or Administrator. The remaining receiving, inventory, collection, handoff and shipping steps retain Material coordinator, Supervisor or Administrator authority. Normal engineering, hold-point, evidence, route and release checks also remain applicable. An administrator's separate **Release as administrator** action retains its explicit exception history.
+QA steps **2, 11, 15, 18 and 22** require **QA/QC** or Administrator. Step **17 — Release to Testing (Hydro/UT)** and the other receiving, inventory, collection, handoff and shipping steps retain Material coordinator, Shop Foreman or Administrator authority. Step **19 — Return to Floor** is the post-test handoff. Pressure Testing Technician and NDT may pause/resume timers at steps 17 and 18, but cannot advance step 17 or accept step 18.
+
+Normal engineering, hold-point, evidence, route and release checks remain applicable. Heat numbers and MTR references may be deferred through step **14 — Complete Welds**; current completeness checks remain required at step **15 — QA/QC-003**, later acceptance and release. A testing position does not bypass those checks or the current arrival approval. An administrator's separate **Release as administrator** action retains its explicit exception history and its existing material/arrival safeguards.
 
 ## Process timers
 
@@ -45,25 +55,26 @@ Manual timers are limited by position:
 
 | Position | Manual processes |
 | --- | --- |
-| Administrator / Supervisor | All listed and custom processes for coordination |
+| Administrator / Shop Foreman | All listed and custom processes for coordination |
 | Material coordinator | Material preparation; ready for dispatch |
-| Welder | Fit-up; welding |
+| Welder (retained legacy accounts) | Fit-up; welding |
 | Fit-up welder | Fit-up |
 | Process welder | Welding; PWHT |
 | QA/QC | NDE/testing; dimensional inspection; final QA |
 | Painter | Coating/painting |
-| Finisher | Material preparation; cutting/beveling |
-| Miscellaneous | Custom support processes |
+| Fab Prep Technician | Material preparation; cutting/beveling |
+| Pressure Testing Technician / NDT | NDE/testing |
+| Miscellaneous (retained legacy accounts) | Custom support processes |
 
-Moving an open manual timer requires authority over both the current and destination process. Otherwise, an authorized employee finishes the current timer and the next position starts its own process, or a supervisor coordinates the transition. A numbered traveler owns its stage transitions; its pause/resume controls follow the current step's roles, with administrator/supervisor coordination access. Timing does not record physical completion, testing, acceptance or employee labor hours.
+Moving an open manual timer requires authority over both the current and destination process. Otherwise, an authorized employee finishes the current timer and the next position starts its own process, or a Shop Foreman coordinates the transition. A numbered traveler owns its stage transitions; its pause/resume controls follow the current step's roles, with Administrator/Shop Foreman coordination access. Pressure Testing Technician and NDT also have pause/resume access at numbered steps 17 and 18, without authority to complete either step. Timing does not record physical completion, test results, acceptance or employee labor hours.
 
 ## Requirement evidence and QA acceptance
 
-The responsible position on a tracking requirement now controls who may submit evidence. An employee may submit evidence assigned to their position. A general Welder may also submit evidence assigned to Fit-up welder or Process welder. Specialists do not automatically inherit the general Welder assignment; select their actual responsible position in the controlled requirement/template when appropriate.
+The responsible position on a tracking requirement controls who may submit evidence. An employee may submit evidence assigned to their position. Pressure Testing Technician and NDT have separate ownership: one does not automatically inherit the other's requirements. A retained legacy Welder may also submit evidence assigned to Fit-up welder or Process welder. Specialists do not automatically inherit the general Welder assignment; select their actual responsible position in the controlled requirement/template when appropriate.
 
-Administrators, supervisors and QA/QC may coordinate evidence submission across positions. Only QA/QC or an administrator may accept or reject it. Existing requirements retain their assigned position; default inspector-owned requirements appear as QA/QC responsibilities. A reference or reported passing result is still evidence awaiting review, not acceptance.
+Administrators, Shop Foremen and QA/QC may coordinate evidence submission across positions. Only QA/QC or an administrator may accept or reject it. Existing requirements retain their assigned position; default inspector-owned requirements appear as QA/QC responsibilities. A reference or reported passing result is still evidence awaiting review, not acceptance.
 
-Generic legacy rework tickets use free-text descriptions that cannot reliably identify a trade. A supervisor or administrator closes those coordination tickets with notes. Actual scoped work and fresh applicable QA records remain separate requirements.
+Generic legacy rework tickets use free-text descriptions that cannot reliably identify a trade. A Shop Foreman or administrator closes those coordination tickets with notes. Actual scoped work and fresh applicable QA records remain separate requirements.
 
 ## Job Packet responsibilities
 
@@ -71,17 +82,23 @@ Workers can prepare only the permitted checklist entries and upload records to t
 
 | Position | Editable checklist entries | Upload sections |
 | --- | --- | --- |
-| Administrator / Supervisor / QA/QC | All entries | All sections |
+| Administrator / Shop Foreman / QA/QC | All entries | All sections |
 | Material coordinator | Materials, packaging, packing slip | 02 Material traceability; 09 Final release and shipping |
-| Welding positions | Procedures/qualifications; applicable brazing/bonding records | 03 Welding records |
+| Fit-up welder / Process welder / retained legacy Welder | Procedures/qualifications; applicable brazing/bonding records | 03 Welding records |
 | Painter | Surface preparation; coating | 08 Blasting and coating |
-| Finisher | Surface preparation; packaging | 08 Blasting and coating; 09 Final release and shipping |
-| Miscellaneous | None | None |
+| Fab Prep Technician | Surface preparation; packaging | 08 Blasting and coating; 09 Final release and shipping |
+| Pressure Testing Technician | Pressure test | 06 Pressure testing |
+| NDT | NDE reports, maps and operator qualifications | 04 Inspection and NDE |
+| Miscellaneous (retained legacy accounts) | None | None |
 
 An upload or revised procedure document is not its approval. Scoped writers cannot use a permitted section to revise a document identity previously recorded in a section outside their permissions. Original uploaded revisions remain immutable.
 
-Packet dispatch and receipt are available to Material coordinator, Supervisor, QA/QC and Administrator. A worker's ability to add evidence does not grant packet-dispatch authority. Current package and shipment checks still apply.
+Packet dispatch and receipt are available to Material coordinator, Shop Foreman, QA/QC and Administrator. Pressure Testing Technician and NDT cannot accept checklist entries, issue packets or record packet dispatch solely because they prepared test evidence. Current package and shipment checks still apply.
+
+## Employee badges
+
+An administrator opens **Employees → Print employee QR badge** to print the employee's current name, position and permanent badge ID. The preview reads the current active employee record; inactive or removed employees cannot receive a new active badge. Names and positions are human-readable captions. The QR retains its permanent badge identity link and contains no PIN or authentication token. A printed badge does not sign the employee in or grant the printed position's permissions. Item/spool labels continue to omit employee-assignment captions.
 
 ## When a control is unavailable
 
-Check the signed-in account's position, the item's current process and release state, and the requirement's responsible position. Use an administrator account to correct an employee assignment; use the appropriate supervisor/QA workflow to correct controlled requirement scope. The server checks permissions on every change, including direct requests and stale pages. Selecting another employee's badge or editing a request cannot elevate the signed-in account's permissions.
+Check the signed-in account's position, the item's current process and release state, and the requirement's responsible position. Use an administrator account to correct an employee assignment; use the appropriate Shop Foreman/QA workflow to correct controlled requirement scope. The server checks permissions on every change, including direct requests and stale pages. Selecting another employee's badge or editing a request cannot elevate the signed-in account's permissions.

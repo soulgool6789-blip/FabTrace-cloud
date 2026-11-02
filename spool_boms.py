@@ -577,7 +577,7 @@ def spool_bom(item_id: str, user: Employee = Depends(auth), s: Session = Depends
 def save_traceability(item_id: str, data: TraceabilityIn,
                       user: Employee = Depends(auth), s: Session = Depends(db)):
     if not _can_edit(user):
-        raise HTTPException(403, 'Only material coordinators, supervisors, administrators and QA/QC can update material traceability.')
+        raise HTTPException(403, 'Only material coordinators, Shop Foremen, administrators and QA/QC can update material traceability.')
     lock_topology(s)
     lock_item(s, item_id)
     state = physical_bom_state(s, item_id)

@@ -26,7 +26,7 @@
   function generation(){
     const d=state.overview,remaining=d.totals.remaining_quantity,weldSpools=d.totals.remaining_weld_spools||0,unknownWelds=d.totals.undeclared_weld_spools||0;
     const unknown=unknownWelds?'<div class="ol-warning"><strong>Some existing spools still need a weld count.</strong><p>Choose Back to P.O., then Set weld counts for the assembly. Each spool needs its own numbered weld records for welding and inspection.</p></div>':'';
-    if(!canManage())return unknown+'<p class="ol-note">An administrator or supervisor can generate additional spool labels and weld records.</p>';
+    if(!canManage())return unknown+'<p class="ol-note">An administrator or Shop Foreman can generate additional spool labels and weld records.</p>';
     if(!d.groups.length)return '<div class="ol-state"><strong>Add the assembly and spool quantities first.</strong><p>Open the P.O. setup to enter the assemblies, spool quantities and weld counts this order needs.</p></div>';
     if(d.totals.undeclared_groups)return unknown+'<div class="ol-warning"><strong>Some assembly quantities have not been entered.</strong><p>Select an assembly with saved quantities, or return to the P.O. to complete its setup. Existing spool labels remain available below.</p></div>';
     if(remaining===0&&weldSpools===0)return unknown+'<div class="ol-ready"><strong>All spool QR codes are ready.</strong><p>Print or reprint the labels below. Each code continues to open the same physical spool record.</p></div>';

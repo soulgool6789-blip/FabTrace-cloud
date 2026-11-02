@@ -1,7 +1,7 @@
 /* Job-control UI acceptance with synthetic server responses; no production access. */
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const {roles,policy}=require('./ui_permissions_fixture.cjs');
+const {roles,legacyRoles,allRoles,policy}=require('./ui_permissions_fixture.cjs');
 const html=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
 const script=html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script,'the application shell must be present');
@@ -30,7 +30,7 @@ context.api=async(url,options={})=>{
  calls.push({url,...options});
  if(options.method){if(url==='/api/employees')return JSON.parse(options.body);throw Error('Unexpected synthetic mutation '+url)}
  if(url==='/api/me')return employee();
- if(url==='/api/permissions')return {version:'SYNTHETIC-JOBS',roles,current:employee()};
+ if(url==='/api/permissions')return {version:'SYNTHETIC-JOBS',roles:allRoles,legacy_roles:legacyRoles,current:employee()};
  if(url==='/api/qr/status')return {ready:false};
  if(url==='/api/employees')return [{badge:'SYNTHETIC',name:'Synthetic worker',role:selectedRole,active:true}];
  if(url.startsWith('/api/items?'))return {items:[],total:0};
@@ -42,7 +42,7 @@ const visible=id=>!el(id).classes.has('hidden');
 const writes=()=>calls.filter(call=>call.method);
 async function signIn(role){selectedRole=role;await context.refreshAuth();await context.openItem('SYNTHETIC-ITEM')}
 (async()=>{
- for(const role of ['welder','fitup_welder','process_welder','painter','finisher','inspector','handler','supervisor','misc','admin']){
+ for(const {id:role} of allRoles){
   await signIn(role);
   assert.equal(visible('weldBtn'),['welder','process_welder','admin'].includes(role),role+' aggregate welding control');
   assert.equal(visible('inspectBtn'),['inspector','admin'].includes(role),role+' inspection control');
@@ -60,7 +60,24 @@ async function signIn(role){selectedRole=role;await context.refreshAuth();await 
  await signIn('admin');itemPermissionOverride={};await context.openItem('SYNTHETIC-ITEM');assert.equal(visible('weldBtn'),false);assert.equal(visible('inspectBtn'),false);assert.equal(visible('releaseBtn'),false,'a privileged role cannot override a missing server item permission in the UI');itemPermissionOverride=null;
  await el('navStaff').onclick();assert.equal(el('employeeRole').value,'','new accounts require an explicit position selection');assert.match(el('employeeRole').innerHTML,/Choose a job position/);
  for(const role of roles)assert.ok(el('employeeRole').innerHTML.includes('value="'+role.id+'"'),role.id+' must be selectable');
+ assert.equal(roles.length,10);
+ for(const label of ['Shop Foreman','Fab Prep Technician','Pressure Testing Technician','NDT'])assert.ok(el('employeeRole').innerHTML.includes('>'+label+'</option>'),label+' is a current job position');
+ assert.doesNotMatch(el('employeeRole').innerHTML,/value="(?:welder|misc)"|>Supervisor<|>Finisher</);
+ assert.deepEqual(Array.from(context.FabPermissions.roles(),row=>row.id),roles.map(row=>row.id));
+ for(const legacy of legacyRoles){
+  assert.equal(context.FabPermissions.label(legacy.id),legacy.label,'historical positions keep readable labels');
+  assert.equal(context.FabPermissions.description(legacy.id),legacy.description);
+  assert.equal(context.FabPermissions.ownerRoles().some(row=>row.id===legacy.id),false,'new requirements omit retired positions');
+  const ownerOptions=Array.from(context.FabPermissions.ownerRoles(legacy.id),row=>row.id);
+  assert.ok(ownerOptions.includes(legacy.id),'the saved retired owner remains selectable when retained');
+  assert.equal(ownerOptions.filter(id=>legacyRoles.some(row=>row.id===id)).length,1,'only this saved retired owner is offered');
+ }
+ assert.equal(context.FabPermissions.ownerRoles('unrecognized-position').length,roles.length);
  const blankBefore=writes().length;el('employeeForm').values={badge:'NEW',name:'Synthetic new user',pin:'synthetic-private-value',role:''};await el('employeeForm').onsubmit({preventDefault(){},target:el('employeeForm')});assert.equal(writes().length,blankBefore,'blank positions cannot create employees');
+ for(const retired of ['welder','misc','unrecognized-position']){
+  el('employeeRole').value=retired;el('employeeForm').values={badge:'NEW',name:'Synthetic new user',pin:'synthetic-private-value',role:retired};
+  await el('employeeForm').onsubmit({preventDefault(){},target:el('employeeForm')});assert.equal(writes().length,blankBefore,'new accounts cannot select '+retired);
+ }
  el('employeeRole').value='painter';el('employeeRole').onchange();assert.match(el('employeeRoleHelp').textContent,/coating/);
  el('employeeForm').values={badge:'NEW',name:'Synthetic new user',pin:'synthetic-private-value',role:'painter'};await el('employeeForm').onsubmit({preventDefault(){},target:el('employeeForm')});assert.equal(JSON.parse(writes().at(-1).body).role,'painter');assert.equal(el('employeeRole').value,'','the next employee also needs explicit selection');
  vm.runInContext("me={role:'admin'}",context);assert.equal(context.FabPermissions.can('admin'),false,'role names never replace missing server capability grants');
@@ -78,7 +95,7 @@ async function signIn(role){selectedRole=role;await context.refreshAuth();await 
  pending.get('/api/qr/status').reject(Error('QR status temporarily unavailable'));
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(visible('workspace'),false,'workspace waits for verified permissions');
- pending.get('/api/permissions').resolve({roles});await startup;
+ pending.get('/api/permissions').resolve({roles:allRoles,legacy_roles:legacyRoles});await startup;
  assert.equal(visible('workspace'),true,'a QR configuration read failure does not block authenticated use');
  const denied=context.refreshAuth();
  pending.get('/api/me').resolve(employee());
@@ -88,5 +105,5 @@ async function signIn(role){selectedRole=role;await context.refreshAuth();await 
  assert.equal(context.FabPermissions.can('admin'),false,'failed authentication clears stale capability grants');
  context.api=originalApi;
  assert.equal(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),html,'both HTML entrypoints stay identical');
- console.log('PASS: job permissions on legacy item controls and navigation; server denial is authoritative; all10 role labels; explicit employee position selection and scoped description; ordinary badge transfers remain available; missing capabilities fail closed.');
+ console.log('PASS: controls and navigation for 10 current positions and 2 retained historical roles; server denial is authoritative; current-only employee selection; exact retained owner options; ordinary badge transfers remain available; missing capabilities fail closed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

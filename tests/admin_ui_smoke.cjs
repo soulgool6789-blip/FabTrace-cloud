@@ -31,7 +31,7 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:null,curr
   }
   let result;
   if(url==='/api/admin/overview')result={version:'test-admin-release',counts:{items:records.size,released:0,admin_released:0,on_hold:1,employees:employees.length,active_admins:activeAdmins()}};
-  else if(url==='/api/admin/employees'||url==='/api/admin/employees?include_removed=true')result={employees:clone(employees.filter(e=>url.includes('?include_removed=true')||!e.removed).map(employeeView)),active_admins:activeAdmins(),removed_count:employees.filter(e=>e.removed).length,roles:require('./ui_permissions_fixture.cjs').roles};
+  else if(url==='/api/admin/employees'||url==='/api/admin/employees?include_removed=true')result={employees:clone(employees.filter(e=>url.includes('?include_removed=true')||!e.removed).map(employeeView)),active_admins:activeAdmins(),removed_count:employees.filter(e=>e.removed).length,roles:require('./ui_permissions_fixture.cjs').allRoles,legacy_roles:require('./ui_permissions_fixture.cjs').legacyRoles};
   else if(url==='/api/transfers/options')result=clone(options);
   else if(url.startsWith('/api/admin/items?')){const q=new URLSearchParams(url.split('?')[1]),rows=[...records.values()].map(r=>({...r.item,release_mode:r.release.mode}));result={items:clone(rows),total:rows.length,limit:25,offset:Number(q.get('offset'))}}
   else if(url.startsWith('/api/admin/items/'))result=clone(records.get(decodeURIComponent(url.split('/').at(-1))));
@@ -115,6 +115,45 @@ async function check(name,fn){await fn();checks.push(name)}
   await context.FabAdmin.open({tab:'employees',badge:'INACTIVE-POSITION',action:'position'});assert.match(html(),/This account is inactive/);set('adminEmployeeRole','painter');set('adminEmployeeReason','Correct the stored job position');await submit('adminEmployeeActionForm');assert.equal(JSON.parse(writes().at(-1).body).active,false);assert.equal(employees.find(e=>e.badge==='INACTIVE-POSITION').active,false);
   await context.FabAdmin.open({tab:'employees',badge:'REMOVED',includeRemoved:true,action:'position'});assert.equal(elements.has('adminEmployeeActionForm'),false);assert.doesNotMatch(html(),/data-admin-action="change-position"/);
   await context.FabAdmin.open({tab:'employees',badge:'PROMOTE-HANDLER',action:'position'});set('adminEmployeeRole','handler');set('adminEmployeeReason','Synthetic concurrent edit');writeFailure=Object.assign(Error('The employee record changed. Refresh before making another access change.'),{status:409});await submit('adminEmployeeActionForm');assert.equal(el('adminSaveEmployee').disabled,true);writeFailure=null;await click('refresh');assert.equal(elements.has('adminEmployeeActionForm'),false);
+ });
+ await check('retired positions require an explicit current choice for Change position',async()=>{
+  for(const [retired,nextRole] of [['welder','pressure_testing_technician'],['misc','ndt']]){
+   const badge='LEGACY-CHANGE-'+retired,name='Retained '+retired;
+   employees.push({badge,name,role:retired,active:false,version:4});
+   await context.FabAdmin.open({tab:'employees',badge,action:'position'});
+   assert.equal(el('adminEmployeeRole').value,'','a retired employee never defaults to Administrator');
+   assert.match(html(),/This position is retired. Use Change position to choose a current position./);
+   assert.doesNotMatch(html(),/<option value="(?:welder|misc)"/);
+   for(const label of ['Shop Foreman','Fab Prep Technician','Pressure Testing Technician','NDT'])assert.ok(html().includes('>'+label+'</option>'));
+   assert.match(html(),/Choose a job position/);
+   const before=writes().length;set('adminEmployeeReason','Approved position reassignment');await submit('adminEmployeeActionForm');
+   assert.equal(writes().length,before);assert.match(html(),/verified current job position/);
+   for(const invalid of ['welder','misc']){set('adminEmployeeRole',invalid);await submit('adminEmployeeActionForm');assert.equal(writes().length,before)}
+   set('adminEmployeeRole',nextRole);await submit('adminEmployeeActionForm');
+   const call=writes().at(-1);assert.equal(call.url,'/api/admin/employees/'+badge);
+   assert.deepEqual(JSON.parse(call.body),{expected_version:4,reason:'Approved position reassignment',name,role:nextRole,active:false});
+  }
+ });
+ await check('Edit account preserves only the same employee’s retained position',async()=>{
+  for(const retired of ['welder','misc']){
+   const badge='LEGACY-ACCOUNT-'+retired,other=retired==='welder'?'misc':'welder';
+   employees.push({badge,name:'Existing '+retired,role:retired,active:true,version:2});
+   await context.FabAdmin.open({tab:'employees',badge});await click('edit-employee');
+   assert.equal(el('adminEmployeeRole').value,retired);
+   assert.ok(html().includes('value="'+retired+'" selected>'));
+   assert.ok(!html().includes('<option value="'+other+'"'));
+   assert.match(html(),/current legacy position/);
+   set('adminEmployeeName','Corrected '+retired);set('adminEmployeeReason','Correct spelling and disable access');
+   el('adminEmployeeActive').checked=false;el('adminEmployeeActive').onchange();
+   await submit('adminEmployeeActionForm');
+   assert.deepEqual(JSON.parse(writes().at(-1).body),{expected_version:2,reason:'Correct spelling and disable access',name:'Corrected '+retired,role:retired,active:false});
+   await click('edit-employee');set('adminEmployeeReason','Do not assign another retired role');set('adminEmployeeRole',other);
+   const before=writes().length;await submit('adminEmployeeActionForm');assert.equal(writes().length,before);assert.match(html(),/verified current job position/);
+  }
+  await context.FabAdmin.open({tab:'employees',badge:'LEGACY-CHANGE-welder'});await click('edit-employee');
+  assert.doesNotMatch(html(),/<option value="(?:welder|misc)"/);
+  set('adminEmployeeReason','Do not restore retired assignment');set('adminEmployeeRole','welder');
+  const before=writes().length;await submit('adminEmployeeActionForm');assert.equal(writes().length,before);
  });
  await check('shell, admin visibility and release labels are integrated',async()=>{
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));for(const marker of ['id="navAdmin"','id="adminPage"','id="adminContent"','/static/admin.js','/static/admin.css','FabAdmin.cancelPending','adminReleaseBtn','itemAdminBtn'])assert.ok(index.includes(marker),marker);assert.match(index,/navAdmin'\)\.classList\.toggle\('hidden',me\.role!=='admin'/);assert.match(index,/params\.has\('admin'\)[\s\S]*FabAdmin\.open/);assert.match(index,/current\?\.release_control\?\.mode==='admin_override'[\s\S]*action:'return'/);
