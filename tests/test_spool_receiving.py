@@ -279,8 +279,18 @@ def test_unstructured_bom_cannot_be_adopted_or_approved_and_old_materials_surviv
         files=[('viewable-only.pdf', pdf(), 'application/pdf')]))
     current = receiving_detail(api, item_id)
     assert current['source_status']['changed'] and not current['source_status']['adoptable']
-    assert [{k: v for k, v in row.items() if k != 'qa001'} for row in current['traceability']['materials']] == [
-        {k: v for k, v in row.items() if k != 'qa001'} for row in accepted['traceability']['materials']]
+    # Stored identity/evidence survives; the derived QA state and station must
+    # reflect that the new document needs inspection.
+    assert [{k: v for k, v in row.items() if k not in ('qa001', 'flow_stage')}
+            for row in current['traceability']['materials']] == [
+        {k: v for k, v in row.items() if k not in ('qa001', 'flow_stage')}
+        for row in accepted['traceability']['materials']]
+    assert current['source_status']['pinned'] == accepted['source_status']['pinned']
+    assert current['arrival']['latest'] == accepted['arrival']['latest']
+    for row, previous in zip(current['traceability']['materials'], accepted['traceability']['materials']):
+        assert row['qa001']['status'] == 'needs_reinspection'
+        assert row['qa001']['latest'] == previous['qa001']['latest']
+        assert row['flow_stage']['key'] == 'qa_001'
     before = database_state(api)
     response = api.post(f'/api/spool-boms/spools/{item_id}/adopt-bom', {
         'expected_version': current['traceability']['version'],
@@ -365,3 +375,4 @@ def test_removed_physical_history_reads_and_shared_source_updates_do_not_reactiv
     with api.session_factory() as s:
         assert spool_mtr_retained_file(s, certificate['id'])['sha256'] == certificate['sha256']
     assert api.get(certificate['view_url']).status_code == 409
+

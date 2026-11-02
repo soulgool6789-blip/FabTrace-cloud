@@ -1,5 +1,13 @@
 # FabTrace Cloud
 
+## Shared material BOM behind an attached PDF
+
+Release `2026.11.02-bom-material-source.1` keeps an individual spool's view-only PDF available while using the latest structured BOM from that spool's exact setup requirement to create its physical material records. A structured individual-spool BOM still takes priority. Older document revisions, unrelated spool numbers and the built-in catalog are not substituted for an uploaded document.
+
+Existing saved material registers stay pinned to their original source and retain the explicit review/adoption process for a changed BOM. The PDF and the distinct structured material BOM both remain in quality evidence and Job Packets. A new revision of either evidence file requires current inspection review.
+
+The existing deployment initializer creates missing blank piece records once, with an initialization history entry. It does not enter heat numbers, MTR references or QA decisions. Arrival Pass still requires complete current material records, each piece's QA-001 Pass and the arrival checklist. The materials screen names the shared BOM and keeps a separate link to the attached document; blocked Pass choices link back to the outstanding material records.
+
 ## Revised 24-step fabrication flow
 
 Release `2026.11.02-testing-flow.1` uses traveler catalog **CLM-24-v4**. Steps **8, 12, 16 and 19** are **Return to Floor**. Step **17** is **Release to Testing (Hydro/UT)**, step **18** is **QA/QC-004 - Verify Test Results**, step **20** is **Release to Sandblast and Paint**, and step **22** is **QA/QC-005 - Final Inspection**.

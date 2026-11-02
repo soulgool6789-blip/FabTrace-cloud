@@ -313,6 +313,24 @@ def _effective(s, scope, identity, requirement=None):
     return local, inherited, active, rows, local_documents, inherited_documents
 
 
+def _material_bom_document(s, item_id, requirement=None):
+    """Keep the displayed BOM separate from the current structured material basis.
+
+    A view-only physical-copy upload does not replace the shared setup's
+    structured material list. Only the latest BOM in each exact scope is
+    considered; an older revision or a same-number spool is never a fallback.
+    Structured-but-invalid quantities retain their own review blockers.
+    """
+    _, _, active, rows, _, inherited = _effective(s, 'spools', item_id, requirement)
+    viewed = rows.get('bom')
+    selected, metadata = viewed, active['bom']
+    if viewed is not None and not metadata['inherited'] and not (viewed.bom or {}).get('lines'):
+        shared = next(((entry, row) for entry, row in inherited if row.kind == 'bom'), None)
+        if shared is not None and (shared[1].bom or {}).get('lines'):
+            metadata, selected = shared
+    return viewed, selected, metadata
+
+
 def _detail(s, scope, identity, user):
     context, item, requirement = _target(s, scope, identity)
     from spool_presentation import item_presentation, requirement_presentations
@@ -352,6 +370,10 @@ def _material_record_source_match(document_id, record, *, has_spools=False):
                   else 'Generate the physical spool records before recording per-piece material or QA/QC information.')
     elif document_id is None:
         code, reason = 'no_document', 'There is no saved BOM document in this scope.'
+    elif (not effective_matches and source.get('uses_shared_structured_bom')
+          and (source.get('viewed_bom') or {}).get('document_id') == document_id):
+        code, reason = ('shared_material_source',
+            'This document remains available for viewing. Physical material records use the structured BOM saved in this spool\'s setup.')
     elif not effective_matches:
         code, reason = 'individual_override', 'This physical spool uses an individual BOM. Open that spool\'s BOM to view its corresponding material records and approvals.'
     elif record_id != document_id:
@@ -850,7 +872,13 @@ def _physical_documents(s, item_id):
     registration = read_get(s, OrderSpool, item.id)
     requirement = read_get(s, OrderSpoolRequirement, registration.requirement_id) if registration else None
     _, _, active, rows, _, _ = _effective(s, 'spools', item.id, requirement)
-    return [(item.id, active[kind], rows[kind]) for kind in ('bom', 'isometric') if active[kind]]
+    result = [(item.id, active[kind], rows[kind]) for kind in ('bom', 'isometric') if active[kind]]
+    _, material_document, material_metadata = _material_bom_document(s, item.id, requirement)
+    if material_document is not None and all(row.id != material_document.id for _, _, row in result):
+        # The view-only PDF and the structured setup BOM both support this
+        # physical record. Retain both exact files in evidence and Job Packets.
+        result.append((item.id, material_metadata, material_document))
+    return result
 
 
 @read_cached(lambda s, item_id: item_id)
@@ -915,3 +943,4 @@ def _stored_file(s, document):
 # own bounded, atomic workflow while sharing the same immutable document model.
 from isometric_import import router as isometric_import_router
 router.include_router(isometric_import_router)
+

@@ -236,13 +236,16 @@ def _document_source(document):
 @read_cached(lambda s, item_id: item_id)
 def physical_bom_state(s, item_id):
     """Current/pinned source and physical rows without receiving projection recursion."""
-    from spool_documents import _target, _effective
+    from spool_documents import _target, _material_bom_document
     context, item, requirement = _target(s, 'spools', item_id)
     trace = read_get(s, SpoolBomTrace, item.id)
-    _, _, _, documents, _, _ = _effective(s, 'spools', item.id, requirement)
-    document = documents.get('bom')
+    viewed_document, document, _ = _material_bom_document(s, item.id, requirement)
     current_definition = _uploaded_definition(document, context) if document else _definition(context['spool_number'])
     current = _document_source(document) if document else deepcopy((current_definition or {}).get('_source'))
+    viewed = ({**_document_source(viewed_document),
+               'view_url': '/api/spool-documents/files/' + quote(viewed_document.id, safe='')}
+              if viewed_document is not None else None)
+    uses_shared = bool(viewed_document is not None and document is not None and viewed_document.id != document.id)
     definition = deepcopy(trace.definition) if trace else current_definition
     pinned = deepcopy((definition or {}).get('_source')) if trace else None
     if trace and not pinned:
@@ -259,6 +262,7 @@ def physical_bom_state(s, item_id):
         'current_definition': current_definition, 'context': context,
         'materials': _materials(s, item.id, definition),
         'source_status': {'current': current, 'pinned': pinned, 'changed': changed,
+            'viewed_bom': viewed, 'uses_shared_structured_bom': uses_shared,
             'adoptable': adoptable, 'can_adopt': False,
             'blocked_reason': ' '.join(blockers) if blockers else '' if adoptable else 'Upload or extract a structured whole-piece BOM.',
             'expected_bom_sha256': _source_hash(current)}}
@@ -660,3 +664,4 @@ def trace_history(item_id: str, version: int, user: Employee = Depends(auth), s:
         raise HTTPException(404, 'Material history revision not found.')
     return {'spool_id': item_id, 'version': event.version, 'actor': event.actor,
         'at': _stamp(event.at), 'reason': event.reason, 'changes': event.changes}
+
