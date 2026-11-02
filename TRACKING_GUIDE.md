@@ -18,9 +18,9 @@ Use **Spool parts** to enter the required physical components separately from th
 
 ### Receive each physical spool before starting work
 
-Open **Materials & QA/QC** on the physical spool's readable code, such as `643-777-PCW-03-01-[001]`. Its whole-piece BOM quantities create separate saved material entries: quantity 2 means two pieces with independent heat numbers, MTR references and inspection history. Save the material information, then have QA/QC or an administrator record **QA-001 Pass/Fail for every piece**, with optional reference and notes for Pass and required reference/reason for Fail. A piece Pass needs its current BOM and MTR reference. Heat numbers are optional until post-fabrication QA/QC-003.
+Open **Materials & QA/QC** on the physical spool's readable code, such as `643-777-PCW-03-01-[001]`. Its whole-piece BOM quantities create separate saved material entries: quantity 2 means two pieces with independent heat numbers, MTR references and inspection history. Save the material information, then have QA/QC or an administrator record **QA-001 Pass/Fail for every piece**, with optional reference and notes for Pass and required reference/reason for Fail. A piece Pass needs its saved physical record and current BOM. Both heat numbers and MTR references are optional until post-fabrication QA/QC-003.
 
-After all pieces pass, record the separate **overall arrival Pass** for that spool, including identity, BOM, MTR/material references and condition. If every heat is entered, also verify its marking; otherwise heat verification is explicitly deferred. Pending, failed or stale piece/arrival evidence prevents fit-up, welding, timer start/resume, traveler advancement and release. An assembly also depends on the current acceptance of its child spools. Changes require the affected piece inspections and overall arrival decision to be reviewed again; corrections and pause/finish remain available without inventing work.
+After all pieces pass, record the separate **overall arrival Pass** for that spool, including identity, BOM and condition. Verify heat markings when every heat is entered and MTRs when every reference is entered. Each missing category is explicitly recorded as deferred. Pending, failed or stale piece/arrival evidence prevents fit-up, welding, timer start/resume, traveler advancement and release. An assembly also depends on the current acceptance of its child spools. Changes require the affected piece inspections and overall arrival decision to be reviewed again; corrections and pause/finish remain available without inventing work.
 
 Readable codes are permanent aliases, globally numbered per spool number across P.O.s. Removed spools retain their numbers. The internal item ID, old printed QR links and existing records remain valid. Scan the readable QR, paste its full link, or enter the complete code including its bracketed suffix; FabTrace resolves it to the same physical record.
 
@@ -28,7 +28,7 @@ Readable codes are permanent aliases, globally numbered per spool number across 
 
 Select **Add weld** and enter a joint number such as `W01`. Numbers must be unique within their spool and remain unchanged after creation. FabTrace also assigns a permanent internal identity. Root and fill/cap operations belong to this one joint; they do not count as extra welds.
 
-Record the joint type, size with units, wall thickness or schedule, drawing revision and location or description. For **both material sides**, identify the actual component or piece/lot and MTR reference. Heat numbers may remain blank through fabrication, including **step 14 — Complete Welds**. Enter the actual heats before **step 15 — QA/QC-003: Inspect Welds** and post-weld acceptance. Heat entry updates evidence and requires the affected fresh reviews; it does not erase completed welding operations. Repeated BOM positions can represent different physical pieces, so record the material actually used.
+Record the joint type, size with units, wall thickness or schedule, drawing revision and location or description. For **both material sides**, identify the actual component or piece/lot before welding. Heat numbers and MTR references may both remain blank through fabrication, including **step 14 — Complete Welds**. Enter both before **step 15 — QA/QC-003: Inspect Welds** acceptance. Heat or MTR entry updates evidence and requires the affected fresh reviews; it does not erase completed welding operations. Repeated BOM positions can represent different physical pieces, so record the material actually used.
 
 Enter the WPS identifier and revision. The procedure requirement also needs evidence of an inspector's manual qualification-applicability review. An employee's badge or application role does not establish welding qualification, and FabTrace does not calculate qualification ranges.
 
@@ -40,8 +40,8 @@ Every new weld receives these baseline controls:
 
 | Control | Approval stage |
 | --- | --- |
-| Both-side component identity and MTR references | Before welding |
-| Physical material and weld-side heat numbers | After fabrication, before QA/QC-003 acceptance/testing/release |
+| Both-side component identity | Before welding |
+| Physical material and weld-side heat numbers and MTR references | After fabrication, before QA/QC-003 acceptance/testing/release |
 | WPS and welder qualification applicability | Before welding |
 | Fit-up verification | Before welding |
 | Visual examination review | After welding |
@@ -60,7 +60,7 @@ Welder, Fit-up welder or Administrator records fit-up. Obtain the required befor
 
 Submit evidence assigned to your position. A general Welder may also submit evidence assigned to Fit-up welder or Process welder; those specialists do not inherit general Welder assignments. Supervisors, QA/QC and administrators may coordinate submissions across positions. These submission permissions do not grant QA acceptance.
 
-Submitting evidence produces **Awaiting review**, or **Rejected** for a reported failure. It does not accept the requirement. An inspector or administrator reviews the current evidence, records review notes and accepts or rejects the requirement. Required component/MTR and WPS fields must also be complete. Physical-material and weld-side heat numbers become mandatory for post-fabrication acceptance, testing and release. An administrative release or optional checklist item cannot bypass that deadline.
+Submitting evidence produces **Awaiting review**, or **Rejected** for a reported failure. It does not accept the requirement. An inspector or administrator reviews the current evidence, records review notes and accepts or rejects the requirement. Required component identity and WPS fields must also be complete. Physical-material and weld-side heat numbers and MTR references become mandatory for post-fabrication acceptance, testing and release. An administrative release or optional checklist item cannot bypass that deadline.
 
 Use **Not applicable** only where that requirement explicitly allows it, with the reason and authorization reference. The baseline material, procedure, fit-up, visual and final-QA controls cannot be dismissed this way. A latest failing result cannot be dismissed as not applicable.
 
@@ -120,7 +120,7 @@ Administrators can use **Export Excel** to download **Process events**, **Proces
 
 ## 9. Follow the numbered CLM fabrication flow
 
-The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v4**. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
+The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v5**. Step 2 reviews available material documentation and permits heat/MTR verification to be deferred until QA/QC-003. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
 
 | Phase | Numbered steps |
 | --- | --- |

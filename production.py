@@ -406,7 +406,7 @@ def sync_flow_process(s, item, actor, step, at, notes=''):
         if post_fabrication_heat_errors(s, item):
             if current is not None:
                 _append_event(s, item, actor, 'finish', current['process_key'], current['process_name'],
-                              'Work timer stopped: post-fabrication heat numbers are required. ' + notes,
+                              'Work timer stopped: post-fabrication heat numbers and MTR references are required. ' + notes,
                               at, snapshot['version'])
             return
     key = f"clm_{step['number']:02d}"

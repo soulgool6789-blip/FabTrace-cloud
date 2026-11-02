@@ -25,7 +25,7 @@ from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
-VERSION = 'CLM-24-v4'
+VERSION = 'CLM-24-v5'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
@@ -57,7 +57,7 @@ def _step(number, title, section, checks):
 
 STEPS = (
     _step(1, 'Receive Shipment', 'Material receipt', ['Scan the material barcode / ID', 'Verify against purchase order and BOM', 'Inspect material condition']),
-    _step(2, 'Check Dimensions', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Verify MTR and material documentation']),
+    _step(2, 'Check Dimensions', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Review available material documentation (heat/MTR verification due at QA/QC-003)']),
     _step(3, 'Capture Location', 'Material receipt', ['Scan material into inventory', 'Record its storage location']),
     _step(4, 'Material in Inventory', 'Material receipt', ['Confirm the material is available for production']),
     _step(5, 'Select Components for Spool', 'Component preparation', ['Select components against the BOM / isometric', 'Scan components out of inventory']),

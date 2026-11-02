@@ -39,6 +39,8 @@ _DEFINITIONS = {_key(row['spool_number']): row for row in _CATALOG['spools']}
 MATERIAL_FIELDS = ('supplier', 'supplier_piece_id', 'heat_number', 'mtr_reference', 'mtr_url', 'notes')
 HEAT_REQUIRED_FROM_STEP = 15
 HEAT_REQUIRED_AT_LABEL = 'QA/QC-003 - Inspect Welds'
+MTR_REQUIRED_FROM_STEP = HEAT_REQUIRED_FROM_STEP
+MTR_REQUIRED_AT_LABEL = HEAT_REQUIRED_AT_LABEL
 
 
 class SpoolBomTrace(Base):
@@ -425,7 +427,10 @@ def spool_bom_scope_basis(s, item_id, seen=None):
 
 @read_cached(lambda s, item, include_children=True: (item.id, include_children))
 def spool_heat_errors(s, item, include_children=True):
-    """Post-fabrication heat completeness for exactly the active physical scope."""
+    """Post-fabrication heat/MTR completeness for the exact active scope.
+
+    The existing helper name is retained for callers of the shared release gate.
+    """
     from spool_receiving import _scope_items
     try:
         require_active_item(s, item.id)
@@ -439,13 +444,15 @@ def spool_heat_errors(s, item, include_children=True):
     for spool in _scope_items(s, item, include_children):
         state = physical_bom_state(s, spool.id)
         if not state['trace'] or not state['materials']:
-            errors.append(f'{spool.id}: Save the physical material-piece register and heat numbers before {HEAT_REQUIRED_AT_LABEL}.')
+            errors.append(f'{spool.id}: Save the physical material-piece register, heat numbers and MTR references before {HEAT_REQUIRED_AT_LABEL}.')
             continue
         if state['source_status']['changed']:
-            errors.append(f'{spool.id}: Adopt the current BOM before verifying post-fabrication heat numbers.')
+            errors.append(f'{spool.id}: Adopt the current BOM before verifying post-fabrication heat numbers and MTR references.')
         for piece in state['materials']:
-            if not piece['persisted'] or not piece['heat_number'].strip():
-                errors.append(f'{spool.id}: Record the heat number for {piece["piece_identifier"]} before {HEAT_REQUIRED_AT_LABEL}.')
+            missing = [label for key, label in (('heat_number', 'heat number'), ('mtr_reference', 'MTR reference'))
+                       if not piece['persisted'] or not piece[key].strip()]
+            if missing:
+                errors.append(f'{spool.id}: Record the {" and ".join(missing)} for {piece["piece_identifier"]} before {HEAT_REQUIRED_AT_LABEL}.')
     return list(dict.fromkeys(errors))
 
 
@@ -504,12 +511,17 @@ def _spool_detail(s, item_id, user):
         'locked_reason': locked or ('Adopt the current BOM before editing its material register.' if source_status['changed'] else source_status['blocked_reason']),
         'complete': bool(trace and materials and not source_status['changed']
                          and all(row['heat_number'] and row['mtr_reference'] for row in materials)),
-        'receiving_complete': bool(trace and materials and not source_status['changed']
-                                  and all(row['persisted'] and row['mtr_reference'].strip() for row in materials)),
+        'receiving_complete': bool(trace and definition and definition.get('traceable', True)
+                                  and materials and not source_status['changed']
+                                  and all(row['persisted'] for row in materials)),
         'heat_numbers_complete': bool(trace and materials and not source_status['changed']
                                      and all(row['persisted'] and row['heat_number'].strip() for row in materials)),
         'heat_required_for_receiving': False, 'heat_required_from_step': HEAT_REQUIRED_FROM_STEP,
         'heat_required_at_label': HEAT_REQUIRED_AT_LABEL,
+        'mtr_references_complete': bool(trace and materials and not source_status['changed']
+                                       and all(row['persisted'] and row['mtr_reference'].strip() for row in materials)),
+        'mtr_required_for_receiving': False, 'mtr_required_from_step': MTR_REQUIRED_FROM_STEP,
+        'mtr_required_at_label': MTR_REQUIRED_AT_LABEL,
         'materials': materials, 'history': [{'version': event.version, 'actor': event.actor,
             'at': _stamp(event.at), 'reason': event.reason,
             'detail_url': f'/api/spool-boms/spools/{quote(item.id, safe="")}/history/{event.version}',

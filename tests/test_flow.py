@@ -131,7 +131,7 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     steps = definition["steps"]
     assert [row["number"] for row in steps] == list(range(1, 25))
     assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 18, 22}
-    assert definition['version'] == 'CLM-24-v4'
+    assert definition['version'] == 'CLM-24-v5'
     assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
         (2, 'QA-001', 'QA/QC-001 · Check Dimensions'),
         (11, 'QA-002', 'QA/QC-002 · Check Dimensions'),
@@ -154,26 +154,78 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     assert set(steps[21]["return_steps"]) == {17, 18, 19, 20, 21}
 
 
-def test_numbered_qa_titles_do_not_rewrite_historical_definitions(api, monkeypatch):
+def test_step2_reviews_available_documents_with_heat_and_mtr_deferred(api):
+    from receiving_helpers import (approve_materials, receiving_detail, record_arrival,
+        upload_receiving_bom)
+
+    # Step 2 belongs to an individual component; the physical material register
+    # belongs to its assigned spool. Neither field is supplied or certified.
+    spool_id = create_item(api, 'FLOW-DEFERRED-MATERIALS', kind='Spool')
+    upload_receiving_bom(api, spool_id)
+    assert all(not row['heat_number'] and not row['mtr_reference']
+               for row in receiving_detail(api, spool_id)['traceability']['materials'])
+    approve_materials(api, spool_id)
+    received = ok(record_arrival(api, spool_id), 201)
+    assert received['arrival']['can_proceed']
+    assert set(received['arrival']['deferred_checks']) == {'heat_numbers', 'mtrs'}
+
+    item_id = create_item(api, 'FLOW-DEFERRED-COMPONENT')
+    enroll(api, item_id, 'component')
+    assign_component(api, item_id, spool_id)
+    current = advance(api, item_id)
+    assert_current(current, 2)
+    expected_label = 'Review available material documentation (heat/MTR verification due at QA/QC-003)'
+    assert current['flow']['current']['checks'][1] == {'id': 's2_2', 'label': expected_label}
+
+    incomplete = api.post(f'{ROOT}/items/{item_id}/advance',
+        action_body(api, item_id, confirmations=['s2_1']), role='inspector')
+    assert incomplete.status_code == 422, incomplete.text
+    progressed = advance(api, item_id, role='inspector',
+        reference='TEST-AVAILABLE-ISOMETRIC', notes='Available dimensions and documents reviewed; heat and MTR deferred.')
+    assert_current(progressed, 3)
+    event = next(row for row in progressed['events'] if row['action'] == 'advance' and row['step'] == 2)
+    assert event['data']['definition_version'] == 'CLM-24-v5'
+    assert event['data']['confirmations'] == ['s2_1', 's2_2']
+    assert event['data']['step_definition']['checks'][1] == {'id': 's2_2', 'label': expected_label}
+    assert 'Verify MTR and material documentation' not in str(event['data']['step_definition'])
+    retained = receiving_detail(api, spool_id)
+    assert retained['traceability'] == received['traceability']
+    assert retained['arrival']['latest'] == received['arrival']['latest']
+    assert all(not row['heat_number'] and not row['mtr_reference']
+               for row in retained['traceability']['materials'])
+
+
+@pytest.mark.parametrize('legacy_version, legacy_title', [
+    ('CLM-24-v1', 'Check Dimensions'),
+    ('CLM-24-v4', 'QA/QC-001 · Check Dimensions'),
+])
+def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, monkeypatch, legacy_version, legacy_title):
     flow = importlib.import_module('flow')
     item_id = create_item(api, 'FLOW-OLD-QA-TITLE')
-    legacy = {**flow.STEP_BY_NUMBER[2], 'title': 'Check Dimensions'}
-    legacy.pop('qa_code')
+    legacy = {**flow.STEP_BY_NUMBER[2], 'title': legacy_title,
+        'checks': [dict(check) for check in flow.STEP_BY_NUMBER[2]['checks']]}
+    legacy['checks'][1]['label'] = 'Verify MTR and material documentation'
+    if legacy_version == 'CLM-24-v1':
+        legacy.pop('qa_code')
     with monkeypatch.context() as old:
-        old.setattr(flow, 'VERSION', 'CLM-24-v1')
+        old.setattr(flow, 'VERSION', legacy_version)
         old.setitem(flow.STEP_BY_NUMBER, 2, legacy)
         previous = enroll(api, item_id, 'component', start_step=2)
     retained = previous['events']
-    assert retained[0]['data']['definition_version'] == 'CLM-24-v1'
-    assert retained[0]['data']['step_definition']['title'] == 'Check Dimensions'
+    assert retained[0]['data']['definition_version'] == legacy_version
+    assert retained[0]['data']['step_definition'] == legacy
+    definition = catalog(api)
+    assert definition['version'] == 'CLM-24-v5'
     current = detail(api, item_id)
     assert current['events'] == retained
     assert current['flow']['current']['title'] == 'QA/QC-001 · Check Dimensions'
-    assert current['flow']['current']['checks'] == legacy['checks']
+    assert current['flow']['current']['checks'] == definition['steps'][1]['checks']
+    assert current['flow']['current']['checks'] != legacy['checks']
     progressed = advance(api, item_id, role='inspector')
     newer = next(row for row in progressed['events'] if row['action'] == 'advance')
-    assert newer['data']['definition_version'] == 'CLM-24-v4'
+    assert newer['data']['definition_version'] == 'CLM-24-v5'
     assert newer['data']['step_definition']['qa_code'] == 'QA-001'
+    assert newer['data']['step_definition'] == definition['steps'][1]
     assert next(row for row in progressed['events'] if row['sequence'] == retained[0]['sequence']) == retained[0]
 
 

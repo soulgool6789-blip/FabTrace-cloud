@@ -113,18 +113,22 @@ def test_shared_bom_piece_keys_do_not_authorize_a_different_physical_copy(api):
     assert database_state(api) == before
 
 
-def test_one_missing_mtr_blocks_entire_batch_with_named_piece(api):
-    prepared(api)
+def test_one_changed_piece_blocks_entire_batch_with_named_piece(api):
+    original = prepared(api)
+    body = pass_all_body(original)
     detail = edit_piece(api, 'BULK-QA-01', 1, mtr_reference='')
     blocked = detail['traceability']['materials'][1]
-    assert blocked['qa001']['pass_blockers']
+    assert not blocked['qa001']['pass_blockers'], 'A missing MTR is deferred until after fabrication'
+    # Even with the new register version, the caller must inspect this changed
+    # piece's current evidence; a previously reviewed piece hash cannot pass it.
+    body['expected_trace_version'] = detail['traceability']['version']
     before = database_state(api)
-    response = pass_all(api, 'BULK-QA-01', pass_all_body(detail))
+    response = pass_all(api, 'BULK-QA-01', body)
     assert response.status_code == 409, response.text
     errors = response.json()['detail']['piece_blockers']
     assert len(errors) == 1 and errors[0]['piece_key'] == blocked['piece_key']
     assert errors[0]['piece_identifier'] == blocked['piece_identifier']
-    assert 'MTR reference' in ' '.join(errors[0]['blockers'])
+    assert 'evidence changed' in ' '.join(errors[0]['blockers'])
     assert database_state(api) == before
 
 

@@ -286,7 +286,7 @@ def _inspection_view(row):
     basis = row.basis or {}
     if basis.get('deferred_checks'):
         result.update({key: deepcopy(basis[key]) for key in
-            ('deferred_checks', 'heat_deferral', 'checks_catalog')})
+            ('deferred_checks', 'heat_deferral', 'mtr_deferral', 'checks_catalog') if key in basis})
     return result
 
 
@@ -341,8 +341,10 @@ def _material_inspection_view(row, *, include_deferral=False):
         return None
     result = {key: getattr(row, key) for key in ('id', 'spool_id', 'piece_key', 'version',
         'check_code', 'result', 'actor', 'reference', 'notes', 'basis_sha256')} | {'at': _stamp(row.at)}
-    if include_deferral and (row.basis or {}).get('heat_deferral'):
-        result['heat_deferral'] = deepcopy(row.basis['heat_deferral'])
+    if include_deferral:
+        for key in ('heat_deferral', 'mtr_deferral'):
+            if (row.basis or {}).get(key):
+                result[key] = deepcopy(row.basis[key])
     return result
 
 
@@ -354,8 +356,18 @@ def _heat_deferral(materials):
              'required_at_label': HEAT_REQUIRED_AT_LABEL, 'pieces': missing} if missing else None)
 
 
-def _arrival_checks(heat_deferral):
-    checks = [dict(row) for row in CHECKS if not (heat_deferral and row['key'] == 'heat_numbers')]
+def _mtr_deferral(materials):
+    from spool_boms import MTR_REQUIRED_FROM_STEP, MTR_REQUIRED_AT_LABEL
+    missing = [{key: row[key] for key in ('piece_key', 'piece_identifier')}
+               for row in materials if not row['mtr_reference'].strip()]
+    return ({'required_from_step': MTR_REQUIRED_FROM_STEP,
+             'required_at_label': MTR_REQUIRED_AT_LABEL, 'pieces': missing} if missing else None)
+
+
+def _arrival_checks(heat_deferral, mtr_deferral=None):
+    checks = [dict(row) for row in CHECKS
+              if not (heat_deferral and row['key'] == 'heat_numbers')
+              and not (mtr_deferral and row['key'] == 'mtrs')]
     if heat_deferral:
         for check in checks:
             if check['key'] == 'mtrs':
@@ -394,6 +406,9 @@ def _material_qa_bases(s, state):
         deferred_heat = _heat_deferral([row])
         if deferred_heat:
             basis['heat_deferral'] = deferred_heat
+        deferred_mtr = _mtr_deferral([row])
+        if deferred_mtr:
+            basis['mtr_deferral'] = deferred_mtr
         result[row['piece_key']] = basis
     return result
 
@@ -405,8 +420,6 @@ def _material_pass_blockers(state, material):
         blockers.append('Save this physical material record before recording QA-001.')
     if state['source_status']['changed']:
         blockers.append('Adopt and review the current BOM before approving this piece.')
-    if not material['mtr_reference'].strip():
-        blockers.append('Enter and save this piece\'s MTR reference before Pass.')
     return blockers
 
 
@@ -435,6 +448,7 @@ def material_qa_states(s, state, user=None, *, bases=None):
             'status': status, 'can_proceed': current, 'basis_sha256': digest,
             'latest': _material_inspection_view(decision), 'blockers': blockers, 'pass_blockers': pass_blockers,
             'heat_deferral': deepcopy(bases[key].get('heat_deferral')),
+            'mtr_deferral': deepcopy(bases[key].get('mtr_deferral')),
             'history_url': f'/api/spool-boms/spools/{quote(state["item"].id, safe="")}/materials/{quote(key, safe="")}/qa-001',
             'permissions': {'can_inspect': bool(permitted and material['persisted'])}}
     return result
@@ -456,9 +470,6 @@ def _basis(s, item):
         blockers.append('Save the material register for this individual spool.')
     if source['changed']:
         blockers.append('The effective BOM has changed. Adopt and review its current revision for this spool.')
-    missing = [row['piece_key'] for row in materials if not row['mtr_reference'].strip()]
-    if missing:
-        blockers.append('An MTR reference is required for every material piece: ' + ', '.join(missing[:20]) + ('.' if len(missing) <= 20 else ' …'))
     if not materials:
         blockers.append('A complete physical material-piece register is required for arrival approval.')
     qa = material_qa_states(s, state)
@@ -482,11 +493,15 @@ def _basis(s, item):
             evidence[key] = {field: value for field, value in evidence[key].items()
                              if field not in ('download_url', 'view_url')}
     deferred_heat = _heat_deferral(materials)
+    deferred_mtr = _mtr_deferral(materials)
     if deferred_heat:
-        # Only deferred inspections use this additive evidence contract. Older
-        # complete-heat fingerprints and their acceptance remain unchanged.
-        evidence.update(heat_deferral=deferred_heat, deferred_checks=['heat_numbers'],
-                        checks_catalog=_arrival_checks(deferred_heat))
+        evidence['heat_deferral'] = deferred_heat
+    if deferred_mtr:
+        evidence['mtr_deferral'] = deferred_mtr
+    if deferred_heat or deferred_mtr:
+        # Preserve complete and heat-only evidence exactly when MTRs are saved.
+        evidence.update(deferred_checks=(['heat_numbers'] if deferred_heat else []) + (['mtrs'] if deferred_mtr else []),
+                        checks_catalog=_arrival_checks(deferred_heat, deferred_mtr))
     return evidence, list(dict.fromkeys(blockers))
 
 
@@ -534,6 +549,7 @@ def _physical_summary(s, item, user=None, history=False):
         'latest': _inspection_view(latest),
         'history': [], 'permissions': {'can_inspect': has_capability(user, 'quality_review') and not _locked_reason(s, item)},
         'heat_deferral': deepcopy(evidence.get('heat_deferral')),
+        'mtr_deferral': deepcopy(evidence.get('mtr_deferral')),
         'deferred_checks': list(evidence.get('deferred_checks', [])),
         'checks_catalog': deepcopy(evidence.get('checks_catalog', CHECKS))}
     if history:
@@ -635,9 +651,8 @@ def inspect_material(item_id: str, piece_key: str, data: MaterialInspectionIn,
         raise HTTPException(409, 'This material piece, BOM or MTR changed. Reload and inspect the current evidence.')
     basis = bases[piece_key]
     material = basis['material']
-    if data.result == 'Pass' and (state['source_status']['changed']
-            or not material['mtr_reference'].strip()):
-        raise HTTPException(409, 'QA-001 Pass requires this piece\'s current BOM and MTR reference; heat numbers are required after fabrication.')
+    if data.result == 'Pass' and state['source_status']['changed']:
+        raise HTTPException(409, 'QA-001 Pass requires this piece\'s current BOM; heat numbers and MTR references are required after fabrication.')
     row = SpoolMaterialInspection(spool_id=item.id, piece_key=piece_key,
         version=data.expected_version + 1, check_code='QA-001', result=data.result,
         actor=user.badge, reference=data.reference, notes=data.notes,
@@ -762,9 +777,13 @@ def inspect_arrival(item_id: str, data: ArrivalIn, user: Employee = Depends(auth
     if data.basis_sha256 != _digest(evidence):
         raise HTTPException(409, 'The spool BOM, materials or MTRs changed. Reload and inspect the current evidence.')
     checks = data.checks.model_dump()
+    phantom_checks = []
     if 'heat_numbers' in evidence.get('deferred_checks', []) and checks['heat_numbers']:
-        raise HTTPException(409, {'receiving_blockers': [
-            'Heat numbers are deferred until after fabrication. Do not mark absent heat numbers as verified.']})
+        phantom_checks.append('Heat numbers are deferred until after fabrication. Do not mark absent heat numbers as verified.')
+    if 'mtrs' in evidence.get('deferred_checks', []) and checks['mtrs']:
+        phantom_checks.append('MTR references are deferred until after fabrication. Do not mark missing MTRs as verified.')
+    if phantom_checks:
+        raise HTTPException(409, {'receiving_blockers': phantom_checks})
     required_checks = evidence.get('checks_catalog', CHECKS)
     confirmed = all(checks[check['key']] for check in required_checks)
     if data.result == 'Pass' and (blockers or not confirmed):

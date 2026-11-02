@@ -6,7 +6,6 @@ from sqlalchemy import select
 from receiving_helpers import (accept_arrival, approve_materials, receiving_detail,
     record_arrival, save_receiving_materials, upload_receiving_bom)
 from test_arrival_pass_readiness import pass_payload
-from test_material_piece_qa import decide, edit_piece
 from test_material_piece_qa_bulk import pass_all, pass_all_body
 from test_order_labels import public_qr_url  # autouse physical-label fixture
 from test_progress import database_state
@@ -72,16 +71,13 @@ def test_pass_all_accepts_saved_mtrs_without_heat_and_keeps_each_piece_audited(a
         assert len(history) == 1 and history[0]['heat_deferral']['pieces'][0]['piece_key'] == row['piece_key']
 
 
-def test_deferred_heat_never_waives_mtr_current_qa_or_permits_false_heat_verification(api):
+def test_deferred_heat_never_waives_current_qa_or_permits_false_heat_verification(api):
     item_id, _ = deferred_spool(api)
-    missing = edit_piece(api, item_id, 1, mtr_reference='')
-    piece = missing['traceability']['materials'][1]
     before = database_state(api)
-    assert decide(api, item_id, piece).status_code == 409
-    assert pass_all(api, item_id).status_code == 409
-    assert record_arrival(api, item_id).status_code == 409
+    missing_qa = record_arrival(api, item_id)
+    assert missing_qa.status_code == 409
+    assert 'current QA-001 Pass' in missing_qa.text
     assert database_state(api) == before
-    save_receiving_materials(api, item_id, heat='')
     approved = approve_materials(api, item_id)
     invalid = pass_payload(approved)
     invalid['checks']['heat_numbers'] = True

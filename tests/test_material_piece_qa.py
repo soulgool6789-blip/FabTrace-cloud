@@ -98,11 +98,12 @@ def test_only_qa_roles_can_record_piece_decisions(api, role):
     assert database_state(api) == before
 
 
-def test_piece_fail_can_record_missing_materials_pass_requires_complete_basis(api):
+def test_piece_fail_persists_after_material_entry_until_an_explicit_pass(api):
     item_id = create_spool(api)
     upload_receiving_bom(api, item_id)
     piece = receiving_detail(api, item_id)['traceability']['materials'][0]
-    assert decide(api, item_id, piece).status_code == 409
+    assert piece['qa001']['latest'] is None and not piece['qa001']['can_proceed']
+    assert not piece['qa001']['pass_blockers'], 'Heat and MTR evidence may be deferred at receiving'
     failed = ok(decide(api, item_id, piece, 'Fail'), 201)
     assert failed['traceability']['materials'][0]['qa001']['status'] == 'failed'
     completed = save_receiving_materials(api, item_id)

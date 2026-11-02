@@ -358,7 +358,7 @@ class CloseHoldIn(InputModel):
 
 
 DEFAULT_REQUIREMENTS = [
-    {'code': 'MATERIALS', 'label': 'Both-side component / MTR traceability (heat required after fabrication)',
+    {'code': 'MATERIALS', 'label': 'Both-side component identity (heat/MTR required after fabrication)',
      'stage': 'before_welding', 'check': 'materials'},
     {'code': 'PROCEDURE', 'label': 'WPS and welder qualification applicability verified',
      'stage': 'before_welding', 'check': 'procedure'},
@@ -657,18 +657,19 @@ def _production_complete(s, weld):
     return 'complete' in operations and set(weld.required_operations or []).issubset(operations) and bool(weld.required_operations)
 
 
-def _material_errors(weld, *, include_heat=True):
+def _material_errors(weld, *, include_traceability=True):
     names = [('component_a', 'Component A piece / lot identity'),
-             ('mtr_a', 'Component A MTR reference'), ('component_b', 'Component B piece / lot identity'),
-             ('mtr_b', 'Component B MTR reference')]
-    if include_heat:
-        names += [('heat_a', 'Component A heat'), ('heat_b', 'Component B heat')]
+             ('component_b', 'Component B piece / lot identity')]
+    if include_traceability:
+        names += [('heat_a', 'Component A heat'), ('heat_b', 'Component B heat'),
+                  ('mtr_a', 'Component A MTR reference'), ('mtr_b', 'Component B MTR reference')]
     return [label + ' missing' for key, label in names if not (getattr(weld, key) or '').strip()]
 
 
 def _weld_heat_errors(weld):
     return [label + ' is required after fabrication, before post-weld QA/testing/release'
-            for key, label in (('heat_a', 'Component A heat number'), ('heat_b', 'Component B heat number'))
+            for key, label in (('heat_a', 'Component A heat number'), ('heat_b', 'Component B heat number'),
+                               ('mtr_a', 'Component A MTR reference'), ('mtr_b', 'Component B MTR reference'))
             if not (getattr(weld, key) or '').strip()]
 
 
@@ -685,10 +686,11 @@ def _physical_heat_errors(s, item):
 
 @read_cached(lambda s, item, include_children=True: (item.id, include_children))
 def post_fabrication_heat_errors(s, item, *, include_children=True):
-    """Independent heat deadline; custom/NA weld requirements cannot waive it.
+    """Independent heat/MTR deadline; custom/NA requirements cannot waive it.
 
     Fabrication work and completion do not call this acceptance gate. Assemblies
     include their own welds and the exact active physical descendant scope.
+    The original helper name is retained for existing acceptance/timer callers.
     """
     from order_spools import effective_children
     from spool_boms import spool_heat_errors
@@ -728,7 +730,7 @@ def _check_errors(s, req, weld=None):
     if req.check_kind in ('materials', 'procedure') and weld is None:
         return errors + ['This check requires an individual weld record']
     if req.check_kind == 'materials':
-        errors.extend(_material_errors(weld, include_heat=req.stage != 'before_welding'))
+        errors.extend(_material_errors(weld, include_traceability=req.stage != 'before_welding'))
     elif req.check_kind == 'procedure':
         errors.extend(label + ' missing' for key, label in [('wps', 'WPS identifier'), ('wps_revision', 'WPS revision')]
                       if not (getattr(weld, key) or '').strip())

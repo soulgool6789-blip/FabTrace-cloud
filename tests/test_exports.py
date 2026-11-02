@@ -725,7 +725,7 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     receipt = next(row for row in events if row["action"].value == "advance")
     data = json.loads(receipt["data"].value)
     assert data["confirmations"] == [row["id"] for row in current["current"]["checks"]]
-    assert data["definition_version"] == "CLM-24-v4"
+    assert data["definition_version"] == "CLM-24-v5"
     assert data["step_definition"]["number"] == 1
     assert receipt["notes"].value == "Receipt α < & >"
     exception = workbook.records("Flow exceptions")[0]
@@ -742,7 +742,7 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     qa_steps = [row for row in workbook.records("Flow steps") if row["qa"].value]
     assert [row["qa_code"].value for row in qa_steps] == ["QA-001", "QA-002", "QA-003", "QA-004", "QA-005"]
     assert qa_steps[0]["title"].value == "QA/QC-001 · Check Dimensions"
-    assert [row["display_qa_code"].value for row in qa_steps] == ["QA/QC-001", "QA/QC-002", "QA/QC-003", None, "QA/QC-004"]
+    assert [row["display_qa_code"].value for row in qa_steps] == ["QA/QC-001", "QA/QC-002", "QA/QC-003", "QA/QC-004", "QA/QC-005"]
     assert qa_steps[-1]["flow_stage_key"].value == "qa_004"
     shipping = workbook.records("Flow steps")[22]
     assert shipping["number"].value == 23 and shipping["requires_reference"].value is True

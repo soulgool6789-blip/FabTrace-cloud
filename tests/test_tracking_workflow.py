@@ -79,13 +79,15 @@ def test_empty_scope_requires_explicit_zero_weld_basis(api):
     assert response.status_code == 422, response.text
 
 
-def test_material_traceability_is_required_for_material_acceptance(api):
+def test_component_identity_is_required_for_material_acceptance(api):
     item_id = make_spool(api)
-    record = add_weld(api, item_id, heat_b="", mtr_b="")
+    record = add_weld(api, item_id, component_b="", heat_b="", mtr_b="")
     req = find_requirement(api, item_id, record["id"], check="materials")
     submit(api, item_id, req["id"])
     response = review(api, item_id, req["id"])
     assert response.status_code == 409, response.text
+    assert 'Component B piece / lot identity missing' in response.text
+    assert 'MTR reference missing' not in response.text
     assert requirement(api, item_id, req["id"])["status"] != "accepted"
 
 

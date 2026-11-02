@@ -5,8 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from conftest import BADGES
-from receiving_helpers import CHECKS, approve_materials
-from test_material_piece_qa import edit_piece
+from receiving_helpers import CHECKS, approve_materials, receiving_detail, upload_receiving_bom
 from test_material_piece_qa_bulk import pass_all_body, prepared
 from test_progress import database_state
 from tracking_helpers import ok
@@ -110,11 +109,14 @@ def test_omitted_optional_details_do_not_bypass_required_materials_or_arrival_ch
     if kind == 'arrival':
         body['checks']['condition'] = False
     else:
-        detail = edit_piece(api, ITEM, 0, mtr_reference='')
+        upload_receiving_bom(api, ITEM, quantity=4, part='UNADOPTED-REVISION')
+        detail = receiving_detail(api, ITEM)
+        assert detail['source_status']['changed']
         path, body = request_for(detail, kind)
     before = database_state(api)
     response = api.post(path, body, role='inspector')
     assert response.status_code == 409, response.text
+    assert ('current BOM' if kind != 'arrival' else 'Confirm every arrival inspection check') in response.text
     assert database_state(api) == before
 
 

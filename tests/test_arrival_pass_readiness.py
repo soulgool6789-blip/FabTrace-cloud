@@ -88,7 +88,7 @@ def test_stale_arrival_is_ready_after_affected_piece_evidence_is_reinspected(api
     assert [row['result'] for row in reinspection['arrival']['history']] == ['Pass', 'Pass']
 
 
-def test_missing_bom_mtr_and_piece_qa_remain_authoritative_pass_blockers(api):
+def test_missing_bom_and_piece_qa_remain_authoritative_pass_blockers(api):
     item_id = create_spool(api)
     missing = receiving_detail(api, item_id)
     blockers = missing['arrival']['pass_blockers']
@@ -100,7 +100,10 @@ def test_missing_bom_mtr_and_piece_qa_remain_authoritative_pass_blockers(api):
     upload_receiving_bom(api, item_id)
     incomplete = receiving_detail(api, item_id)
     blockers = incomplete['arrival']['pass_blockers']
-    assert any('MTR reference is required' in message for message in blockers)
+    assert incomplete['traceability']['receiving_complete']
+    assert not incomplete['traceability']['complete']
+    assert incomplete['arrival']['deferred_checks'] == ['heat_numbers', 'mtrs']
+    assert len(blockers) == 1, 'Blank traceability fields defer their checks, not the actual piece inspection'
     assert any('current QA-001 Pass' in message for message in blockers)
     assert_pass_rejected_without_writes(api, item_id, incomplete)
     completed = save_receiving_materials(api, item_id, heat='')
