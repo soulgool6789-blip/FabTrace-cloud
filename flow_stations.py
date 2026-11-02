@@ -15,12 +15,13 @@ from flow_stages import stage_status
 LOCATION_STAGES = {
     'inventory': 'inventory', 'receiving': 'inventory', 'material_storage': 'inventory',
     'qa_001': 'qa_001', 'qa_002': 'qa_002', 'qa_003': 'qa_003', 'qa_004': 'qa_004',
+    'qa_test_results': 'qa_test_results',
     'kitting': 'preparation', 'fabrication_prep': 'preparation', 'fit_up': 'preparation',
     'floor': 'floor', 'production_staging': 'floor', 'welding': 'welding',
     'testing': 'testing', 'assembly': 'testing', 'blast_paint': 'paint',
     'shipping': 'ready_to_ship', 'ready_to_ship': 'ready_to_ship',
 }
-QA_STEPS = {2: 'qa_001', 11: 'qa_002', 15: 'qa_003', 22: 'qa_004'}
+QA_STEPS = {2: 'qa_001', 11: 'qa_002', 15: 'qa_003', 18: 'qa_test_results', 22: 'qa_004'}
 
 
 def _time(value):
@@ -73,10 +74,20 @@ def station_positions(s, items, *, flows=None, plans=None):
     labels = {' '.join(row['label'].casefold().split()): row['id'] for row in LOCATIONS}
     labels.update({'fabrication preparation': 'fabrication_prep', 'welding': 'welding',
                    'blast / paint': 'blast_paint'})
+    # Label-only historical movements predate the new explicit test-review
+    # station. Their old QA/QC-004 label identified final inspection.
+    labels['qa/qc-004'] = 'qa_004'
     facts, completed, linked_at = {}, {}, {}
 
-    def mapped(location_id, step):
-        return QA_STEPS.get(step) if location_id == 'qa_qc' else LOCATION_STAGES.get(location_id)
+    def mapped(location_id, step, definition=None):
+        if location_id != 'qa_qc':
+            return LOCATION_STAGES.get(location_id)
+        # Step 18 used to identify an assembly; it did not establish a QA
+        # station. Only an actual movement recorded against the revised QA
+        # definition disambiguates the retired generic QA/QC destination.
+        if step == 18 and (definition or {}).get('display_qa_code') != 'QA/QC-004':
+            return None
+        return QA_STEPS.get(step)
 
     for identifier, item in items.items():
         stage = {**stage_status('inventory', identifier), 'position_source': 'inventory_default',
@@ -86,6 +97,12 @@ def station_positions(s, items, *, flows=None, plans=None):
         at, latest_at = None, None
         transfer_steps = {(row.data or {}).get('transfer_version'): row.step
                           for row in events[identifier] if row.action == 'custody_transfer'}
+        transfer_definitions = {}
+        for row in events[identifier]:
+            data = row.data or {}
+            transfer_version = data.get('transfer_version') or (data.get('handoff') or {}).get('transfer_version')
+            if transfer_version is not None:
+                transfer_definitions[transfer_version] = data.get('step_definition')
         moves = []
         for row in audits[identifier]:
             data = row.details or {}
@@ -108,7 +125,8 @@ def station_positions(s, items, *, flows=None, plans=None):
                 continue
             step = data.get('flow_step', transfer_steps.get(data.get('transfer_version')))
             moves.append((row.at, row.id, location_id, label,
-                          'location_capture' if row.event == 'LOCATION_CAPTURED' else 'transfer', mapped(location_id, step)))
+                          'location_capture' if row.event == 'LOCATION_CAPTURED' else 'transfer',
+                          mapped(location_id, step, transfer_definitions.get(data.get('transfer_version')))))
         # A retained current-state row is evidence when older movement audit
         # history is unavailable. Item.location alone never establishes a move.
         state = states.get(identifier)
@@ -177,3 +195,4 @@ def station_positions(s, items, *, flows=None, plans=None):
     # Include loaded ancestors so quality checks can share the same movement
     # snapshot without reading it again for every completed physical child.
     return {identifier: resolve(identifier, set())['stage'] for identifier in items}
+

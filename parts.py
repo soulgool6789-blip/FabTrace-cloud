@@ -167,7 +167,7 @@ def _edit_reason(s, item, spool_plan):
     if spool_plan.assembly_id:
         parent = s.get(FlowPlan, spool_plan.assembly_id)
         parent_item = s.get(Item, spool_plan.assembly_id)
-        if parent and (parent.status != 'active' or (parent.current_step or 99) >= 19) or parent_item and parent_item.released:
+        if parent and (parent.status != 'active' or (parent.current_step or 99) >= 18) or parent_item and parent_item.released:
             return 'The parent assembly has entered controlled production; child parts scope is fixed.'
     return ''
 
@@ -595,3 +595,4 @@ def guard_plan_project(s, item, values):
         old = s.get(SpoolPlan, item.id)
         if old and old.project_id != values['project_id']:
             raise HTTPException(409, 'A spool with a controlled parts list cannot be moved to another project')
+

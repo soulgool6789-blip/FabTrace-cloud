@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import select
 
 from conftest import BADGES
-from tracking_helpers import accept_weld, add_weld, ok, ready_to_weld
+from tracking_helpers import accept_weld, add_weld, ok, ready_to_weld, review, submit
 
 
 ROOT = "/api/flow"
@@ -130,14 +130,14 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     definition = catalog(api)
     steps = definition["steps"]
     assert [row["number"] for row in steps] == list(range(1, 25))
-    assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 19, 22}
-    assert definition['version'] == 'CLM-24-v3'
+    assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 18, 22}
+    assert definition['version'] == 'CLM-24-v4'
     assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
         (2, 'QA-001', 'QA/QC-001 · Check Dimensions'),
         (11, 'QA-002', 'QA/QC-002 · Check Dimensions'),
         (15, 'QA-003', 'QA/QC-003 · Inspect Welds'),
-        (19, 'QA-004', 'Assembly Inspection'),
-        (22, 'QA-005', 'QA/QC-004 · Final Inspection'),
+        (18, 'QA-004', 'QA/QC-004 - Verify Test Results'),
+        (22, 'QA-005', 'QA/QC-005 - Final Inspection'),
     ]
     assert all(row['qa_code'] is None for row in steps if not row['qa'])
     assert [(row["id"], row["first_step"], row["last_step"]) for row in definition["routes"]] == [
@@ -146,11 +146,11 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     for row in steps:
         assert row["title"] and row["roles"] and row["checks"]
         assert len({check["id"] for check in row["checks"]}) == len(row["checks"])
-    for number in (2, 11, 15, 19, 22):
+    for number in (2, 11, 15, 18, 22):
         assert set(steps[number - 1]["roles"]) == {"admin", "inspector"}
     assert steps[10]["return_steps"] == [10]
     assert steps[14]["return_steps"] == [14]
-    assert set(steps[18]["return_steps"]) == {17, 18}
+    assert set(steps[17]["return_steps"]) == {17, 18}
     assert set(steps[21]["return_steps"]) == {17, 18, 19, 20, 21}
 
 
@@ -172,7 +172,7 @@ def test_numbered_qa_titles_do_not_rewrite_historical_definitions(api, monkeypat
     assert current['flow']['current']['checks'] == legacy['checks']
     progressed = advance(api, item_id, role='inspector')
     newer = next(row for row in progressed['events'] if row['action'] == 'advance')
-    assert newer['data']['definition_version'] == 'CLM-24-v3'
+    assert newer['data']['definition_version'] == 'CLM-24-v4'
     assert newer['data']['step_definition']['qa_code'] == 'QA-001'
     assert next(row for row in progressed['events'] if row['sequence'] == retained[0]['sequence']) == retained[0]
 
@@ -209,12 +209,13 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
         11: ('qa_002', 'red'), 12: ('qa_002', 'red'),
         13: ('floor', 'yellow'), 14: ('welding', 'blue'),
         15: ('qa_003', 'blue'), 16: ('qa_003', 'blue'),
-        **{n: ('testing', 'orange') for n in (17, 18, 19)},
-        20: ('testing', 'orange'), 21: ('paint', 'pink'), 22: ('qa_004', 'pink'),
+        17: ('testing', 'orange'),
+        **{n: ('qa_test_results', 'orange') for n in (18, 19)},
+        20: ('floor', 'yellow'), 21: ('paint', 'pink'), 22: ('qa_004', 'pink'),
         23: ('qa_004', 'pink'), 24: ('ready_to_ship', 'green'),
     }
     handoffs = {6: 'fabrication_prep', 8: 'production_staging', 9: 'fit_up',
-                12: 'floor', 13: 'welding', 16: 'floor', 20: 'blast_paint', 23: 'ready_to_ship'}
+                12: 'floor', 13: 'welding', 16: 'floor', 19: 'floor', 20: 'blast_paint', 23: 'ready_to_ship'}
 
     def assert_stage(item_id, step, source=None):
         value = detail(api, item_id)['flow_stage']
@@ -264,15 +265,15 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
     link_spool(api, assembly, spool_id)
     move(api, assembly, 'testing')
     for step in range(17, 25):
-        if step == 22:
-            move(api, assembly, 'qa_004')
+        if step in (18, 22):
+            move(api, assembly, 'qa_test_results' if step == 18 else 'qa_004')
         assert_current(detail(api, assembly), step)
         assert_stage(assembly, step)
         assert_stage(spool_id, step, assembly)
         assert_stage(component, step, assembly)
-        if step in (19, 22):
+        if step in (18, 22):
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if step in (19, 22) else "admin",
+        advance(api, assembly, role="inspector" if step in (18, 22) else "admin",
                 **({'location_id': handoffs[step]} if step in handoffs else {}))
     shipped = detail(api, assembly)
     assert shipped["flow"]["status"] == "shipped"
@@ -345,9 +346,10 @@ def test_step_cannot_advance_without_every_check_exact_scan_and_reference(api):
 
 
 @pytest.mark.parametrize("role", ["handler", "welder", "supervisor"])
-def test_only_quality_roles_can_approve_formal_spool_qa(api, role):
-    item_id = create_item(api, "FLOW-QA-ROLE", kind="Spool")
-    enrolled = enroll(api, item_id, "spool", start_step=11)
+@pytest.mark.parametrize("route,kind,step", [("spool", "Spool", 11), ("assembly", "Assembly", 18)])
+def test_only_quality_roles_can_approve_formal_qa(api, role, route, kind, step):
+    item_id = create_item(api, "FLOW-QA-ROLE", kind=kind)
+    enrolled = enroll(api, item_id, route, start_step=step, expected_children=1 if route == "assembly" else 0)
     response = api.post(f"{ROOT}/items/{item_id}/advance", action_body(api, item_id), role=role)
     assert response.status_code == 403, response.text
     assert detail(api, item_id)["events"] == enrolled["events"]
@@ -541,7 +543,7 @@ def test_spool_final_qa_requires_weld_acceptance_and_cannot_use_release_endpoint
     ("component", "Part", 2, 2),
     ("spool", "Spool", 11, 10),
     ("spool", "Spool", 15, 14),
-    ("assembly", "Assembly", 19, 18),
+    ("assembly", "Assembly", 18, 17),
     ("assembly", "Assembly", 22, 21),
 ])
 def test_quality_failure_opens_exception_and_routes_back_without_erasing_attempts(api, route, kind, step, return_step):
@@ -643,15 +645,139 @@ def test_parent_processing_freezes_child_reopen_and_requires_fresh_assembly_dime
     enroll(api, assembly, "assembly", expected_children=1)
     link_spool(api, assembly, child)
     advance(api, assembly)
-    advance(api, assembly)
-    assert_current(detail(api, assembly), 19)
+    at_inspection = detail(api, assembly)
+    assert_current(at_inspection, 18)
+    response = api.post(f"/api/items/{child}/reopen")
+    assert response.status_code == 409, response.text
+    scope_change = api.post(f"{ROOT}/items/{assembly}/scope", {
+        "expected_version": at_inspection["flow"]["version"], "expected_children": 2,
+        "reason": "Attempt to change assembly scope after testing release", "reference": "TEST-LATE-SCOPE",
+    })
+    assert scope_change.status_code == 409, scope_change.text
+    assert api.post(f"{ROOT}/items/{assembly}/advance", action_body(api, assembly), role="inspector").status_code == 409
+    inspect_dimensions(api, assembly)
+    inspected = detail(api, assembly)["item"]
+    approved = advance(api, assembly, role="inspector")
+    assert_current(approved, 19)
+    assert approved["item"]["dimensional"] == "Pass"
+    assert approved["item"]["dimension_at"] == inspected["dimension_at"]
+    assert approved["item"]["last_work_at"] == inspected["last_work_at"]
     response = api.post(f"/api/items/{child}/reopen")
     assert response.status_code == 409, response.text
     assert detail(api, child)["item"]["released"] is True
+    assert_current(advance(api, assembly, role="handler", location_id="floor"), 20)
+
+
+def test_assembly_joining_welds_finish_before_test_verification(api):
+    assembly = create_item(api, "FLOW-JOINED-ASSEMBLY", kind="Assembly", planned=1)
+    child = completed_spool(api, "FLOW-JOINED-SPOOL")
+    weld = add_weld(api, assembly)
+    enroll(api, assembly, "assembly", expected_children=1)
+    link_spool(api, assembly, child)
+    ready_to_weld(api, assembly, weld["id"])
+    complete_physical_weld(api, weld["id"])
+    accept_weld(api, assembly, weld["id"])
+    inspect_dimensions(api, assembly)
+    advanced = advance(api, assembly)
+    assert_current(advanced, 18)
+    assert advanced["item"]["dimensional"] != "Pass"
+    blocked_work = api.post(f"/api/tracking/welds/{weld['id']}/work", {
+        "operation": "fitup", "notes": "Attempted additional fabrication after testing release",
+    }, role="welder")
+    assert blocked_work.status_code == 409, blocked_work.text
+    assert "fabrication step" in blocked_work.text
     assert api.post(f"{ROOT}/items/{assembly}/advance", action_body(api, assembly), role="inspector").status_code == 409
     inspect_dimensions(api, assembly)
-    approved = advance(api, assembly, role="inspector")
-    assert_current(approved, 20)
+    assert_current(advance(api, assembly, role="inspector"), 19)
+
+
+def test_test_results_checkpoint_requires_signed_acceptance_of_configured_ut(api):
+    assembly = create_item(api, "FLOW-UT-ASSEMBLY", kind="Assembly")
+    child = completed_spool(api, "FLOW-UT-SPOOL")
+    enroll(api, assembly, "assembly", expected_children=1)
+    link_spool(api, assembly, child)
+    requirement = ok(api.post(f"/api/tracking/spools/{assembly}/requirements", {
+        "code": "UT-REPORT", "label": "Required UT test report acceptance",
+        "stage": "after_welding", "owner_role": "inspector", "evidence_required": True,
+    }), 201)
+    coating = ok(api.post(f"/api/tracking/spools/{assembly}/requirements", {
+        "code": "COATING-REPORT", "label": "Final coating inspection acceptance",
+        "stage": "release", "owner_role": "inspector", "evidence_required": True,
+    }), 201)
+    advance(api, assembly)
+    inspect_dimensions(api, assembly)
+    before = detail(api, assembly)
+    assert_current(before, 18)
+    route = f"{ROOT}/items/{assembly}/advance"
+    missing = api.post(route, action_body(api, assembly), role="inspector")
+    assert missing.status_code == 409, missing.text
+    assert "UT test report" in missing.text
+    assert detail(api, assembly)["events"] == before["events"]
+
+    submit(api, assembly, requirement["id"], reference="TEST-UT-REPORT", result="pass")
+    unreviewed = api.post(route, action_body(api, assembly), role="inspector")
+    assert unreviewed.status_code == 409, unreviewed.text
+    ok(review(api, assembly, requirement["id"]))
+    for values in ({"reference": ""}, {"scanned_item_id": "OTHER-ASSEMBLY"}):
+        invalid = api.post(route, action_body(api, assembly, **values), role="inspector")
+        assert invalid.status_code == 422, invalid.text
+    approved = advance(api, assembly, role="inspector", reference="TEST-UT-RESULTS-VERIFIED")
+    assert_current(approved, 19)
+    assert approved["item"]["dimensional"] == "Pass"
+    assert approved["item"]["dimension_at"] == before["item"]["dimension_at"]
+    assert approved["item"]["last_work_at"] == before["item"]["last_work_at"]
+    assert approved["item"]["released"] is False
+    acceptance = next(row for row in approved["events"] if row["action"] == "advance" and row["step"] == 18)
+    assert acceptance["actor"] == BADGES["inspector"]
+    assert acceptance["reference"] == "TEST-UT-RESULTS-VERIFIED"
+    assert acceptance["data"]["step_definition"]["qa_code"] == "QA-004"
+
+    # A final release obligation must not create a circular pre-paint gate.
+    advance(api, assembly, role="handler", location_id="floor")
+    advance(api, assembly, role="handler", location_id="blast_paint")
+    advance(api, assembly, role="painter")
+    inspect_dimensions(api, assembly)
+    assert_current(detail(api, assembly), 22)
+    missing_coating = api.post(route, action_body(api, assembly), role="inspector")
+    assert missing_coating.status_code == 409, missing_coating.text
+    assert "Final coating inspection" in missing_coating.text
+    submit(api, assembly, coating["id"], reference="TEST-FINAL-COATING-REPORT", result="pass")
+    ok(review(api, assembly, coating["id"]))
+    released = advance(api, assembly, role="inspector", reference="TEST-FINAL-RELEASE")
+    assert_current(released, 23)
+    assert released["item"]["released"] is True
+
+
+def test_return_to_floor_after_testing_requires_item_badges_and_location(api):
+    assembly = create_item(api, "FLOW-TEST-HANDOFF", kind="Assembly")
+    child = completed_spool(api, "FLOW-TEST-HANDOFF-SPOOL")
+    enroll(api, assembly, "assembly", expected_children=1)
+    link_spool(api, assembly, child)
+    advance(api, assembly)
+    inspect_dimensions(api, assembly)
+    before = advance(api, assembly, role="inspector")
+    assert_current(before, 19)
+    route = f"{ROOT}/items/{assembly}/advance"
+    for values in (
+        {"sender_badge": ""}, {"receiver_badge": ""},
+        {"location_id": ""}, {"scanned_item_id": "OTHER-ASSEMBLY"},
+    ):
+        response = api.post(route, action_body(api, assembly, **values), role="handler")
+        assert response.status_code in (404, 409, 422), response.text
+    unchanged = detail(api, assembly)
+    assert unchanged["events"] == before["events"]
+    assert unchanged["flow"]["version"] == before["flow"]["version"]
+    after = advance(api, assembly, role="handler", receiver_badge=BADGES["inspector"], location_id="floor")
+    assert_current(after, 20)
+    assert after["item"]["handler"] == BADGES["inspector"]
+    assert after["item"]["location"] == "Floor"
+    assert after["flow_stage"]["key"] == "floor"
+    history = ok(api.get(f"/api/items/{assembly}/custody"))
+    handoff = next(row for row in history if row["details"].get("flow_step") == 19)
+    assert handoff["actor"] == BADGES["handler"]
+    assert handoff["details"]["sender_badge"] == before["item"]["handler"]
+    assert handoff["details"]["receiver_badge"] == BADGES["inspector"]
+    assert handoff["details"]["scanned_item_id"] == assembly
 
 
 def test_assembly_link_rejects_self_wrong_kind_other_project_and_duplicate_parent(api):
@@ -682,9 +808,9 @@ def test_failed_final_qa_preserves_old_steps_but_invalidates_current_downstream_
     enroll(api, assembly, "assembly", expected_children=1)
     link_spool(api, assembly, child)
     for step in range(17, 22):
-        if step == 19:
+        if step == 18:
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if step == 19 else "admin")
+        advance(api, assembly, role="inspector" if step == 18 else "admin")
     before = detail(api, assembly)
     assert_current(before, 22)
     assert all(row["status"] == "completed" for row in before["flow"]["steps"] if row["number"] in range(17, 22))
@@ -697,8 +823,8 @@ def test_failed_final_qa_preserves_old_steps_but_invalidates_current_downstream_
     assert all(row["status"] != "completed" for row in failed["flow"]["steps"] if row["number"] in range(18, 23))
     assert next(row for row in failed["flow"]["steps"] if row["number"] == 17)["status"] == "completed"
     assert failed["item"]["dimensional"] != "Pass"
-    advance(api, assembly)
     assert api.post(f"{ROOT}/items/{assembly}/advance", action_body(api, assembly), role="inspector").status_code == 409
+    assert_current(detail(api, assembly), 18)
 
 
 def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shipping(api):
@@ -717,9 +843,9 @@ def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shi
     enroll(api, assembly, "assembly", expected_children=1)
     link_spool(api, assembly, spool_id)
     for step in range(17, 24):
-        if step in (19, 22):
+        if step in (18, 22):
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if step in (19, 22) else "admin",
+        advance(api, assembly, role="inspector" if step in (18, 22) else "admin",
                 **({'location_id': 'ready_to_ship'} if step == 23 else {}))
     before = detail(api, assembly)
     assert_current(before, 24)
@@ -787,3 +913,4 @@ def test_scope_correction_requires_basis_and_keeps_assembly_minimum_one(api):
         response = api.post(route, {**body, **values})
         assert response.status_code in (409, 422), response.text
     assert detail(api, assembly)["events"] == current["events"]
+

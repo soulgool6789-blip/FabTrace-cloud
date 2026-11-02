@@ -721,7 +721,7 @@ def _requirement_satisfied(s, req, weld=None):
                 review.evidence_id == (latest.id if latest else None))
 
 
-def _weld_blockers(s, weld, include_production=True):
+def _weld_blockers(s, weld, include_production=True, *, requirement_stages=None):
     errors = []
     if include_production and not _production_complete(s, weld):
         errors.append('Welding operations incomplete')
@@ -729,6 +729,8 @@ def _weld_blockers(s, weld, include_production=True):
     if not rows:
         errors.append('No approved weld requirement scope defined')
     for req in rows:
+        if requirement_stages is not None and req.stage not in requirement_stages:
+            continue
         if not _requirement_satisfied(s, req, weld):
             details = _check_errors(s, req, weld)
             errors.append(req.label + ': ' + (', '.join(details) if details else req.status.replace('_', ' ')))
@@ -778,11 +780,13 @@ def _assembly_errors(s, item_id, project_id, assembly_id):
 
 
 @_snapshot_response
-def tracking_release_errors(s, item):
+def tracking_release_errors(s, item, *, requirement_stages=None):
     """Authoritative release gate for explicitly enrolled spools.
 
     Legacy aggregate Weld inspections cannot satisfy individual requirements.
     Dimensional inspection and legacy rework still apply at the spool level.
+    A pre-final checkpoint may select explicit requirement stages. The default
+    final-release gate always checks every stage, including final obligations.
     """
     plan = read_get(s, SpoolPlan, item.id)
     if not plan:
@@ -802,8 +806,11 @@ def tracking_release_errors(s, item):
     if plan.planned_welds == 0 and not plan.zero_weld_reason.strip():
         errors.append('Zero-weld scope requires an approved scope reason')
     for weld in welds:
-        errors.extend(f'{weld.number}: {message}' for message in _weld_blockers(s, weld))
+        errors.extend(f'{weld.number}: {message}' for message in _weld_blockers(
+            s, weld, requirement_stages=requirement_stages))
     for req in _requirements(s, item.id):
+        if requirement_stages is not None and req.stage not in requirement_stages:
+            continue
         if not _requirement_satisfied(s, req):
             details = _check_errors(s, req)
             errors.append('Spool ' + req.label + ': ' + (', '.join(details) if details else req.status.replace('_', ' ')))
@@ -1584,4 +1591,5 @@ def exceptions(project_id: str = '', subproject_id: str = '', u: Employee = Depe
         for item in rows:
             result.extend({**row, **displays[item.id]} for row in _item_exceptions(s, item))
         return {'exceptions': result}
+
 

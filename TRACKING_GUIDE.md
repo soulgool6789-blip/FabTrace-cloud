@@ -119,26 +119,26 @@ Administrators can use **Export Excel** to download **Process events**, **Proces
 
 ## 9. Follow the numbered CLM fabrication flow
 
-The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v2**. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
+The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v4**. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
 
 | Phase | Numbered steps |
 | --- | --- |
-| Material receipt | **1** Receive Shipment; **2** QA-001-Check Dimensions; **3** Capture Location; **4** Material in Inventory |
-| Component preparation | **5** Select Components for Spool; **6** Release to Fabrication Prep Technician; **7** Prep Components; **8** Return to Production |
-| Spool fabrication | **9** Release to Fit-Up Welder; **10** Fit-Up & Tack Weld; **11** QA-002-Check Dimensions; **12** Return to Production; **13** Release to Process Welder; **14** Complete Welds; **15** QA-003-Inspect Welds; **16** Scan Completed Spool |
-| Final assembly | **17** Collect Spools for Assembly; **18** Create Assembly ID; **19** QA-004-Assembly Inspection |
-| Sandblast & paint | **20** Release to Sandblast & Paint; **21** Sandblast & Paint; **22** QA-005-Final Inspection |
+| Material receipt | **1** Receive Shipment; **2** QA/QC-001 · Check Dimensions; **3** Capture Location; **4** Material in Inventory |
+| Component preparation | **5** Select Components for Spool; **6** Release to Fabrication Prep Technician; **7** Prep Components; **8** Return to Floor |
+| Spool fabrication | **9** Release to Fit-Up Welder; **10** Fit-Up & Tack Weld; **11** QA/QC-002 · Check Dimensions; **12** Return to Floor; **13** Release to Process Welder; **14** Complete Welds; **15** QA/QC-003 · Inspect Welds; **16** Return to Floor |
+| Testing | **17** Release to Testing (Hydro/UT); **18** QA/QC-004 - Verify Test Results; **19** Return to Floor |
+| Sandblast & paint | **20** Release to Sandblast and Paint; **21** Sandblast & Paint; **22** QA/QC-005 - Final Inspection |
 | Shipment | **23** Release to Ready to Ship; **24** Ship to Customer |
 
 ### Set up the records and their scope
 
-Register each physical component as a **Part**. Spools and assemblies need their project/weld plans before starting a numbered route. An item already enrolled as a spool remains a spool even if its older item type was Part. An assembly needs its own Assembly item ID before the traveler can record work; step 18 verifies that identity/barcode and the linked physical assembly rather than silently generating a second identity.
+Register each physical component as a **Part**. Spools and assemblies need their project/weld plans before starting a numbered route. An item already enrolled as a spool remains a spool even if its older item type was Part. An assembly needs its own Assembly item ID before the traveler can record work; step 17 verifies that existing identity/barcode and the linked physical assembly before release to testing.
 
 Open the item using its QR label, item record, or the **Process flow** lookup. An administrator or supervisor chooses the route: components **1–8**, spools **9–16**, or assemblies **17–24**. Declare how many individual components or child spools the route requires. Link each component to its target spool before component selection is completed, and link the required released spools to the assembly at collection. An individual component belongs to one spool. Use separate item IDs for separate physical pieces.
 
 Component and spool assignments must be within the same project. The assembly uses the existing spool-to-assembly relationship. Step 17 requires scanning or entering every linked child-spool ID exactly once. Missing declared children, incomplete component preparation, incomplete spool travelers, unresolved material/rework issues or missing child quality releases prevent advancement.
 
-**Edit required count** lets a supervisor or administrator correct the declared count with a reference and reason while the spool is at step 9 or the assembly is at step 17/18. It cannot lower the count below the linked records. Later assembly work must return through its QA/rework path before changing collection scope.
+**Edit required count** lets a supervisor or administrator correct the declared count with a reference and reason while the spool is at step 9 or the assembly is at step 17. It cannot lower the count below the linked records. Later assembly work must return through its QA/rework path before changing collection scope.
 
 For an existing spool with controlled historical material records, zero newly linked components requires an explicit material reference. If work is already underway, select its current starting step and supply a baseline reference and reason. Earlier steps show **Not recorded**, not completed. This starts current timing without reconstructing historical work or accepting old quality records automatically.
 
@@ -148,23 +148,23 @@ The current step lists its required observations. Complete the checklist, scan o
 
 The current step has the available action; future steps cannot be checked off out of order. Its process clock starts automatically, moves when the step advances and retains repeated visits. **Pause / record delay** and **Resume** keep running and paused durations separate. Timing measures calendar time and continues across logout. Manual process selection cannot bypass the numbered traveler.
 
-Record individual fit-up and welding work in **Projects & welds**. The traveler checks those records at steps 10, 11 and 14. Spool fit-up can be recorded at step 10 or during repair work at step 14; welding operations belong to step 14. An assembly with its own joining welds records those operations while at step 18. Completing a checklist does not invent a weld, operation, evidence record or acceptance.
+Record individual fit-up and welding work in **Projects & welds**. The traveler checks those records at steps 10, 11 and 14. Spool fit-up can be recorded at step 10 or during repair work at step 14; welding operations belong to step 14. An assembly with its own joining welds records those operations while at step 17, before QA/QC verifies the test results at step 18. Completing a checklist does not invent a weld, operation, evidence record or acceptance.
 
 ### QA failures and return visits
 
-QA steps **2, 11, 15, 19 and 22** are labeled **QA-001 through QA-005**, respectively, and require QA/QC or Administrator. QA-001 covers incoming dimensional/material verification. The saved per-piece QA-001 decisions and overall spool arrival approval do not automatically complete a component traveler step; record the actual route inspection separately when that route applies. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
+QA steps **2, 11, 15, 18 and 22** are labeled **QA/QC-001 through QA/QC-005**, respectively, and require QA/QC or Administrator. QA-001 covers incoming dimensional/material verification. The saved per-piece QA-001 decisions and overall spool arrival approval do not automatically complete a component traveler step; record the actual route inspection separately when that route applies. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
 
 **Record failed inspection** creates an exception with its report reference and reason, then returns to the allowed earlier step:
 
 - Step 2 stays at incoming verification for supplier/disposition resolution.
 - Step 11 returns to fit-up at step 10.
 - Step 15 returns to welding at step 14.
-- Step 19 returns to assembly collection/identity at step 17 or 18.
+- Step 18 returns to testing at step 17 or test-result reinspection at step 18.
 - Step 22 returns to the appropriate assembly or coating step, 17–21.
 
 The affected later step completions are reopened, while earlier attempts remain in history. Failures at 11/15 also invalidate the affected weld requirement approvals. Passing the failed checkpoint again requires fresh applicable approval and written resolution; it closes the matching exception. Use **Open repair** on an individual weld when physical rewelding is required. The flow exception does not silently start a repair cycle or claim that welding was redone.
 
-Assembly work and coating require fresh dimensional verification afterward. An open component quality/rework issue remains a blocker for its spool and the final assembly, including shipment. A child spool cannot be reopened while its parent is in later assembly stages or has been released; return the parent through its controlled QA/rework path first. Shipped or delivered assemblies cannot be reopened through the production action.
+Release to testing and coating require fresh dimensional verification afterward. At QA/QC-004, current weld and spool requirements scheduled Before welding or After welding, dimensions and the report reference must pass. Configure Hydro/UT checks due here as After welding; requirements scheduled for Final release remain due at QA/QC-005, so post-coating records are not demanded before paint. QA/QC-004 does not record final shipping release; step 22 remains the final inspection. Step 19 records the floor handoff using the current sender, receiver and location. An open component quality/rework issue remains a blocker for its spool and the final assembly, including shipment. A child spool cannot be reopened while its parent is in later assembly stages or has been released; return the parent through its controlled QA/rework path first. Shipped or delivered assemblies cannot be reopened through the production action.
 
 ### Release, shipment and delivery
 
@@ -273,3 +273,4 @@ Open **Job Packets** to configure the intended spool/assembly packet count, actu
 QA issues each complete current item packet, followed by a completed-project revision after the declared scope and all current packets are reconciled. Print or download the issued package; record actual physical and digital dispatches separately and then their actual acknowledgements. Downloading does not send a packet. New evidence or rework can invalidate current approval without rewriting an issued snapshot.
 
 See [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for the full step-by-step setup, customer-document crosswalk, coating/shipping gates, file revision controls, print/ZIP output, transfer records and troubleshooting.
+

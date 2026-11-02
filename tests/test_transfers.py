@@ -18,7 +18,7 @@ ROOT = "/api/transfers"
 STATUSES = {"queued", "in_progress", "awaiting_inspection", "waiting_material", "paused", "ready_next_operation"}
 BUILTIN_LOCATIONS = {"receiving", "material_storage", "kitting", "fabrication_prep", "production_staging",
                      "fit_up", "welding", "qa_qc", "assembly", "blast_paint", "shipping",
-                     "inventory", "qa_001", "qa_002", "floor", "qa_003", "testing", "qa_004", "ready_to_ship"}
+                     "inventory", "qa_001", "qa_002", "floor", "qa_003", "testing", "qa_test_results", "qa_004", "ready_to_ship"}
 
 
 def options(api, role="admin"):
@@ -384,3 +384,4 @@ def test_existing_legacy_locations_and_transfer_history_are_not_backfilled_as_ne
     moved = transfer(api, item_id, location_id="current", operational_status="queued")
     assert moved["location"] == "Actual legacy rack 42"
     assert custody(api, item_id)[0] == historical
+

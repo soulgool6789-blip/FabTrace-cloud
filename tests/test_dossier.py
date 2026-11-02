@@ -752,9 +752,9 @@ def test_ready_to_ship_requires_child_packets_and_d04_then_shipping_keeps_issued
     enroll(api, assembly, "assembly", expected_children=1)
     link_spool(api, assembly, child)
     for step in range(17, 23):
-        if step in (19, 22):
+        if step in (18, 22):
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if step in (19, 22) else "admin")
+        advance(api, assembly, role="inspector" if step in (18, 22) else "admin")
     configure(api, expected_packets=2, customer_approval_required=True)
     signed(sign_source(api))
     complete_packet(api, child, source=False, customer_shipping=True)
@@ -812,3 +812,4 @@ def test_ready_to_ship_requires_child_packets_and_d04_then_shipping_keeps_issued
     assert packet(api, child)["latest_issue"]["current"]
     signed(issue_project(api))
     assert project(api)["latest_project_issue"]["current"]
+

@@ -18,7 +18,7 @@
     {id:'materials',label:'Material receipt & inventory',first:1,last:4},
     {id:'components',label:'Component preparation',first:5,last:8},
     {id:'spool',label:'Spool fabrication',first:9,last:16},
-    {id:'assembly',label:'Final assembly',first:17,last:19},
+    {id:'assembly',label:'Testing (Hydro/UT)',first:17,last:19},
     {id:'paint',label:'Sandblast & paint',first:20,last:22},
     {id:'shipping',label:'Shipment',first:23,last:24},
   ];
@@ -194,7 +194,7 @@
   function stepInputs(step){
     let content='';
     if(step.requires_scan)content+=field('scanned_item_id','Scan or enter this item ID again','',{required:true,maxlength:500,help:'Verify the physical item being processed: '+state.detail.item.id});
-    if(step.number===17)content+=field('scanned_child_ids','Scan or enter each linked spool ID','',{required:true,type:'textarea',full:true,rows:4,help:'One spool ID or FabTrace QR link per line. Every linked spool must be verified.'});
+    if(step.number===17)content+=field('scanned_child_ids','Scan or enter each linked spool ID','',{required:true,type:'textarea',full:true,rows:4,help:'One spool ID or FabTrace QR link per line. Verify every linked spool before releasing the assembly to testing.'});
     if(step.requires_handoff){
       const transfer=state.detail.transfer||state.detail.item.transfer;
       content+=`<div class="ff-span"><h3>Identify both employees for this handoff</h3><p class="fh-help">Current recorded custodian: <strong>${esc(transfer?.handler_name||transfer?.handler||state.detail.item.handler)}</strong>${transfer?.handler_name?' ('+esc(transfer.handler)+')':''}. Scan the sending badge and receiving badge in their separate fields. The signed-in employee records the step.</p>${window.FabHandoff.controlHtml('flowHandoff',{transfer,options:state.handoffOptions,heading:false})}<div id="flowHandoffReview" class="fh-review" aria-live="polite"></div><p class="fh-record-note">Badges identify the parties; no independent acceptance signature is recorded. Completing this numbered step applies its existing process and QA checks.</p></div>`;
@@ -203,7 +203,7 @@
       content+=`<div class="field"><label for="ff-field-location_id">${step.number===3?'Storage location':'Receiving location / work center'} *</label><select id="ff-field-location_id" name="location_id" required>${window.FabHandoff.locationOptions(state.handoffOptions,transfer,transfer?.location?'current':'')}</select><span class="ff-form-help">Choose an active work center or retain the actual recorded location.</span></div>`;
     }
     if(step.number===5)content+=field('target_spool_id','Assigned spool ID',state.detail.parent?.item_id||'',{required:true,maxlength:500,help:'This must match the spool linked to this component.'});
-    if(step.requires_reference)content+=field('reference',step.qa?'Inspection report / approval reference':'PO, BOM, drawing, or record reference','',{required:true,maxlength:500,full:true});
+    if(step.requires_reference)content+=field('reference',step.number===18?'Hydro/UT test report / approval reference':step.qa?'Inspection report / approval reference':'PO, BOM, drawing, or record reference','',{required:true,maxlength:500,full:true});
     if(step.number===24)content+=field('carrier','Carrier','',{required:true,maxlength:160})+field('shipment_reference','Shipping document / tracking reference','',{required:true,maxlength:500})+field('destination','Destination / customer','',{required:true,maxlength:500,full:true});
     if(step.qa&&openExceptions().some(row=>Number(row.step)===Number(step.number)))content+=field('resolution','Rework resolution and reinspection findings','',{required:true,type:'textarea',full:true,maxlength:3000});
     content+=field('notes','Work notes / measurements','',{type:'textarea',full:true,maxlength:3000});
@@ -484,3 +484,4 @@
   node('itemFlowBtn').onclick=()=>{if(current)open({item:current.id})};
   window.FabFlow={open,refresh,cancelPending(){state.sequence++;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
 })();
+

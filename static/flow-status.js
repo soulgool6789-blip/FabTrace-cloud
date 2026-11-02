@@ -10,8 +10,9 @@
     ['welding', 'Process Welder', 'blue'],
     ['qa_003', 'QA/QC-003', 'blue', true],
     ['testing', 'Testing', 'orange'],
+    ['qa_test_results', 'QA/QC-004', 'orange', true],
     ['paint', 'Paint', 'pink'],
-    ['qa_004', 'QA/QC-004', 'pink', true],
+    ['qa_004', 'QA/QC-005', 'pink', true],
     ['ready_to_ship', 'Ready To Ship', 'green'],
   ];
   const catalog = rows.map(([key, label, color, qa = false]) => Object.freeze({key, label, color, qa}));
@@ -99,3 +100,4 @@
   }
   window.FabFlowStatus = Object.freeze({catalog: Object.freeze(catalog), normalize, className, text, spoolNumber, spoolText, decorateSpool, stationText, badge, legend, processBoard, strip});
 })();
+

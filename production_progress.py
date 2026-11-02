@@ -105,12 +105,12 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
         total = len(selected)
         completed = sum(step['state'] == 'completed' for step in selected)
         current = sum(step['state'] == 'current' for step in selected)
-        # Prep/Fabrication spans component preparation and spool fit-up, so both
-        # missing physical scopes must remain visible in the combined stage.
+        # Shared stations retain missing scope from every applicable route.
         missing = (summary['missing_parts'] if stage['key'] in ('inventory', 'qa_001') else
                    summary['missing_parts'] + summary['missing_spools'] if stage['key'] == 'preparation' else
-                   summary['missing_spools'] if stage['key'] in ('qa_002', 'floor', 'welding', 'qa_003') else
-                   summary['missing_assemblies'] if stage['key'] in ('testing', 'paint', 'qa_004') else 0)
+                   summary['missing_parts'] + summary['missing_spools'] + summary['missing_assemblies'] if stage['key'] == 'floor' else
+                   summary['missing_spools'] if stage['key'] in ('qa_002', 'welding', 'qa_003') else
+                   summary['missing_assemblies'] if stage['key'] in ('testing', 'qa_test_results', 'paint', 'qa_004') else 0)
         unrecorded = sum(step['state'] == 'not_recorded' for step in selected)
         unknown = bool((summary['undeclared_scope'] or summary['missing_spools'] or not summary['items'])
                        and stage['steps'][0] <= last_applicable_step)
@@ -421,3 +421,4 @@ def order_progress(project_id: str = Query('', max_length=80),
     s.rollback()
     with read_snapshot(s) as snapshot:
         return _tree(snapshot, project_id)
+

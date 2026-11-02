@@ -566,9 +566,9 @@ def assembly_at_step(api, step):
     link_spool(api, assembly, child)
     while detail(api, assembly)["flow"]["current_step"] < step:
         current_step = detail(api, assembly)["flow"]["current_step"]
-        if current_step in (19, 22):
+        if current_step in (18, 22):
             inspect_dimensions(api, assembly)
-        advance(api, assembly, role="inspector" if current_step in (19, 22) else "admin")
+        advance(api, assembly, role="inspector" if current_step in (18, 22) else "admin")
     return assembly
 
 
@@ -657,3 +657,4 @@ def test_evidence_documents_reviews_and_event_history_have_no_edit_or_delete_rou
         rows = session.scalars(select(quality.QualityEvent).where(quality.QualityEvent.workspace_id == workspace_id)).all()
         assert rows
         assert all(row.actor in BADGES.values() and row.at is not None for row in rows)
+

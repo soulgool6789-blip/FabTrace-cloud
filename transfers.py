@@ -36,8 +36,9 @@ LOCATIONS = (
     {'id': 'welding', 'label': 'Process Welder'},
     {'id': 'qa_003', 'label': 'QA/QC-003'},
     {'id': 'testing', 'label': 'Testing'},
+    {'id': 'qa_test_results', 'label': 'QA/QC-004'},
     {'id': 'blast_paint', 'label': 'Paint'},
-    {'id': 'qa_004', 'label': 'QA/QC-004'},
+    {'id': 'qa_004', 'label': 'QA/QC-005'},
     {'id': 'ready_to_ship', 'label': 'Ready To Ship'},
     {'id': 'receiving', 'label': 'Receiving'},
     {'id': 'material_storage', 'label': 'Material storage'},
@@ -395,3 +396,4 @@ def update_location(location_id: str, data: LocationUpdate, u: Employee = Depend
     audit(s, None, u.badge, 'TRANSFER_LOCATION_UPDATED', {'from': before, 'to': location_dict(row)})
     _commit(s)
     return location_dict(row)
+

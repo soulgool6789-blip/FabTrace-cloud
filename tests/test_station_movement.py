@@ -1,7 +1,12 @@
 """Station is recorded transport; work, QA and QR reads are separate facts."""
+import importlib
+
+import pytest
+from sqlalchemy import select
+
 from receiving_helpers import accept_arrival
 from station_helpers import move
-from test_flow import advance, detail, enroll, inspect_dimensions
+from test_flow import advance, create_item, detail, enroll, inspect_dimensions
 from test_order_labels import generate, labels, public_qr_url
 from test_production_progress import flatten
 from test_progress import database_state
@@ -71,7 +76,7 @@ def test_explicit_qa_choices_and_ambiguous_historical_destinations_remain_distin
     item_id = labels(api, project)['items'][0]['id']
     options = ok(api.get('/api/transfers/options'))['locations']
     assert {row['flow_stage_key'] for row in options if row.get('active') and row.get('flow_stage_key')} == {
-        'inventory', 'qa_001', 'preparation', 'qa_002', 'floor', 'welding', 'qa_003', 'testing', 'paint', 'qa_004', 'ready_to_ship'}
+        'inventory', 'qa_001', 'preparation', 'qa_002', 'floor', 'welding', 'qa_003', 'testing', 'qa_test_results', 'paint', 'qa_004', 'ready_to_ship'}
     assert not next(row for row in options if row['id'] == 'qa_qc')['active']
     legacy = move(api, item_id, 'qa_qc')
     assert legacy['flow_stage']['key'] == 'inventory' and legacy['flow_stage']['needs_station_selection']
@@ -89,3 +94,70 @@ def test_explicit_qa_choices_and_ambiguous_historical_destinations_remain_distin
     assert unknown['flow_stage']['position_event_id'] == identified['flow_stage']['position_event_id']
     explicit = move(api, item_id, 'qa_003')
     assert explicit['flow_stage']['key'] == 'qa_003' and not explicit['flow_stage']['needs_station_selection']
+
+
+def test_legacy_final_inspection_station_stays_pink_and_new_test_review_is_distinct(api, monkeypatch):
+    _, project, _ = seed(api)
+    generate(api, project)
+    first, second = labels(api, project)['items']
+    transfers = importlib.import_module('transfers')
+    # Simulate the original final-inspection move with its original saved label.
+    with monkeypatch.context() as old:
+        old.setattr(transfers, 'LOCATION_BY_ID', {
+            **transfers.LOCATION_BY_ID,
+            'qa_004': {'id': 'qa_004', 'label': 'QA/QC-004'},
+        })
+        move(api, first['id'], 'qa_004')
+    moved = move(api, second['id'], 'qa_test_results')
+    assert moved['flow_stage']['key'] == 'qa_test_results'
+    assert moved['flow_stage']['label'] == 'QA/QC-004'
+    assert moved['flow_stage']['color'] == 'orange'
+    before = database_state(api)
+    current = stages(api, project)
+    assert current[first['id']]['key'] == 'qa_004'
+    assert current[first['id']]['label'] == 'QA/QC-005'
+    assert current[first['id']]['color'] == 'pink'
+    assert current[second['id']]['key'] == 'qa_test_results'
+    assert current[second['id']]['color'] == 'orange'
+    options = {row['id']: row for row in ok(api.get('/api/transfers/options'))['locations']}
+    assert options['qa_004']['label'] == 'QA/QC-005'
+    assert options['qa_test_results']['label'] == 'QA/QC-004'
+    with api.session_factory() as session:
+        audit = session.scalar(select(api.application.Audit).where(
+            api.application.Audit.item_id == first['id'], api.application.Audit.event == 'TRANSFER'))
+        assert audit.details['to']['location_id'] == 'qa_004'
+        assert audit.details['to']['location'] == 'QA/QC-004'
+    assert database_state(api) == before
+
+
+@pytest.mark.parametrize('legacy_definition', [None, {
+    'number': 18, 'title': 'Create Assembly ID', 'qa': False,
+    'display_qa_code': None, 'flow_stage_key': 'testing',
+}])
+def test_historical_generic_step_18_move_needs_a_recorded_test_review_definition(api, legacy_definition):
+    assembly = create_item(api, 'HISTORICAL-TESTING-ASSEMBLY', kind='Assembly')
+    enroll(api, assembly, 'assembly', start_step=18, expected_children=1)
+    move(api, assembly, 'testing')
+    move(api, assembly, 'qa_qc')
+    flow = importlib.import_module('flow')
+    # Persist an isolated historical event exactly as a pre-v4 movement would
+    # have described step 18; current catalog labels cannot replace this fact.
+    with api.session_factory() as session:
+        event = session.scalar(select(flow.FlowEvent).where(
+            flow.FlowEvent.item_id == assembly, flow.FlowEvent.action == 'custody_transfer')
+            .order_by(flow.FlowEvent.sequence.desc()))
+        event.data = {**event.data, 'definition_version': 'CLM-24-v3',
+                      'step_definition': legacy_definition}
+        session.commit()
+    before = database_state(api)
+    historical = detail(api, assembly)['flow_stage']
+    assert historical['key'] == 'testing' and historical['color'] == 'orange'
+    assert historical['needs_station_selection']
+    assert historical['recorded_location_id'] == 'qa_qc'
+    assert database_state(api) == before
+    move(api, assembly, 'testing')
+    identified = move(api, assembly, 'qa_qc')['flow_stage']
+    assert identified['key'] == 'qa_test_results'
+    assert identified['label'] == 'QA/QC-004' and identified['color'] == 'orange'
+    assert not identified['needs_station_selection']
+

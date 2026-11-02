@@ -345,3 +345,26 @@ def test_id_collision_and_late_scope_failure_roll_back_entire_batch(api, monkeyp
         assert response.status_code == 409
     assert len(calls) == 2 and database_state(api) == before
 
+
+@pytest.mark.parametrize('step,allowed', [(17, True), (18, False)])
+def test_missing_child_generation_is_locked_after_release_to_testing(api, step, allowed):
+    from test_flow import enroll
+    setup = create_setup(api, assemblies=[branch(quantity=1)])
+    project = setup['order']['project_id']
+    register_assembly(api, setup)
+    ok(api.post('/api/tracking/spools/PHYSICAL-ASSEMBLY-1/plan', {
+        'project_id': project, 'planned_welds': 0,
+        'zero_weld_reason': 'Synthetic assembly without joining welds'}))
+    enroll(api, 'PHYSICAL-ASSEMBLY-1', 'assembly', start_step=step, expected_children=3)
+    body = generation_body(api, project)
+    before = database_state(api)
+    response = api.post(f'{ROOT}/{project}/generate', body)
+    if allowed:
+        assert response.status_code == 200, response.text
+        assert len(labels(api, project)['items']) == 3
+    else:
+        assert response.status_code == 409, response.text
+        assert 'step 17' in response.text
+        assert database_state(api) == before
+
+

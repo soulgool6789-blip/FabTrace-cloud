@@ -725,7 +725,7 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     receipt = next(row for row in events if row["action"].value == "advance")
     data = json.loads(receipt["data"].value)
     assert data["confirmations"] == [row["id"] for row in current["current"]["checks"]]
-    assert data["definition_version"] == "CLM-24-v3"
+    assert data["definition_version"] == "CLM-24-v4"
     assert data["step_definition"]["number"] == 1
     assert receipt["notes"].value == "Receipt α < & >"
     exception = workbook.records("Flow exceptions")[0]
@@ -871,3 +871,4 @@ def test_audit_readiness_export_includes_training_recorded_under_another_require
     assert BADGES["supervisor"] in row["collected_evidence"].value
     assert f"under requirement ID {training_requirement_id}" in row["collected_evidence"].value
     assert "TEST-QMS Rev A" in row["supporting_documentation"].value
+

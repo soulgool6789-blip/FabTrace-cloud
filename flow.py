@@ -25,7 +25,7 @@ from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
-VERSION = 'CLM-24-v3'
+VERSION = 'CLM-24-v4'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
@@ -35,23 +35,23 @@ ROUTES = (
     {'id': 'assembly', 'label': 'Final assembly through shipment', 'first_step': 17, 'last_step': 24},
 )
 ROUTE_BY_ID = {row['id']: row for row in ROUTES}
-QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 19: 'QA-004', 22: 'QA-005'}
+QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 18: 'QA-004', 22: 'QA-005'}
 
 
 def _step(number, title, section, checks):
     route = 'component' if number <= 8 else 'spool' if number <= 16 else 'assembly'
     return {
-        'number': number, 'title': (QA_DISPLAY_CODES[number] + ' · ' + title if number in QA_DISPLAY_CODES else title),
+        'number': number, 'title': (QA_DISPLAY_CODES[number] + (' - ' if number in (18, 22) else ' · ') + title if number in QA_DISPLAY_CODES else title),
         'qa_code': QA_CODES.get(number), 'display_qa_code': QA_DISPLAY_CODES.get(number),
         'flow_stage_key': STAGE_BY_STEP[number], 'route': route, 'section': section,
         'roles': list(flow_step_roles(number)),
         'checks': [{'id': f's{number}_{index}', 'label': label} for index, label in enumerate(checks, 1)],
-        'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 20, 23, 24),
-        'requires_handoff': number in (6, 8, 9, 12, 13, 16, 20, 23),
-        'requires_location': number in (3, 6, 8, 9, 12, 13, 16, 20, 23),
-        'requires_reference': number in (1, 2, 5, 11, 15, 19, 22, 23),
-        'qa': number in (2, 11, 15, 19, 22),
-        'return_steps': {2: [2], 11: [10], 15: [14], 19: [17, 18], 22: [17, 18, 19, 20, 21]}.get(number, []),
+        'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 19, 20, 23, 24),
+        'requires_handoff': number in (6, 8, 9, 12, 13, 16, 19, 20, 23),
+        'requires_location': number in (3, 6, 8, 9, 12, 13, 16, 19, 20, 23),
+        'requires_reference': number in (1, 2, 5, 11, 15, 18, 22, 23),
+        'qa': number in QA_CODES,
+        'return_steps': {2: [2], 11: [10], 15: [14], 18: [17, 18], 22: [17, 18, 19, 20, 21]}.get(number, []),
     }
 
 
@@ -63,19 +63,19 @@ STEPS = (
     _step(5, 'Select Components for Spool', 'Component preparation', ['Select components against the BOM / isometric', 'Scan components out of inventory']),
     _step(6, 'Release to Fabrication Prep Technician', 'Component preparation', ['Issue the selected components', 'Record the scanned handoff']),
     _step(7, 'Prep Components', 'Component preparation', ['Buff ends, clean and prepare surfaces', 'Mark or label the components as prepared']),
-    _step(8, 'Return to Production', 'Component preparation', ['Material coordinator receives prepared components', 'Scan the components back into production']),
+    _step(8, 'Return to Floor', 'Component preparation', ['Material coordinator receives prepared components', 'Scan the components back to the floor']),
     _step(9, 'Release to Fit-Up Welder', 'Spool fabrication', ['Issue the required prepared components', 'Record the scanned handoff']),
     _step(10, 'Fit-Up & Tack Weld', 'Spool fabrication', ['Assemble the spool to its isometric', 'Record fit-up / tack work for each configured weld']),
     _step(11, 'Check Dimensions', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions']),
-    _step(12, 'Return to Production', 'Spool fabrication', ['Material coordinator receives the tacked spool', 'Record the scan update']),
+    _step(12, 'Return to Floor', 'Spool fabrication', ['Material coordinator receives the tacked spool on the floor', 'Record the scanned handoff']),
     _step(13, 'Release to Process Welder', 'Spool fabrication', ['Issue the tacked spool to the process welder', 'Record the scanned handoff']),
     _step(14, 'Complete Welds', 'Spool fabrication', ['Complete all individual weld operations to the approved WPS']),
     _step(15, 'Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
-    _step(16, 'Scan Completed Spool', 'Spool fabrication', ['Material coordinator scans the completed spool back into production']),
-    _step(17, 'Collect Spools for Assembly', 'Final assembly', ['Collect every required released spool', 'Scan each child spool barcode']),
-    _step(18, 'Create Assembly ID', 'Final assembly', ['Verify the assembly ID and barcode / QR', 'Link all child spools to the parent assembly in the system']),
-    _step(19, 'Assembly Inspection', 'Final assembly', ['Verify overall assembly dimensions against the isometric']),
-    _step(20, 'Release to Sandblast & Paint', 'Sandblast & paint', ['Material coordinator issues the assembly', 'Record the scanned handoff']),
+    _step(16, 'Return to Floor', 'Spool fabrication', ['Material coordinator receives the completed spool on the floor', 'Record the scanned handoff']),
+    _step(17, 'Release to Testing (Hydro/UT)', 'Testing', ['Verify the assembly ID and every required released child spool', 'Scan each child spool barcode', 'Release the assembly for applicable Hydro/UT testing']),
+    _step(18, 'Verify Test Results', 'Testing', ['Verify applicable Hydro/UT results against the approved requirements', 'Verify current passing dimensions and required weld / test acceptance', 'Record the test report and QA/QC approval reference']),
+    _step(19, 'Return to Floor', 'Testing', ['Material coordinator receives the tested assembly on the floor', 'Record the scanned handoff']),
+    _step(20, 'Release to Sandblast and Paint', 'Sandblast & paint', ['Material coordinator issues the assembly', 'Record the scanned handoff']),
     _step(21, 'Sandblast & Paint', 'Sandblast & paint', ['Complete surface preparation and sandblasting', 'Apply paint to the approved specification']),
     _step(22, 'Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks']),
     _step(23, 'Release to Ready to Ship', 'Shipment', ['Material coordinator verifies ready-to-ship status', 'Scan and move the assembly to the shipping area', 'Generate and verify shipping documents']),
@@ -435,7 +435,7 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     step = plan.current_step
     from spool_receiving import receiving_errors
     errors = receiving_errors(s, item)
-    if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 23, 24):
+    if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21, 23, 24):
         errors.extend(_physical_hold_errors(s, item))
     if plan.route == 'spool':
         errors.extend(_component_errors(s, item, plan))
@@ -443,8 +443,13 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
         errors.extend(_assembly_errors(s, item, plan))
     if step in (10, 11, 14):
         errors.extend(_weld_errors(s, item, step))
-    if step == 19 and (item.dimensional != 'Pass' or not item.dimension_at or not _after(item.dimension_at, item.last_work_at)):
+    if step == 18 and (item.dimensional != 'Pass' or not item.dimension_at or not _after(item.dimension_at, item.last_work_at)):
         errors.append('Record a fresh passing dimensional inspection for the assembly')
+    if step == 18:
+        # Test verification precedes coating. Use the configured requirement
+        # stages; final-release obligations may include post-coating records.
+        errors.extend(tracking_release_errors(s, item,
+            requirement_stages=('before_welding', 'after_welding')))
     if step in (15, 22):
         errors.extend(tracking_release_errors(s, item))
     if step in (16, 23, 24) and not item.released:
@@ -519,8 +524,8 @@ def guard_reopen(s, item):
     if parent_id:
         parent_item = lock_item(s, parent_id)
         parent = s.get(FlowPlan, parent_item.id)
-        if parent and (parent.status != 'active' or (parent.current_step or 99) >= 19 or parent_item.released):
-            raise HTTPException(409, 'Return the parent assembly to step 17 or 18 through its controlled QA/rework flow before reopening a child spool')
+        if parent and (parent.status != 'active' or (parent.current_step or 99) >= 18 or parent_item.released):
+            raise HTTPException(409, 'Return the parent assembly to step 17 through its controlled QA/rework flow before reopening a child spool')
 
 
 def on_item_reopened(s, item, actor, at):
@@ -546,7 +551,7 @@ def guard_weld_operation(s, item, operation):
         return
     allowed = (10, 14) if operation == 'fitup' else (14,)
     if plan.route == 'assembly':
-        allowed = (18,)
+        allowed = (17,)
     if plan.status != 'active' or plan.current_step not in allowed:
         raise HTTPException(409, 'Record this work at the fabrication step in the CLM traveler: ' + ', '.join(map(str, allowed)))
 
@@ -663,9 +668,9 @@ def detail(s, item, user):
                 actions.append('fail')
         if plan.route == 'component' and (plan.current_step <= 5 or not link) and user.role in HANDOFF:
             actions.append('assign-component')
-        if plan.route == 'assembly' and plan.current_step in (17, 18) and user.role in MANAGE:
+        if plan.route == 'assembly' and plan.current_step == 17 and user.role in MANAGE:
             actions.append('link-spool')
-        if user.role in MANAGE and (plan.route == 'spool' and plan.current_step == 9 or plan.route == 'assembly' and plan.current_step in (17, 18)):
+        if user.role in MANAGE and (plan.route == 'spool' and plan.current_step == 9 or plan.route == 'assembly' and plan.current_step == 17):
             actions.append('scope')
         actions.extend(action for action in process['permissions']['allowed_actions'] if action in ('pause', 'resume'))
     if plan and plan.status == 'shipped' and user.role in HANDOFF:
@@ -894,7 +899,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     elif step['number'] == 3:
         from transfers import record_location
         handoff_data = record_location(s, item, selected, u, now)
-    if step['number'] in (7, 18, 21):
+    if step['number'] in (7, 17, 21):
         _fresh_dimensions_after_work(item, now)
     completed_step = step['number']
     scope = ROUTE_BY_ID[plan.route]
@@ -947,7 +952,7 @@ def fail(item_id: str, data: FailIn, u: Employee = Depends(auth), s: Session = D
         item.reinspection_due = True
         item.weld = 'Not started'
         item.weld_at = None
-    if step['number'] in (11, 15, 19, 22):
+    if step['number'] in (11, 15, 18, 22):
         item.dimensional = 'Not started'
         item.dimension_at = None
         item.reinspection_due = True
@@ -1042,8 +1047,8 @@ def link_spool(item_id: str, data: LinkIn, u: Employee = Depends(auth), s: Sessi
     permit(u, *MANAGE)
     assembly, plan = _locked(s, item_id)
     _version(plan, data.expected_version)
-    if plan.route != 'assembly' or plan.status != 'active' or plan.current_step not in (17, 18) or assembly.released:
-        raise HTTPException(409, 'Link child spools while collecting / identifying an unreleased assembly at step 17 or 18')
+    if plan.route != 'assembly' or plan.status != 'active' or plan.current_step != 17 or assembly.released:
+        raise HTTPException(409, 'Link child spools at step 17 before releasing the assembly to testing')
     child = lock_item(s, data.spool_id)
     child_plan = s.scalar(select(SpoolPlan).where(SpoolPlan.item_id == child.id).execution_options(populate_existing=True))
     assembly_plan = s.get(SpoolPlan, assembly.id)
@@ -1088,8 +1093,8 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
         guard_order_scope(s, item_id, data.expected_children)
     if plan.status != 'active' or item.released or not (
             plan.route == 'spool' and plan.current_step == 9 or
-            plan.route == 'assembly' and plan.current_step in (17, 18)):
-        raise HTTPException(409, 'Change child scope before spool step 9 is completed, or at assembly collection / identification steps 17–18')
+            plan.route == 'assembly' and plan.current_step == 17):
+        raise HTTPException(409, 'Change child scope before spool step 9 is completed, or at assembly step 17 before release to testing')
     ids = _lock_children(s, item, plan)
     if data.expected_children < len(ids):
         raise HTTPException(409, 'Declared scope cannot be smaller than the existing child links')
@@ -1108,3 +1113,4 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
         {'before': before, 'after': after})
     _commit(s)
     return detail(s, item, u)
+

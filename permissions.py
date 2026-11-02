@@ -133,7 +133,7 @@ def can_submit_requirement_evidence(user, requirement):
 
 
 def flow_step_roles(number):
-    if number in (2, 11, 15, 19, 22):
+    if number in (2, 11, 15, 18, 22):
         return ('admin', 'inspector')
     if number == 7:
         return ('admin', 'finisher')
@@ -155,3 +155,4 @@ def can_control_process(user, key):
             return False
         return 1 <= step <= 24 and (role in ('admin', 'supervisor') or role in flow_step_roles(step))
     return key in PROCESS_KEYS.get(role, ())
+

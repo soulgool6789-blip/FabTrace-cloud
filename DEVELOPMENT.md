@@ -2,6 +2,16 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
+## Current flow revision: CLM-24-v4
+
+Release `2026.11.02-testing-flow.1` replaces the former assembly-ID/inspection presentation with Release to Testing (Hydro/UT) at 17, QA/QC-004 - Verify Test Results at 18, and Return to Floor at 19. The other floor returns are 8, 12 and 16; final QA at 22 displays QA/QC-005. Internal QA-004 now identifies step 18, with inspector/admin roles, item verification, report reference, fresh dimensions and existing tracking checks filtered to explicit `before_welding` / `after_welding` requirements. Final release still checks all requirement stages. The stage filter applies to both weld-level and whole-item requirements; no requirement is selected by its free-text name. Joining work and the post-work dimension reset move from 18 to 17. Assembly scope and child links must be settled at17; reopening a child at or after QA18 requires the controlled return to17 first. QA18 approval retains its dimensions; step19 becomes a normal scanned badge/location handoff. Existing pre-coating gates at20/21 and final-release/shipping gates remain.
+
+`qa_test_results` is the new orange test-review station. Persisted `qa_004` remains the pink final-inspection station and now displays QA/QC-005; never reuse that old ID for testing. Movement history determines physical location independently of the numbered step. Historical label-only QA/QC-004 still maps to final inspection. A legacy generic QA/QC movement at step18 needs a recorded revised step definition to identify test review.
+
+The deployed database was checked before this revision and contained zero `flow_plans`, `flow_events` and `flow_exceptions`; no traveler migration is needed for this release. Existing item, inspection, transfer and document records remain intact. A different database with active v1–v3 travelers would need an explicit audited compatibility migration before enabling this revised route, especially at old step19 and for old step19 exceptions. Do not relabel an old assembly-ID completion as a test approval.
+
+The earlier release notes below describe their historical behavior; this revision supersedes their step18/19 and QA/QC-004 display mappings.
+
 ## Code map
 
 | File | Responsibility |
@@ -694,3 +704,4 @@ Completed linked children can follow a parent only when the actual parent moveme
 `FabFlowStatus.spoolText` and `decorateSpool` apply foreground colors to each full physical alias. `stationText`, badges, the flow strip and process headings use neutral text; the legend uses color swatches. Saved P.O. assemblies start open, and all registered physical copies are directly visible with their neutral station and explicit color name. The planned base requirement never receives an aggregate color. Cache versions are updated in both identical HTML shells.
 
 The focused browser scenario is `node tests/spool_number_colors_browser_smoke.cjs --grouping-only`, using the disposable server described in `tests/orders_browser_README.md`. It checks new pending Inventory copies, QR viewing without movement, confirmed QR handoffs to QA/QC-001 and Prep/Fabrication, unchanged siblings, arrival approval without station movement, and consistent desktop/mobile number colors in Process flow, Production progress and the saved P.O.
+
