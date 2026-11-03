@@ -63,7 +63,7 @@ let browser, page, stage = 'launch', seedComplete = false;
   const copyCount = GROUPING_ONLY ? 12 : 2;
   const setup = await api('post', '/api/order-setup', {expected_version: 0,
     purchase_order: 'SPOOL-COLORS-' + Date.now(),
-    assemblies: [{gpn: 'COLOR-CHECK-ASSEMBLY', assembly_quantity: 1,
+    assemblies: [{gpn: 'COLOR-CHECK-ASSEMBLY', assembly_number: 'TEST-COLOR-ASM-001', assembly_quantity: 1,
       spools: [{spool_number: NUMBER, quantity_per_assembly: copyCount, welds_per_spool: 0}]}]});
   const project = setup.order.project_id, requirement = setup.assemblies[0].spools[0].id;
   const documentBase = '/api/spool-documents/requirements/' + requirement;
@@ -490,3 +490,4 @@ let browser, page, stage = 'launch', seedComplete = false;
   if (browser) await browser.close();
   process.exitCode = 1;
 });
+

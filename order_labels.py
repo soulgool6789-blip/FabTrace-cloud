@@ -21,7 +21,7 @@ from main import (Employee, Item, audit, auth, db, phone_link, phone_qr_ready,
                   require_phone_qr_ready)
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit,
                     _event, _flush, _gpn, _key, _locked, _validate_assembly_scope,
-                    business_gpn, read_snapshot)
+                    _require_assembly_number, business_gpn, read_snapshot)
 from order_setup import guard_assembly_registration, requirements_by_gpn
 from order_spools import (OrderSpool, SpoolQrIdentity, effective_children_by_assembly,
                           ensure_spool_qr_identity, guard_registered_spool, pending_declared_spools,
@@ -393,6 +393,7 @@ def _spool_deficits(s, order, groups, plans):
         for key, line in required.items():
             missing = line['quantity_per_assembly'] - assigned[key]
             if missing:
+                _require_assembly_number(group.assembly_number)
                 if parent.released:
                     raise HTTPException(409, 'Return the released purchase-order assembly to work before generating missing child spools.')
                 from flow_testing import assembly_editable
@@ -428,11 +429,16 @@ def generate_labels(project_id: str, data: GenerateLabelsIn,
         if missing < 0 or not plan['spools_per_assembly']:
             raise HTTPException(409, 'Registered assemblies or saved spool quantities are inconsistent. Review the existing scope before generating labels.')
         if missing:
+            _require_assembly_number(group.assembly_number)
             guard_assembly_registration(s, group, plan['spools_per_assembly'])
             missing_parents.append((group, plan, missing))
     # Validate all retained scope even when the first group fills this batch.
     deficits = _spool_deficits(s, order, groups, plans)
     pending = pending_declared_spools(s, project_id, plans)
+    pending_requirements = {line['id'] for _, _, line in pending}
+    for group in groups:
+        if any(line['id'] in pending_requirements for line in plans[group.id]['spools']):
+            _require_assembly_number(group.assembly_number)
     employee = s.scalar(select(Employee).where(Employee.badge == data.handler)
         .with_for_update().execution_options(populate_existing=True))
     if not employee or not employee.active or employee_is_removed(s, employee.badge):

@@ -102,7 +102,7 @@ let browser, page, stage = 'launch';
   stage = '18 physical copies with random internal IDs';
   const setup = await api('post', '/api/order-setup', {
     expected_version: 0, purchase_order: 'PASS-ALL-UI-' + run,
-    assemblies: [{gpn: 'PASS-ALL-ASM', assembly_quantity: 1,
+    assemblies: [{gpn: 'PASS-ALL-ASM', assembly_number: 'TEST-PASS-ALL-001', assembly_quantity: 1,
       spools: [{spool_number: number, quantity_per_assembly: 18, welds_per_spool: 1}]}]
   });
   const project = setup.order.project_id, requirement = setup.assemblies[0].spools[0].id;
@@ -357,3 +357,4 @@ let browser, page, stage = 'launch';
   if (browser) await browser.close();
   process.exitCode = 1;
 });
+

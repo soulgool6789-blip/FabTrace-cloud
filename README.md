@@ -1,5 +1,11 @@
 # FabTrace Cloud
 
+## Required Assembly Number
+
+Creating or editing a P.O. assembly requires its actual **Assembly Number** as well as its separate **GPN**. Enter the independent assembly identifier from the job records. FabTrace does not substitute the GPN, copy an internal `ASM-…` tracking ID, or invent a number when it is missing.
+
+Earlier assembly records with a missing number remain visible as **Assembly Number required**. Use **Edit assembly** on the exact record to enter its actual number with a correction reason before further assembly setup changes; its physical items, QR identities, files and inspection history remain retained. A standalone **GPN record** remains valid without an assembly. The requirement applies when an assembly is created or edited, and does not fabricate values for older records.
+
 ## Separate current GPN and Assembly Number on every label
 
 Release `2026.11.02-gpn-label.1` corrects the confirmed Kelvion-01 label metadata: **GPN 1193403** and **Assembly Number 643-777**. The prior combined value `1193403643-777` stays in retained production/document identity fields; the current GPN is stored independently. All label cards, Print all/search/import sheets, and both SVG download routes use the current business GPN. Spool numbers such as `643-777-PCW-03-01-[001]` and their QR links remain unchanged.
@@ -25,6 +31,8 @@ Release `2026.11.02-employee-badge-name.1` prints the employee’s current name 
 Release `2026.11.02-label-no-assignment.1` removes the complete Assigned to line, employee name, and badge from all item QR label cards, print sheets, and SVG downloads. Normal employee assignments and custody history remain in FabTrace.
 
 ## Separate Assembly Number, GPN, and QR labels
+
+The following release notes describe the earlier field-separation update. The current creation and editing rule is described under **Required Assembly Number** above.
 
 Release `2026.11.02-assembly-gpn-labels.1` records **Assembly Number** and **GPN** independently in setup and production records. GPN is required; an unknown Assembly Number stays blank. Existing values remain in the GPN field until the actual separate Assembly Number is entered. Current setup uses separate **Edit GPN** and **Edit assembly** actions for permitted corrections, including after physical registration. Distinct named assemblies can share a GPN; document and label selection uses each exact saved assembly entry.
 
@@ -134,7 +142,7 @@ Open **Orders → Open P.O. → Spool QR labels** from the toolbar or selected a
 
 Each physical copy receives a permanent code such as **643-777-PCW-03-01-[001]**. Eighteen new copies of that spool number receive **[001] through [018]** when no earlier copies exist. Numbering continues globally for the same spool number across purchase orders. Removed spools retain their numbers; replacement copies receive new numbers. Reprinting never renumbers existing spools.
 
-Labels show the readable spool code, P.O., GPN, and separately entered Assembly Number when known. The internal assembly tracking ID is omitted from the label. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
+Labels show the readable spool code, P.O., GPN, and separately entered Assembly Number. Use **Edit assembly** to correct an older missing Assembly Number; a GPN or tracking ID is not substituted. The internal assembly tracking ID is omitted from the label. The original internal tracking ID, welds, materials and history are unchanged, and previously printed QR links still open the same record. Legacy spools without a spool number keep their original code until a real number is entered. After a readable label is assigned, its spool number is fixed.
 
 Print all labels or filter to one assembly setup record, shown with its GPN and Assembly Number, in pages of 100. Generation creates up to 500 physical items per batch, including parent assemblies. Declared weld counts produce independent numbered weld records with inspections pending. An inherited valid uploaded BOM initializes material-piece records and any explicit source Heat/MTR facts that apply to the matched pieces. Unknown or unassigned values remain blank; generation supplies no receipts or QA approvals. Active employees can view and reprint; administrators and Shop Foremen can generate eligible missing records.
 
@@ -147,7 +155,7 @@ An administrator can open **Employees → Change position**, select the new posi
 Open **Orders** (`/?order-setup=1`) and choose **New P.O.** This is the ordinary signed-in landing screen; creation and edits retain their existing permissions. New-order setup has three focused entry screens:
 
 1. **P.O. number** — enter the purchase-order number.
-2. **GPN & assemblies** — enter each GPN, its separate Assembly Number and the assembly quantity. Add assembly rows as needed, then continue.
+2. **GPN & assemblies** — enter each GPN, its required independent Assembly Number and the assembly quantity. Both identifiers are required for every assembly. Add assembly rows as needed, then continue.
 3. **Spools & welds** — enter each assembly's spool numbers, **Qty per assembly** and **Welds per spool**. Check the calculated totals and choose **Save P.O.** on this screen. The order saves once and opens its saved register; files remain available afterward.
 
 Spool quantities apply to **one assembly**. FabTrace calculates the P.O. totals: three assemblies needing two of spool A and four of spool B require **6 A + 12 B = 18 spools**. The setup save records the numbers, quantities, and weld counts together; optional documents are saved separately to the selected spool scope. Physical records and custody are entered later.

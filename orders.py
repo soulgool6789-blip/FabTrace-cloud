@@ -55,8 +55,8 @@ class OrderGpn(Base):
     # Keep the recorded GPN as the physical/document identity basis. Current
     # business labels may be corrected without rewriting that retained basis.
     gpn_label = Column(String(160), nullable=True)
-    # A separate assembly number is unknown until explicitly supplied; it is
-    # never inferred from a recorded GPN or physical ID.
+    # Historical unnamed definitions remain readable. New and edited assembly
+    # records require an explicitly supplied number, never a GPN or Item ID.
     assembly_number = Column(String(160), nullable=False, default='', server_default='')
     normalized_assembly_number = Column(String(480), nullable=True)
     description = Column(String(500), nullable=False, default='')
@@ -115,6 +115,13 @@ class Input(BaseModel):
             raise ValueError('Text cannot contain a null character')
         return value
 
+    @field_validator('assembly_number', check_fields=False)
+    @classmethod
+    def provided_assembly_number_is_not_null(cls, value):
+        if value is None:
+            raise ValueError('Assembly Number cannot be null. Omit it only to retain a saved Assembly Number.')
+        return value
+
 
 class CreateOrderIn(Input):
     expected_version: int = Field(default=0, ge=0, le=0, strict=True)
@@ -137,12 +144,12 @@ class EditOrderIn(VersionIn):
 
 class CreateGpnIn(VersionIn):
     gpn: str = Field(min_length=1, max_length=160)
-    assembly_number: str = Field(default='', max_length=160)
+    assembly_number: str = Field(min_length=1, max_length=160)
     description: str = Field(default='', max_length=500)
 
 
 class EditGpnIn(CreateGpnIn):
-    assembly_number: str | None = Field(default=None, max_length=160)
+    assembly_number: str | None = Field(default=None, min_length=1, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
 
@@ -173,6 +180,9 @@ class AssemblyFields(VersionIn):
 
 class CreateAssemblyIn(AssemblyFields):
     gpn_id: str = Field(min_length=1, max_length=60)
+    # This retained exact-definition endpoint may reuse its saved number.
+    # A supplied number must be nonblank and match that selected definition.
+    assembly_number: str | None = Field(default=None, min_length=1, max_length=160)
     item_id: str = Field(min_length=3, max_length=60, pattern=r'^[A-Za-z0-9_-]+$')
     create_item: AssemblyItemIn | None = None
 
@@ -190,7 +200,7 @@ class CombinedAssemblyItemIn(Input):
 
 class CombinedAssemblyFields(VersionIn):
     gpn: str = Field(min_length=1, max_length=160)
-    assembly_number: str = Field(default='', max_length=160)
+    assembly_number: str = Field(min_length=1, max_length=160)
     required_spools: int = Field(ge=1, le=10000, strict=True)
     notes: str = Field(default='', max_length=3000)
 
@@ -208,12 +218,20 @@ class CreateCombinedAssemblyIn(CombinedAssemblyFields):
 
 
 class EditCombinedAssemblyIn(CombinedAssemblyFields):
-    assembly_number: str | None = Field(default=None, max_length=160)
+    assembly_number: str | None = Field(default=None, min_length=1, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
 
 def _key(value):
     return ' '.join(value.split()).casefold()
+
+
+def _require_assembly_number(value):
+    """Reject unnamed writes without changing retained historical records."""
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(409, 'Assembly Number is required. Use Edit assembly in P.O. setup '
+            'to record it before changing this assembly or creating physical copies.')
+    return value
 
 
 def business_gpn(group):
@@ -354,10 +372,11 @@ def _group_number_conflict(s, project_id, gpn, assembly_number, *, excluding=Non
 
 
 def _guard_group_number(s, project_id, gpn, assembly_number, *, excluding=None):
+    _require_assembly_number(assembly_number)
     duplicate = _group_number_conflict(s, project_id, gpn, assembly_number, excluding=excluding)
     if duplicate is not None:
         from removals import gpn_is_removed
-        label = 'Assembly Number' if assembly_number else 'GPN with an unspecified Assembly Number'
+        label = 'Assembly Number'
         if gpn_is_removed(s, duplicate.id):
             raise HTTPException(409, f'That {label} is in Removed records. Restore its existing entry to retain its identity.')
         raise HTTPException(409, f'That {label} already exists in this P.O. Open its existing setup.')
@@ -849,6 +868,8 @@ def create_gpn(project_id: str, data: CreateGpnIn, user: Employee = Depends(auth
 def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Depends(auth), s: Session = Depends(db)):
     row = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
+    assembly_number = _require_assembly_number(
+        group.assembly_number if data.assembly_number is None else data.assembly_number)
     from spool_documents import guard_document_requirement_identity
     guard_document_requirement_identity(s, group, gpn=data.gpn)
     if data.gpn != group.gpn:
@@ -860,7 +881,6 @@ def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Dep
             if item.released or s.get(FlowPlan, item.id):
                 raise HTTPException(409, 'Correct the GPN before its assemblies enter a traveler or receive final release')
     before = _row(group, GPN_FIELDS)
-    assembly_number = group.assembly_number if data.assembly_number is None else data.assembly_number
     _guard_group_number(s, project_id, data.gpn, assembly_number, excluding=group.id)
     group.gpn, group.normalized_gpn, group.description = data.gpn, _key(data.gpn), data.description
     _set_assembly_number(group, assembly_number)
@@ -895,6 +915,10 @@ def create_assembly(project_id: str, data: CreateAssemblyIn, user: Employee = De
     from order_setup import guard_assembly_registration, OrderAssemblyRequirement
     row = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, data.gpn_id)
+    _require_assembly_number(group.assembly_number)
+    if data.assembly_number is not None and data.assembly_number != group.assembly_number:
+        raise HTTPException(409, 'The Assembly Number must match the selected setup. '
+            'Edit its Assembly Number separately before registration.')
     guard_assembly_registration(s, group, data.required_spools, item_id=data.item_id)
     if s.get(OrderAssemblyRequirement, group.id) and _key(data.assembly_part_number) != group.normalized_gpn:
         raise HTTPException(409, 'The assembly part number must match the planned Google part number / assembly number')
@@ -933,6 +957,7 @@ def edit_assembly(project_id: str, item_id: str, data: EditAssemblyIn, user: Emp
     row = _locked(s, project_id, data.expected_version, user)
     mapping = _assembly(s, project_id, item_id)
     group = _gpn(s, project_id, mapping.gpn_id)
+    _require_assembly_number(group.assembly_number)
     guard_assembly_registration(s, group, data.required_spools, item_id=item_id)
     if s.get(OrderAssemblyRequirement, group.id) and _key(data.assembly_part_number) != group.normalized_gpn:
         raise HTTPException(409, 'The assembly part number must match the planned Google part number / assembly number')
@@ -964,20 +989,15 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
     order = _locked(s, project_id, data.expected_version, user)
     if data.gpn_id:
         group = _gpn(s, project_id, data.gpn_id)
+        _require_assembly_number(group.assembly_number)
         if group.normalized_gpn != _key(data.gpn):
             raise HTTPException(409, 'The GPN must match the existing entry being completed')
-        if 'assembly_number' in data.model_fields_set and data.assembly_number != group.assembly_number:
+        if data.assembly_number != group.assembly_number:
             raise HTTPException(409, 'The Assembly Number must match the selected setup. Edit its Assembly Number separately before registration.')
     else:
-        if 'assembly_number' in data.model_fields_set:
-            group = _group_number_conflict(s, project_id, data.gpn, data.assembly_number)
-        else:
-            matches = list(s.scalars(select(OrderGpn).where(OrderGpn.project_id == project_id,
-                OrderGpn.normalized_gpn == _key(data.gpn)).limit(2)))
-            if len(matches) > 1:
-                raise HTTPException(409, 'This GPN belongs to more than one assembly setup. Select its Assembly Number or exact setup entry.')
-            group = matches[0] if matches else None
+        group = _group_number_conflict(s, project_id, data.gpn, data.assembly_number)
         if group:
+            _require_assembly_number(group.assembly_number)
             require_active_gpn(s, group.id)
             if group.normalized_gpn != _key(data.gpn):
                 raise HTTPException(409, 'That Assembly Number already has a different GPN. Open its existing setup.')
@@ -1037,11 +1057,12 @@ def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAsse
     order = _locked(s, project_id, data.expected_version, user)
     mapping = _assembly(s, project_id, item_id)
     group = _gpn(s, project_id, mapping.gpn_id)
+    assembly_number = _require_assembly_number(
+        group.assembly_number if data.assembly_number is None else data.assembly_number)
     from spool_documents import guard_document_requirement_identity
     guard_document_requirement_identity(s, group, gpn=data.gpn)
     item = lock_item(s, item_id)
     number_changed = data.gpn != group.gpn
-    assembly_number = group.assembly_number if data.assembly_number is None else data.assembly_number
     guard_assembly_registration(s, group, data.required_spools, item_id=item_id)
     if number_changed and s.get(OrderAssemblyRequirement, group.id):
         raise HTTPException(409, 'This planned assembly number is locked by registered physical records; its P.O. setup and identities are preserved')

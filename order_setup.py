@@ -18,7 +18,7 @@ from tracking import Project, new_id
 from flow import lock_topology
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _event,
                     _flush, _gpn, _key, _locked, _guard_group_number,
-                    _set_assembly_number, business_gpn, read_snapshot,
+                    _set_assembly_number, _require_assembly_number, business_gpn, read_snapshot,
                     sync_gpn_record, gpn_record_rows, CreateGpnRecordIn,
                     EditGpnRecordIn, create_gpn_record_value, edit_gpn_record_value)
 from permissions import has_capability
@@ -78,7 +78,7 @@ class SpoolRequirementIn(Input):
 
 class AssemblyRequirementIn(Input):
     gpn: str = Field(min_length=1, max_length=160)
-    assembly_number: str = Field(default='', max_length=160)
+    assembly_number: str = Field(min_length=1, max_length=160)
     assembly_quantity: int = Field(ge=1, le=10000, strict=True)
     spools: list[SpoolRequirementIn] = Field(min_length=1, max_length=200)
 
@@ -99,10 +99,9 @@ class CreateSetupIn(Input):
 
     @model_validator(mode='after')
     def unique_assembly_numbers(self):
-        keys = [('assembly', _key(row.assembly_number)) if row.assembly_number
-                else ('gpn', _key(row.gpn)) for row in self.assemblies]
+        keys = [_key(row.assembly_number) for row in self.assemblies]
         if len(keys) != len(set(keys)):
-            raise ValueError('Enter each Assembly Number once per P.O.; when it is unknown, enter each GPN once and use its quantity')
+            raise ValueError('Enter each Assembly Number once per P.O. and use its quantity')
         return self
 
 
@@ -111,13 +110,13 @@ class AddAssemblyRequirementIn(AssemblyRequirementIn):
 
 
 class EditAssemblyRequirementIn(AddAssemblyRequirementIn):
-    assembly_number: str | None = Field(default=None, max_length=160)
+    assembly_number: str | None = Field(default=None, min_length=1, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
 
 class EditAssemblyIdentityIn(Input):
     expected_version: int = Field(ge=1, strict=True)
-    assembly_number: str = Field(max_length=160)
+    assembly_number: str = Field(min_length=1, max_length=160)
     gpn_label: str | None = Field(default=None, min_length=1, max_length=160)
     reason: str = Field(min_length=4, max_length=3000)
 
@@ -477,6 +476,7 @@ def guard_declared_weld_count(s, item, assembly_id, planned_welds):
 def _declare_registered_weld_counts(s, order, group, data, user):
     """Permit only first declarations after physical quantity scope is locked."""
     from order_spools import initialize_declared_spools, pending_declared_spools
+    _require_assembly_number(group.assembly_number)
     saved = requirements_by_gpn(s, {group.id}).get(group.id)
     message = ('Physical assembly records already exist. Only previously undeclared weld counts can be set here; '
                'assembly numbers, quantities, spool numbers and declared weld counts are locked.')
@@ -577,11 +577,12 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
                               user: Employee = Depends(auth), s: Session = Depends(db)):
     order = _locked(s, project_id, data.expected_version, user)
     group = _gpn(s, project_id, gpn_id)
+    assembly_number = _require_assembly_number(
+        group.assembly_number if data.assembly_number is None else data.assembly_number)
     from spool_documents import guard_document_requirement_identity
     guard_document_requirement_identity(s, group, gpn=data.gpn)
     if s.scalar(select(OrderAssembly.item_id).where(OrderAssembly.gpn_id == group.id).limit(1)):
         return _declare_registered_weld_counts(s, order, group, data, user)
-    assembly_number = group.assembly_number if data.assembly_number is None else data.assembly_number
     _guard_group_number(s, project_id, data.gpn, assembly_number, excluding=group.id)
     before = _basis(s, group)
     group.gpn, group.normalized_gpn, group.updated_at = data.gpn, _key(data.gpn), utcnow()

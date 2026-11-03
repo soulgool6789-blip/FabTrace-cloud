@@ -125,7 +125,7 @@ let browser, page, stage = 'launch';
   stage = 'exact two-flange and one-pipe saved BOM';
   const setup = await api('post', '/api/order-setup', {
     expected_version: 0, purchase_order: 'BOM-PIECES-UI-' + run,
-    assemblies: [{gpn: 'BOM-PIECES-ASM', assembly_quantity: 1,
+    assemblies: [{gpn: 'BOM-PIECES-ASM', assembly_number: 'TEST-BOM-PIECES-001', assembly_quantity: 1,
       spools: [{spool_number: number, quantity_per_assembly: 2, welds_per_spool: 1}]}]
   });
   const project = setup.order.project_id, requirement = setup.assemblies[0].spools[0].id;
@@ -384,3 +384,4 @@ let browser, page, stage = 'launch';
   if (browser) await browser.close();
   process.exitCode = 1;
 });
+

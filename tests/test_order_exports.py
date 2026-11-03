@@ -18,7 +18,8 @@ def make_order(api, number='000012345', suffix=''):
 def add_gpn(api, detail, gpn):
     project_id = detail['order']['project_id']
     response = api.post(f'/api/orders/{project_id}/gpns', {
-        'expected_version': detail['order']['version'], 'gpn': gpn, 'description': 'Test assembly family'})
+        'expected_version': detail['order']['version'], 'gpn': gpn,
+        'assembly_number': 'ASM-' + gpn.strip()[:156], 'description': 'Test assembly family'})
     assert response.status_code == 201, response.text
     detail = response.json()
     return detail, next(row['id'] for row in detail['gpns'] if row['gpn'] == gpn)
@@ -102,7 +103,7 @@ def test_bom_scope_quantities_gaps_and_literal_identifiers(api, order_scope):
     first = next(row for row in summary if row['Assembly ID'] == 'ASM-A')
     assert first['PO number'] == '000012345' and first['GPN'] == '000007'
     assert first['Retained assembly part number'] == '000099-ASM-A'
-    assert first['Assembly number'] == '' and 'Assembly part number' not in first
+    assert first['Assembly number'] == 'ASM-000007' and 'Assembly part number' not in first
     assert 'Assembly description' not in first
     assert all('Spool description' not in row for row in values(book, 'Spool register'))
     assert (first['Required spools'], first['Linked spools'], first['Missing spools']) == (2, 1, 1)
@@ -132,6 +133,13 @@ def test_separate_numbers_preserve_unknown_assembly_drafts_and_leading_zeros(api
     plan_existing_assembly(api, project, 'COMBINED-ASM')
     plan(api, project, 'COMBINED-SP', 'COMBINED-ASM')
     part_lines(api, 'COMBINED-SP')
+    # Retained unnamed history is explicit fixture state, not a new API write.
+    orders = importlib.import_module('orders')
+    with api.session_factory() as session:
+        for identifier in (gpn_id, draft_id):
+            group = session.get(orders.OrderGpn, identifier)
+            group.assembly_number, group.normalized_assembly_number = '', None
+        session.commit()
     before = snapshot(api)
     book = download(api, project, suffix=suffix)
     material_sheet = 'BOM template' if suffix == 'bom-template.xlsx' else 'Bill of materials'

@@ -39,6 +39,10 @@ Generic **Welder** (`welder`) and **Miscellaneous** (`misc`) are retired from ne
 
 All positions above, and retained legacy accounts, can use ordinary **Scan & Handoff** with both employee badges. Administrators and Shop Foremen manage custom shop locations. Employee access, private PIN resets, administrative release exceptions and Excel exports remain administrator controls.
 
+## P.O. assembly identities
+
+A Shop Foreman or administrator must supply the actual **Assembly Number** when creating or editing a P.O. assembly. It is required independently of the **GPN**; neither the GPN nor an internal `ASM-…` tracking ID fills a missing number. Older records remain readable and can be corrected through **Edit assembly** with a reason, preserving their physical identities and evidence. A standalone GPN record remains independent and does not require an assembly. These identity requirements do not grant production or QA approval or change the employee's permissions.
+
 ## Welding and numbered process steps
 
 Only **Fit-up welder**, **Administrator** and retained legacy **Welder** accounts can record fit-up/tack work or complete step **10**. Only **Process welder**, **Administrator** and retained legacy **Welder** accounts can record root/fill-cap/completion, log legacy weld quantities or complete step **14**. A Shop Foreman or material coordinator cannot record those physical operations solely because they manage the job or hold the spool.

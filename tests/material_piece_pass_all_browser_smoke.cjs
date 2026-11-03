@@ -71,7 +71,7 @@ let browser, page, stage = 'launch';
 
   stage = 'synthetic shared BOM and two physical copies';
   const setup = await api('post', '/api/order-setup', {expected_version: 0, purchase_order: 'MATERIAL-PASS-' + Date.now(),
-    assemblies: [{gpn: 'MATERIAL-PASS-ASM', assembly_quantity: 1,
+    assemblies: [{gpn: 'MATERIAL-PASS-ASM', assembly_number: 'TEST-MATERIAL-PASS-001', assembly_quantity: 1,
       spools: [{spool_number: '643-777-PCW-03-01', quantity_per_assembly: 2, welds_per_spool: 1}]}]});
   const project = setup.order.project_id, requirement = setup.assemblies[0].spools[0].id;
   await api('post', '/api/order-labels/' + project + '/generate', {expected_version: setup.order.version,
@@ -270,3 +270,4 @@ let browser, page, stage = 'launch';
   fs.writeFileSync(path.join(OUT, 'failure.json'), JSON.stringify({stage, error: error.message, page_errors: errors}, null, 2));
   if (browser) await browser.close(); process.exitCode = 1;
 });
+

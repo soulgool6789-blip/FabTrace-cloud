@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import inspect, text
 
 from receiving_helpers import accept_arrival, receiving_detail
-from test_assembly_identity import named_branch
+from test_assembly_identity import legacy_unnamed, named_branch
 from test_order_labels import generate, labels, public_qr_url
 from test_order_setup import ROOT, create_setup, detail
 from test_progress import database_state
@@ -43,11 +43,12 @@ def legacy_schema(api):
 
 
 def test_startup_migrates_existing_sqlite_idempotently_without_inventing_assembly_numbers_or_changing_history(api, monkeypatch):
-    saved = create_setup(api, assemblies=[named_branch('')])
+    saved = create_setup(api, assemblies=[named_branch('MIGRATION-ASM')])
     project = saved['order']['project_id']
     generate(api, project)
     spool = labels(api, project)['items'][0]
     accepted = accept_arrival(api, spool['id'])
+    saved = legacy_unnamed(api, saved)
     before = database_state(api)
     initializer = importlib.import_module('init_db')
     engine = legacy_schema(api)
@@ -79,13 +80,13 @@ def test_startup_migrates_existing_sqlite_idempotently_without_inventing_assembl
     for number in ('ACTUAL-ASM-A', ''):
         response = api.post(f'{ROOT}/{project}/assemblies', {
             **named_branch(number), 'expected_version': added['order']['version']})
-        assert response.status_code == 409 and database_state(api) == before
+        assert response.status_code == (409 if number else 422) and database_state(api) == before
 
 
 def test_failed_startup_rolls_back_sqlite_schema_replacement_and_restores_fk_enforcement(api, monkeypatch):
     import spool_boms
 
-    create_setup(api, assemblies=[named_branch('')])
+    create_setup(api, assemblies=[named_branch('MIGRATION-ROLLBACK-ASM')])
     engine = legacy_schema(api)
     initializer = importlib.import_module('init_db')
     monkeypatch.setattr(initializer, 'engine', engine)
@@ -106,4 +107,5 @@ def test_failed_startup_rolls_back_sqlite_schema_replacement_and_restores_fk_enf
         assert connection.execute(text('SELECT * FROM order_spool_requirements')).all() == children_before
         assert connection.exec_driver_sql('PRAGMA foreign_key_check').all() == []
         assert connection.exec_driver_sql('PRAGMA foreign_keys').scalar() == 1
+
 

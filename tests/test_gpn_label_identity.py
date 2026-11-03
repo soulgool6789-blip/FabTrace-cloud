@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from conftest import BADGES
 from receiving_helpers import accept_arrival, receiving_detail, upload_receiving_bom
+from test_assembly_identity import legacy_unnamed
 from test_order_label_download import captions, download, expected_matrix, svg_matrix
 from test_order_labels import generate, labels, overview, public_qr_url
 from test_order_setup import ROOT, branch, create_setup, detail
@@ -18,13 +19,14 @@ from tracking_helpers import ok
 RECORDED_GPN = '1193403643-777'
 CURRENT_GPN = '1193403'
 ASSEMBLY_NUMBER = '643-777'
+INITIAL_ASSEMBLY_NUMBER = 'SYNTHETIC-LEGACY-ASSEMBLY'
 
 
 def setup(api, *, number='LOCAL-GPN-LABEL-PO', quantity=1):
     return create_setup(api, number=number, assemblies=[branch(RECORDED_GPN, quantity, [
         {'spool_number': '643-777-PCW-03-01', 'quantity_per_assembly': 1, 'welds_per_spool': 0},
         {'spool_number': '643-777-PCW-03-02', 'quantity_per_assembly': 1, 'welds_per_spool': 0},
-    ])])
+    ], assembly_number=INITIAL_ASSEMBLY_NUMBER)])
 
 
 def path(saved, index=0):
@@ -53,7 +55,7 @@ def test_exact_eighteen_assembly_thirty_six_spool_correction_preserves_qr_materi
     before_labels = labels(api, project)['items']
     assert len(before_labels) == 36 and len({row['assembly_id'] for row in before_labels}) == 18
     assert {row['gpn'] for row in before_labels} == {RECORDED_GPN}
-    assert {row['assembly_number'] for row in before_labels} == {''}
+    assert {row['assembly_number'] for row in before_labels} == {INITIAL_ASSEMBLY_NUMBER}
     first = before_labels[0]
     # Use a retained uploaded source and real per-piece/arrival API approvals.
     upload_receiving_bom(api, first['id'], quantity=3)
@@ -63,7 +65,12 @@ def test_exact_eighteen_assembly_thirty_six_spool_correction_preserves_qr_materi
     before_documents = ok(api.get('/api/spool-documents/spools/' + first['id']))
     original_png = api.get('/api/items/' + first['id'] + '/qr.png')
     assert original_png.status_code == 200
-    saved = detail(api, project)
+    # These are retained unnamed records, not newly accepted blank identities.
+    # Seed that historical metadata after generating the named physical scope
+    # and recording real receiving/QA evidence, then verify its safe repair.
+    saved = legacy_unnamed(api, saved)
+    before_labels = labels(api, project)['items']
+    assert {row['assembly_number'] for row in before_labels} == {''}
     assert saved['assemblies'][0]['gpn_label'] == RECORDED_GPN
     before = json.loads(database_state(api))
 

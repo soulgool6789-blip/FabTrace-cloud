@@ -82,7 +82,7 @@ const results = [], errors = [], consoleErrors = [];
   }));
   const saved = await json(await context.request.post(BASE + '/api/order-setup', {data: {
     expected_version: 0, purchase_order: 'PDF-VIEW-TEST-' + Date.now(),
-    assemblies: [{gpn: 'PDF-VIEW-ASSEMBLY', assembly_quantity: 1,
+    assemblies: [{gpn: 'PDF-VIEW-ASSEMBLY', assembly_number: 'TEST-PDF-ASM-001', assembly_quantity: 1,
       spools: [{spool_number: 'PDF-VIEW-SPOOL', quantity_per_assembly: 1, welds_per_spool: 1}]}],
   }}));
   const requirement = saved.assemblies[0].spools[0].id;
@@ -176,3 +176,4 @@ const results = [], errors = [], consoleErrors = [];
   if (browser) await browser.close();
   process.exitCode = 1;
 });
+

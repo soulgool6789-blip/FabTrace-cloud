@@ -6,6 +6,8 @@ Use **Projects & welds** to follow a job from its project and work packages down
 
 A supervisor or administrator creates the project with a permanent ID, name and optional client. Add subprojects for work packages, systems, areas or phases. Each subproject belongs to one project.
 
+For a P.O.-managed assembly, creating or editing its setup requires the actual **Assembly Number**, independently of its **GPN**. Older records missing that number remain visible; use **Edit assembly** to enter the actual value with a reason. The GPN and internal `ASM-…` tracking ID are not substitutes, and no business number is generated automatically. A standalone GPN record can still exist before any assembly is added. The correction retains the existing physical identities, links, documents and inspection history.
+
 Register the physical spool in **Items** first, then use **Set up spool tracking** to assign that existing item to a project and optional subproject. Enter the planned individual weld count, drawing revision, target date and planning notes. A plan with zero welds requires a written scope reason.
 
 Enrollment keeps the same item identity, QR link, custody history, inspections and audit records. Earlier aggregate weld counts do not become individual weld records or accepted requirements. The displayed counts for an enrolled item follow its new individual weld plan. Review historical evidence before accepting any newly defined joint.

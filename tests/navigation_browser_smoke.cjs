@@ -19,7 +19,7 @@ let browser,page,stage='initialization';
   const action=value=>page.locator('[data-os-action="'+value+'"]');
   const noOverflow=async()=>assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'No horizontal document overflow');
   await api('post','/api/login',{badge:'TEST-ADMIN',pin:PIN});
-  const setup=await api('post','/api/order-setup',{expected_version:0,purchase_order:'NAV-PO-'+run,assemblies:[{gpn:'000-NAV-GPN',assembly_quantity:1,spools:[{spool_number:'000-NAV-SPOOL',quantity_per_assembly:2,welds_per_spool:2}]}]});
+  const setup=await api('post','/api/order-setup',{expected_version:0,purchase_order:'NAV-PO-'+run,assemblies:[{gpn:'000-NAV-GPN',assembly_number:'000-TEST-NAV-ASM',assembly_quantity:1,spools:[{spool_number:'000-NAV-SPOOL',quantity_per_assembly:2,welds_per_spool:2}]}]});
   const project=setup.order.project_id,gpn=setup.assemblies[0].gpn_id;
   await api('post','/api/order-labels/'+project+'/generate',{expected_version:setup.order.version,kind:'Spool',location:'Receiving',handler:'TEST-HANDLER'});
   const labels=await api('get','/api/order-labels/'+project+'/labels'),spool=labels.items[0].id,assembly=labels.items[0].assembly_id;

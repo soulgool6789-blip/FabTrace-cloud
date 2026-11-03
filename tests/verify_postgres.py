@@ -625,10 +625,10 @@ def verify_simple_order_setup(application, api):
         return next(row['body'] for row in responses if row['status'] == 201)
 
     body = {'expected_version': 0, 'purchase_order': '000-PG-SETUP-ATOMIC', 'assemblies': [
-        {'gpn': '000-PG-ASSEMBLY-A', 'assembly_quantity': 2, 'spools': [
+        {'gpn': '000-PG-ASSEMBLY-A', 'assembly_number': '000-PG-ASM-A', 'assembly_quantity': 2, 'spools': [
             {'spool_number': '000-PG-SPOOL-A', 'quantity_per_assembly': 2},
             {'spool_number': '000-PG-SPOOL-B', 'quantity_per_assembly': 1}]},
-        {'gpn': '000-PG-ASSEMBLY-B', 'assembly_quantity': 4, 'spools': [
+        {'gpn': '000-PG-ASSEMBLY-B', 'assembly_number': '000-PG-ASM-B', 'assembly_quantity': 4, 'spools': [
             {'spool_number': '000-PG-SPOOL-C', 'quantity_per_assembly': 3}]},
     ]}
     before_creation = json.loads(database_state(api))
@@ -653,7 +653,7 @@ def verify_simple_order_setup(application, api):
     addition = {'expected_version': 1, 'assembly_quantity': 1, 'spools': [
         {'spool_number': '000-PG-SPOOL-D', 'quantity_per_assembly': 4}]}
     before_append = json.loads(database_state(api))
-    appended = race([(path + '/assemblies', {**addition, 'gpn': number})
+    appended = race([(path + '/assemblies', {**addition, 'gpn': number, 'assembly_number': 'ASM-' + number})
                      for number in ('000-PG-ASSEMBLY-C', '000-PG-ASSEMBLY-D')])
     after_append = json.loads(database_state(api))
     assert appended['order']['version'] == 2 and len(appended['assemblies']) == 3
@@ -958,7 +958,8 @@ def verify_purchase_order_transactions(application, api):
         project_id = order.project_id
         assert session.query(application.Base.metadata.tables['tracking_projects']).count() == projects_before + 1
     root = '/api/orders/' + project_id
-    gpn_codes = race([('POST', root + '/gpns', {'expected_version': 1, 'gpn': gpn})
+    gpn_codes = race([('POST', root + '/gpns', {'expected_version': 1,
+                        'gpn': gpn, 'assembly_number': 'ASM-' + gpn})
                       for gpn in ['PG-GPN-A', 'PG-GPN-B']])
     detail = ok(api.get(root))
     assert detail['order']['version'] == 2 and len(detail['gpns']) == 1
@@ -1004,6 +1005,7 @@ def verify_purchase_order_transactions(application, api):
     with application.SessionLocal() as session:
         items_before = session.query(application.Item).count()
     combined_body = {'expected_version': current['order']['version'], 'gpn': '000-PG-COMBINED',
+        'assembly_number': '000-PG-COMBINED-ASSEMBLY',
         'required_spools': 2, 'create_item': {'location': 'Test rack', 'handler': BADGES['handler']}}
     combined_codes = race([('POST', root + '/gpn-assemblies', combined_body) for _ in range(2)])
     current = ok(api.get(root))
@@ -1017,12 +1019,13 @@ def verify_purchase_order_transactions(application, api):
         assert item.google_part_number == combined['assembly_part_number'] == combined['gpn']
         assert item.description == '' and not item.released
 
-    # Existing GPN-only drafts are finished explicitly, retaining the GPN ID.
+    # Existing assembly-definition drafts retain their own GPN and setup ID.
     draft = ok(api.post(root + '/gpns', {'expected_version': current['order']['version'],
-        'gpn': '000-PG-DRAFT', 'description': 'Retained draft metadata'}), 201)
+        'gpn': '000-PG-DRAFT', 'assembly_number': '000-PG-DRAFT-ASSEMBLY',
+        'description': 'Retained draft metadata'}), 201)
     draft_id = next(row['id'] for row in draft['gpns'] if row['gpn'] == '000-PG-DRAFT')
     finish_body = {'expected_version': draft['order']['version'], 'gpn_id': draft_id,
-        'gpn': '000-PG-DRAFT', 'required_spools': 1,
+        'gpn': '000-PG-DRAFT', 'assembly_number': '000-PG-DRAFT-ASSEMBLY', 'required_spools': 1,
         'create_item': {'location': 'Test rack', 'handler': BADGES['handler']}}
     finish_codes = race([('POST', root + '/gpn-assemblies', finish_body) for _ in range(2)])
     with application.SessionLocal() as session:
@@ -1684,3 +1687,4 @@ if __name__ == "__main__":
     )
     arguments = parser.parse_args()
     print(json.dumps(verify(arguments.dsn), indent=2))
+

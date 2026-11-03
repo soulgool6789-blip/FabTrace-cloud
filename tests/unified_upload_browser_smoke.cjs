@@ -75,7 +75,7 @@ let browser, page, stage = 'fixtures';
   };
   await api('post', '/api/login', {badge: 'TEST-ADMIN', pin: 'only-for-local-tests-12345'});
   const setup = await api('post', '/api/order-setup', {expected_version: 0, purchase_order: 'AUTO-IMAGE-' + Date.now(),
-    assemblies: [{gpn: 'TEST-100', assembly_quantity: 1,
+    assemblies: [{gpn: 'TEST-100', assembly_number: 'TEST-UPLOAD-ASM-100', assembly_quantity: 1,
       spools: [FIRST, SECOND].map(spool_number => ({spool_number, quantity_per_assembly: 1, welds_per_spool: 1}))}]});
   const firstId = setup.assemblies[0].spools.find(row => row.spool_number === FIRST).id;
   const secondId = setup.assemblies[0].spools.find(row => row.spool_number === SECOND).id;
@@ -208,3 +208,4 @@ let browser, page, stage = 'fixtures';
   fs.writeFileSync(path.join(OUT, 'failure.json'), JSON.stringify({stage, error: error.message, checks, page_errors: errors}, null, 2));
   if (browser) await browser.close(); process.exitCode = 1;
 });
+

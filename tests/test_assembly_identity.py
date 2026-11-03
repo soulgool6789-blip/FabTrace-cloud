@@ -28,11 +28,23 @@ def identity_body(saved, number):
             'reason': 'Record the separately verified assembly number'}
 
 
-def test_setup_keeps_unknown_assembly_number_and_supports_repeated_gpn_for_named_assemblies(api):
-    saved = create_setup(api, assemblies=[branch('0000456', 1)])
+def legacy_unnamed(api, saved, index=0):
+    """Seed retained historical metadata after a valid, explicitly named create."""
+    from orders import OrderGpn
+    with api.session_factory() as session:
+        group = session.get(OrderGpn, saved['assemblies'][index]['gpn_id'])
+        group.assembly_number = ''
+        group.normalized_assembly_number = None
+        session.commit()
+    return detail(api, saved['order']['project_id'])
+
+
+def test_setup_reads_legacy_unnamed_assembly_and_supports_repeated_gpn_for_named_assemblies(api):
+    saved = create_setup(api, assemblies=[named_branch('LEGACY-ASM-0000456', '0000456')])
+    assert saved['saved_gpn_ids'] == [saved['assemblies'][0]['gpn_id']]
+    saved = legacy_unnamed(api, saved)
     legacy = saved['assemblies'][0]
     assert legacy['gpn'] == '0000456' and legacy['assembly_number'] == ''
-    assert saved['saved_gpn_ids'] == [legacy['gpn_id']]
     project = saved['order']['project_id']
     for number in ('000-ASM-A', '000-ASM-B'):
         saved = ok(api.post(f'{ROOT}/{project}/assemblies', {
@@ -51,12 +63,15 @@ def test_setup_keeps_unknown_assembly_number_and_supports_repeated_gpn_for_named
 
 
 def test_number_uniqueness_is_per_order_and_removed_entries_keep_their_identity(api):
-    saved = create_setup(api, assemblies=[named_branch(' AS  001 ', 'GPN-A'), named_branch('', 'GPN-B')])
+    saved = create_setup(api, assemblies=[named_branch(' AS  001 ', 'GPN-A'),
+                                         named_branch('LEGACY-ASM-B', 'GPN-B')])
+    saved = legacy_unnamed(api, saved, index=1)
     project = saved['order']['project_id']
     before = database_state(api)
-    for values in (named_branch('as 001', 'DIFFERENT-GPN'), named_branch('', ' gpn-b ')):
+    for values, status in ((named_branch('as 001', 'DIFFERENT-GPN'), 409),
+                           (named_branch('', ' gpn-b '), 422)):
         response = api.post(f'{ROOT}/{project}/assemblies', {**values, 'expected_version': saved['order']['version']})
-        assert response.status_code == 409 and database_state(api) == before
+        assert response.status_code == status and database_state(api) == before
     response = api.post(ROOT, {'purchase_order': 'DUPLICATE-NAMED',
         'assemblies': [named_branch('A', 'FIRST'), named_branch(' a ', 'SECOND')]})
     assert response.status_code == 422 and database_state(api) == before
@@ -73,12 +88,14 @@ def test_number_uniqueness_is_per_order_and_removed_entries_keep_their_identity(
 
 
 def test_assembly_metadata_can_be_corrected_after_real_qa_without_changing_any_production_evidence(api):
-    saved = create_setup(api, assemblies=[named_branch('')])
+    saved = create_setup(api, assemblies=[named_branch('LEGACY-PRODUCTION-001')])
     project = saved['order']['project_id']
     generate(api, project)
     spool = labels(api, project)['items'][0]
     accepted = accept_arrival(api, spool['id'])
-    saved = detail(api, project)
+    # Model already-existing unnamed history only after actual physical work and
+    # QA acceptance. A new unnamed assembly is no longer an allowed API write.
+    saved = legacy_unnamed(api, saved)
     assert not saved['assemblies'][0]['editable'] and saved['assemblies'][0]['assembly_number_editable']
     before = json.loads(database_state(api))
     changed = ok(api.patch(identity_path(saved), identity_body(saved, 'VERIFIED-ASSEMBLY-001'), role='supervisor'))
@@ -142,9 +159,14 @@ def test_omitted_assembly_number_preserves_metadata_and_full_edit_keeps_fields_i
     assert changed['assemblies'][0]['assembly_number'] == 'KNOWN-ASSEMBLY'
     assert changed['assemblies'][0]['gpn'] == 'SEPARATELY-CORRECTED-GPN'
     assert changed['saved_gpn_ids'] == saved['saved_gpn_ids']
-    cleared = ok(api.patch(identity_path(changed), identity_body(changed, '')))
-    assert cleared['assemblies'][0]['assembly_number'] == ''
-    assert cleared['assemblies'][0]['gpn'] == 'SEPARATELY-CORRECTED-GPN'
+    before = database_state(api)
+    for number in ('', ' \t ', None):
+        response = api.patch(identity_path(changed), identity_body(changed, number))
+        assert response.status_code == 422, response.text
+        assert database_state(api) == before
+    retained = detail(api, saved['order']['project_id'])
+    assert retained['assemblies'][0]['assembly_number'] == 'KNOWN-ASSEMBLY'
+    assert retained['assemblies'][0]['gpn'] == 'SEPARATELY-CORRECTED-GPN'
 
 
 def test_combined_registration_resolves_repeated_gpn_by_exact_group_and_edits_only_metadata(api):
@@ -153,8 +175,8 @@ def test_combined_registration_resolves_repeated_gpn_by_exact_group_and_edits_on
     body = {'expected_version': saved['order']['version'], 'gpn': '000-GPN-A', 'required_spools': 1,
             'create_item': {'id': 'INDEPENDENT-ASSEMBLY-01', 'location': 'Receiving', 'handler': BADGES['handler']}}
     before = database_state(api)
-    ambiguous = api.post(f'/api/orders/{project}/gpn-assemblies', body)
-    assert ambiguous.status_code == 409 and 'more than one assembly setup' in ambiguous.text
+    missing = api.post(f'/api/orders/{project}/gpn-assemblies', body)
+    assert missing.status_code == 422 and 'assembly_number' in missing.text
     assert database_state(api) == before
     selected = saved['assemblies'][0]
     physical = ok(api.post(f'/api/orders/{project}/gpn-assemblies', {
@@ -172,4 +194,5 @@ def test_combined_registration_resolves_repeated_gpn_by_exact_group_and_edits_on
     edit['expected_version'] = changed['order']['version']
     again = ok(api.patch(f'/api/orders/{project}/gpn-assemblies/{record["item_id"]}', edit))
     assert again['assemblies'][0]['assembly_number'] == 'ASSEMBLY-CORRECTED'
+
 

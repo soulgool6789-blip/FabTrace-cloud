@@ -2,7 +2,15 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
-## Current application revision: focused fabrication order setup
+## Current application revision: required Assembly Number
+
+Release `2026.11.03-required-assembly.1` requires an independently supplied, nonblank **Assembly Number** when creating an assembly definition. Setup, identity correction, physical registration and assembly editing enforce the same rule in the UI and on the server. Whitespace-only values and attempts to clear a saved number are rejected. A PATCH may omit the field only when the exact existing definition already has a valid number. Leading zeroes and permanent record IDs are preserved; a GPN or internal physical ID is never substituted for the Assembly Number.
+
+Historical incomplete entries remain readable and restorable, with **Assembly Number required** and an exact-record **Edit assembly** correction path. New physical-copy/QR generation requires a valid number before any records are created; existing labels remain readable and reprintable. Canonical GPN-only records remain independent and do not require an assembly. Existing quantity, weld, traveler, testing-scope, permission and stale-version protections remain authoritative. No schema migration or backfill invents missing values.
+
+The focused three-screen P.O. setup and its existing resources remain in place. Both HTML shells use the same release asset revision as `/healthz`.
+
+## Previous application revision: focused fabrication order setup
 
 Release `2026.11.03-shop-setup.1` restores the earlier focused entry sequence: **P.O. number → GPN & assemblies → Spools & welds → Save P.O.** Assembly identity/quantity and spool entry are separate screens. The final spool screen shows calculated totals and saves through the existing atomic API. There is no separate review-only stage. Add/edit forms retain their opening version, unsaved entries, explicit correction reasons and server editability restrictions.
 

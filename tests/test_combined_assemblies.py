@@ -15,6 +15,7 @@ from test_progress import database_state
 
 def create_body(api, project_id, **values):
     return {'expected_version': version(api, project_id), 'gpn': '00001234',
+            'assembly_number': '000-TEST-ASSEMBLY',
             'required_spools': 2, 'notes': 'Approved synthetic assembly requirement',
             'create_item': {'location': 'Receiving', 'handler': BADGES['handler'],
                             'drawing': 'TEST-ISO-REV-A'}, **values}
@@ -72,7 +73,7 @@ def test_finish_existing_empty_gpn_retains_its_identity_and_description(api, exp
     assert detail['totals']['combined_count'] == detail['totals']['setup_needed_count'] == 1
     register = ok(api.get(ROOT))['orders'][0]
     assert register['combined_count'] == register['setup_needed_count'] == 1
-    payload = {'gpn': ' draft-gpn '}
+    payload = {'gpn': ' draft-gpn ', 'assembly_number': before_group['assembly_number']}
     if explicit_group:
         payload['gpn_id'] = gpn_id
     detail = combined(api, project_id, **payload)
@@ -219,7 +220,7 @@ def test_existing_multi_assembly_group_is_visible_but_cannot_be_renumbered_from_
                          edit_body(api, project_id, gpn='BAD-RENUMBER')), before, (409,))
 
 
-@pytest.mark.parametrize('control', ['traveler', 'released', 'linked_count', 'duplicate_gpn'])
+@pytest.mark.parametrize('control', ['traveler', 'released', 'linked_count', 'duplicate_assembly_number'])
 def test_combined_edits_preserve_scope_release_and_number_boundaries(api, control):
     project_id = new_order(api)['order']['project_id']
     created = combined(api, project_id)
@@ -239,6 +240,7 @@ def test_combined_edits_preserve_scope_release_and_number_boundaries(api, contro
     else:
         group(api, project_id, number='UPDATED-GPN')
         body['expected_version'] = version(api, project_id)
+        body['assembly_number'] = 'ASM-UPDATED-GPN'
     before = database_state(api)
     reject(api, api.patch(f'{ROOT}/{project_id}/gpn-assemblies/{item_id}', body), before, (409,))
     if control in ('traveler', 'released'):
@@ -246,4 +248,5 @@ def test_combined_edits_preserve_scope_release_and_number_boundaries(api, contro
         # Notes are still correctable without redefining established physical scope.
         changed = ok(api.patch(f'{ROOT}/{project_id}/gpn-assemblies/{item_id}', edit_body(api, project_id)))
         assert changed['assemblies'][0]['gpn'] == '00001234'
+
 

@@ -70,6 +70,7 @@ def verify_record_removals(application, api):
     project = order['order']['project_id']
     payload = body('order', project)
     create = {'expected_version': 1, 'gpn': 'PG-REMOVE-CHILD', 'required_spools': 1,
+        'assembly_number': 'PG-REMOVE-CHILD-ASSEMBLY',
         'create_item': {'id': 'PG-REMOVE-CHILD-ASM', 'location': 'Synthetic receiving', 'handler': BADGES['handler']}}
     create_vs_remove = race([
         ('POST', f'/api/removals/order/{project}/remove', payload),
@@ -104,3 +105,4 @@ def verify_record_removals(application, api):
     return {'duplicate_remove': duplicate_remove, 'duplicate_restore': duplicate_restore,
             'assembly_creation_vs_remove': create_vs_remove, 'transfer_vs_remove': transfer_vs_remove,
             'preview_and_register_readonly': True, 'identities_and_requirements_retained': True}
+

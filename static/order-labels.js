@@ -9,6 +9,7 @@
   const spoolText=item=>window.FabFlowStatus?.spoolText?.(item)||esc(labelCode(item));
   const labelFilename=item=>labelCode(item).replace(/[\\/\x00-\x1f\x7f]/g,'_')+'-label.svg';
   const assemblyNumber=item=>typeof item.assembly_number==='string'?item.assembly_number.trim():'';
+  const missingAssemblyNumbers=()=>list(state.overview?.groups).filter(group=>!assemblyNumber(group)&&(group.remaining_quantity>0||group.remaining_assembly_quantity>0||group.remaining_weld_spools>0));
   const groupText=group=>(assemblyNumber(group)?'Assembly Number '+assemblyNumber(group):'Assembly Number not entered')+' · GPN '+(group.gpn_label||group.gpn);
   const downloadUrl=item=>ROOT+'/'+enc(state.po)+'/labels/'+enc(item.id)+'/download.svg';
   const canManage=()=>window.FabPermissions?.can('manage_production')===true&&state.overview?.permissions?.can_manage===true;
@@ -30,6 +31,8 @@
     if(!d.groups.length)return '<div class="ol-state"><strong>Add the assembly and spool quantities first.</strong><p>Open the P.O. setup to enter the assemblies, spool quantities and weld counts this order needs.</p></div>';
     if(d.totals.undeclared_groups)return unknown+'<div class="ol-warning"><strong>Some assembly quantities have not been entered.</strong><p>Select an assembly with saved quantities, or return to the P.O. to complete its setup. Existing spool labels remain available below.</p></div>';
     if(remaining===0&&weldSpools===0)return unknown+'<div class="ol-ready"><strong>All spool QR codes are ready.</strong><p>Print or reprint the labels below. Each code continues to open the same physical spool record.</p></div>';
+    const unnamed=missingAssemblyNumbers();
+    if(unnamed.length)return unknown+`<div class="ol-warning"><strong>Assembly Number required</strong><p>Enter the actual Assembly Number for each entry below before generating additional spool labels or weld records. Existing labels remain available to print.</p><div class="actions">${unnamed.map(group=>`<button type="button" data-ol-action="edit-assembly" data-ol-assembly="${esc(group.gpn_id)}"${state.saving?' disabled':''}>Edit assembly · GPN ${esc(group.gpn_label||group.gpn)}</button>`).join('')}</div></div>`;
     const disabled=state.saving||state.stale||!d.qr_ready;
     return unknown+`<section class="ol-create"><h2>${remaining===0?'Create the remaining weld records':'Generate the remaining spool QR codes'}</h2><p>The spool numbers, quantities and weld counts come from this P.O. Each physical spool gets a permanent numbered label, such as spool-number-[001], and its own weld records linked to its assembly.</p>${weldSpools?`<p class="ol-note">${display(weldSpools)} existing spool${weldSpools===1?' needs':'s need'} its saved weld count applied.</p>`:''}${state.formError?`<div class="ol-error" role="alert">${esc(state.formError)}${state.stale?'<div class="actions">'+button('refresh','Reload saved labels',state.saving)+'</div>':''}</div>`:''}<form id="orderLabelsForm"><fieldset${disabled?' disabled':''}><div class="ol-fields"><div class="field"><label for="olLocation">Current location</label><input id="olLocation" name="location" value="${esc(state.location)}" maxlength="160" autocomplete="off" placeholder="For example: Receiving" required></div><div class="field"><label for="olHandler">Responsible employee</label><select id="olHandler" name="handler" required><option value="">Choose the employee</option>${state.employees.map(e=>`<option value="${esc(e.badge)}"${e.badge===state.handler?' selected':''}>${esc(e.name)} · ${esc(e.badge)}</option>`).join('')}</select></div></div><p class="ol-note">Choose the current location and responsible employee for new records. Review the P.O. quantities and weld counts before continuing; welding and inspections will be recorded separately on each weld.</p><button id="olGenerate" type="submit" class="primary">${state.saving?'Generating…':remaining===0?'Create weld records':'Generate spool QR codes'}</button><span class="ol-batch-note">Large orders are generated in batches. Continue until every spool and its weld records are ready.</span></fieldset></form></section>`;
   }
@@ -73,6 +76,7 @@
   }
   async function generate(){
     if(state.saving||state.stale||!canManage()||!state.overview?.qr_ready)return;
+    if(missingAssemblyNumbers().length){render();return;}
     state.location=node('olLocation')?.value.trim()||'';state.handler=node('olHandler')?.value||'';
     if(!state.location||!state.employees.some(e=>e.badge===state.handler)){state.formError='Choose the actual current location and responsible employee for this batch.';render();return;}
     const sequence=++state.sequence,payload={expected_version:state.overview.order.version,kind:state.kind,location:state.location,handler:state.handler,...(state.gpn?{gpn_id:state.gpn}:{})};
@@ -121,9 +125,10 @@ Promise.all([...document.images].map(im=>new Promise((resolve,reject)=>{if(im.co
   node('orderLabelsContent').addEventListener('click',async event=>{
     const item=event.target.closest('[data-ol-item]');if(item&&!state.saving)return openItem(item.dataset.olItem);
     const target=event.target.closest('[data-ol-action]');if(!target||target.disabled||state.saving)return;
-    try{const action=target.dataset.olAction;if(action==='back')return window.FabOrderSetup.open({po:state.po});if(action==='refresh')return load(true);if(action==='print')return print();if(action==='previous'||action==='next'){state.offset=Math.max(0,state.offset+(action==='next'?PAGE_SIZE:-PAGE_SIZE));state.notice='';return load();}}
+    try{const action=target.dataset.olAction;if(action==='back')return window.FabOrderSetup.open({po:state.po});if(action==='edit-assembly'){const id=target.dataset.olAssembly;if(!canManage()||!missingAssemblyNumbers().some(group=>group.gpn_id===id))return;return window.FabOrderSetup.open({po:state.po,assemblyRecord:id});}if(action==='refresh')return load(true);if(action==='print')return print();if(action==='previous'||action==='next'){state.offset=Math.max(0,state.offset+(action==='next'?PAGE_SIZE:-PAGE_SIZE));state.notice='';return load();}}
     catch(error){notify(errorText(error));}
   });
   window.FabOrderLabels={open,refresh:()=>load(true),cancelPending(){state.active=false;state.sequence++;state.loading=false;state.saving=false;state.printing=false;}};
 })();
+
 

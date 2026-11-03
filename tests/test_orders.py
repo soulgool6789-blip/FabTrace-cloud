@@ -28,9 +28,12 @@ def version(api, project_id):
     return current(api, project_id)['order']['version']
 
 
-def group(api, project_id, number='GPN-001'):
+def group(api, project_id, number='GPN-001', *, assembly_number=None):
+    # New definition fixtures provide their own independent business number.
+    assembly_number = assembly_number if assembly_number is not None else 'ASM-' + number.strip()[:156]
     result = ok(api.post(f'{ROOT}/{project_id}/gpns', {
-        'expected_version': version(api, project_id), 'gpn': number, 'description': 'Synthetic GPN family',
+        'expected_version': version(api, project_id), 'gpn': number,
+        'assembly_number': assembly_number, 'description': 'Synthetic GPN family',
     }), 201)
     return next(row['id'] for row in result['gpns'] if row['gpn'] == number)
 
@@ -143,7 +146,8 @@ def test_only_admin_and_supervisor_can_change_orders_with_no_partial_writes(api,
     for response in (
         api.post(ROOT, {'purchase_order': 'UNAUTHORIZED-PO'}, role=role),
         api.patch(f'{ROOT}/{project_id}', {'expected_version': current_version, 'purchase_order': 'CHANGED', 'reason': 'Unapproved change'}, role=role),
-        api.post(f'{ROOT}/{project_id}/gpns', {'expected_version': current_version, 'gpn': 'UNAUTHORIZED'}, role=role),
+        api.post(f'{ROOT}/{project_id}/gpns', {'expected_version': current_version,
+            'gpn': 'UNAUTHORIZED', 'assembly_number': 'UNAUTHORIZED-ASSEMBLY'}, role=role),
         api.patch(f'{ROOT}/{project_id}/gpns/{gpn_id}', {'expected_version': current_version, 'gpn': 'CHANGED', 'reason': 'Unapproved change'}, role=role),
         api.post(f'{ROOT}/{project_id}/assemblies', body, role=role),
         api.patch(f'{ROOT}/{project_id}/assemblies/ORDER-ASM-01', {'expected_version': current_version, 'assembly_part_number': 'CHANGED', 'required_spools': 3, 'reason': 'Unapproved change'}, role=role),
@@ -199,7 +203,7 @@ def test_order_reads_release_auth_connection_before_opening_snapshot(api):
         event.remove(engine, 'checkin', checkin)
 
 
-def test_normalized_po_and_gpn_uniqueness_roll_back_without_orphan_projects(api):
+def test_normalized_po_and_assembly_uniqueness_roll_back_without_orphan_projects(api):
     detail = new_order(api, number='PO  100', customer='Synthetic  Customer')
     project_id = detail['order']['project_id']
     before = database_state(api)
@@ -208,7 +212,8 @@ def test_normalized_po_and_gpn_uniqueness_roll_back_without_orphan_projects(api)
     assert second['order']['project_id'] != project_id
     group(api, project_id, number='GPN  123')
     before = database_state(api)
-    reject(api, api.post(f'{ROOT}/{project_id}/gpns', {'expected_version': version(api, project_id), 'gpn': 'gpn 123'}), before, (409,))
+    reject(api, api.post(f'{ROOT}/{project_id}/gpns', {'expected_version': version(api, project_id),
+        'gpn': 'gpn 123', 'assembly_number': 'asm-gpn 123'}), before, (409,))
     group(api, second['order']['project_id'], number='gpn 123')
 
 
@@ -390,7 +395,8 @@ def test_admin_override_never_counts_as_ordinary_ready_spool(api):
 def test_stale_forms_and_duplicate_linking_never_create_another_physical_identity(api):
     project_id, gpn_id, detail = setup(api)
     before = database_state(api)
-    reject(api, api.post(f'{ROOT}/{project_id}/gpns', {'expected_version': 1, 'gpn': 'STALE-GPN'}), before, (409,))
+    reject(api, api.post(f'{ROOT}/{project_id}/gpns', {'expected_version': 1,
+        'gpn': 'STALE-GPN', 'assembly_number': 'STALE-ASSEMBLY'}), before, (409,))
     body = assembly_body(api, project_id, gpn_id, create=False)
     reject(api, api.post(f'{ROOT}/{project_id}/assemblies', body), before, (409,))
     body = assembly_body(api, project_id, gpn_id, item_id='STALE-NEW-ASM')
@@ -415,3 +421,4 @@ def test_additive_schema_has_no_backfill_or_inferred_order_rows(api):
         for model in (orders.PurchaseOrder, orders.OrderGpn, orders.OrderAssembly):
             assert session.execute(select(model)).all() == []
     assert database_state(api) == before
+

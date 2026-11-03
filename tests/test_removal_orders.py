@@ -38,6 +38,7 @@ def test_removed_gpn_branch_excluded_from_active_order_and_unmapped_bom_fallback
     before_failed = database_state(api)
     response = api.post(f'/api/orders/{project}/gpn-assemblies', {
         'expected_version': version(api, project), 'gpn': 'GPN-001', 'required_spools': 1,
+        'assembly_number': before['gpns'][0]['assembly_number'],
         'create_item': {'location': 'Test receiving', 'handler': BADGES['handler']},
     })
     assert response.status_code == 409, response.text
@@ -126,3 +127,4 @@ def test_removed_empty_gpn_cannot_be_edited_or_filled_through_legacy_api(api):
     assert database_state(api) == before
     with api.session_factory() as session:
         assert session.scalar(select(orders.OrderGpn).where(orders.OrderGpn.id == gpn)).gpn == 'GPN-001'
+

@@ -291,7 +291,7 @@ def build_order_bom(bind, exporter, project_id, *, gpn_id=None, assembly_id=None
                             ('Quantity unit', 'Whole physical pieces per unique spool. Material quantities are not multiplied by the required spool count.'),
                             ('Assembly counts', 'Required spools are declared scope; linked spools count unique existing identities. Missing spools have no invented material quantities.'),
                             ('Setup quantities', 'The separate setup sheet lists assembly-type quantities and spool numbers per assembly. Total quantity equals assembly quantity times quantity per assembly. A physical assembly filter uses one assembly. These totals do not multiply the actual component BOM rows.'),
-                            ('Number identity', 'GPN and Assembly number are separately recorded business identifiers. A blank Assembly number means it has not been entered. Assembly ID is the internal key for one physical assembly; QR labels identify individual spools.'),
+                            ('Number identity', 'GPN and Assembly number are separately recorded business identifiers. New or edited assemblies require the actual Assembly Number. Legacy blank Assembly numbers are preserved in this export; use Edit assembly to correct them. Neither GPN nor Assembly ID is substituted for a missing number. Assembly ID is the internal key for one physical assembly; QR labels identify individual spools.'),
                             ('Progress', 'Received and prepared counts come from current recorded component processes. A BOM quantity or assignment does not prove receipt, preparation or QA release.'),
                             ('Blank quantities', 'A blank quantity means not planned or not known. It does not mean zero required pieces.'),
                             ('Excel editing', 'This workbook is editable offline. Editing or saving it does not change FabTrace; enter approved quantities using Spool parts. Excel import is not provided by this download.'),
@@ -340,3 +340,4 @@ def export_bom_template(project_id: str, gpn_id: str | None = Query(default=None
                         assembly_id: str | None = Query(default=None, min_length=1, max_length=60),
                         u: Employee = Depends(auth), s: Session = Depends(db)):
     return _download(project_id, gpn_id, assembly_id, True, u, s)
+

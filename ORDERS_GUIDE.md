@@ -7,7 +7,7 @@ Open **Orders** (`/?order-setup=1`) and choose **New P.O.** Orders is the normal
 The main menu contains **Orders**, **Production progress**, **Scan & transfer**, **Process flow**, and **Guide**. Use **More tools** for specialist screens such as Projects & welds, Spool parts, Audit readiness and Job Packets. Employee/admin controls, activity and Excel exports remain available there to authorized employees. Each screen has a **Back** control that returns within FabTrace.
 
 1. **P.O. number:** enter the number and continue.
-2. **GPN & assemblies:** enter **GPN**, the separate **Assembly Number**, and the assembly quantity. Add a row for each assembly. Leave an unknown Assembly Number blank, then continue to the spools.
+2. **GPN & assemblies:** enter **GPN**, the required **Assembly Number**, and the assembly quantity. Both identifiers are required for each assembly. Use the actual assembly number from the job records, add a row for each assembly, then continue to the spools.
 3. **Spools & welds:** beneath each assembly, enter its **Spool number**, **Qty per assembly**, and **Welds per spool**. Add spool rows as needed. Quantities describe one assembly; weld counts apply to each physical spool. Enter zero welds only when the spool requires no welds. Check the calculated totals on this screen, then choose **Save P.O.**
 
 **Back** keeps your entries between stages. Closing an unfinished setup offers **Resume setup** while the page remains open. The final save records the P.O., quantities and weld counts together. It creates no physical copies, receipt, completed work or QA approval.
@@ -32,13 +32,15 @@ Use **Add assembly** for another assembly on the P.O. The secondary **GPN record
 
 ### Separate Assembly Number and GPN
 
-GPN is the Google part number. Assembly Number is the separate assembly identifier you supply. Leave Assembly Number blank when it is unknown; FabTrace displays **Not entered** and retains the existing GPN. The internal `ASM-…` tracking ID identifies one physical copy and is not used to fill either business field.
+GPN is the Google part number. **Assembly Number is required when creating or editing an assembly** and must be the actual independent assembly identifier. Obtain that number before saving if it is not available. FabTrace does not copy the GPN, substitute an internal `ASM-…` tracking ID, or generate a business number to fill the field. The internal tracking ID identifies one physical copy and remains separate from both business identifiers.
+
+Older assembly records with no Assembly Number remain visible as **Assembly Number required**. Select the exact record and use **Edit assembly** to enter its actual number with a reason before further assembly setup changes. Existing physical items, QR identities, links, documents and inspection history remain attached to the same records. A standalone **GPN record** can still exist without an assembly; the Assembly Number becomes required when an assembly is added or edited.
 
 Use **GPN records → Edit GPN** to correct the GPN, and **Edit assembly** on the exact assembly to enter or correct its separate number or GPN association with a reason. Existing descriptions stay retained without being required in ordinary setup. A GPN correction updates the labels of its linked assemblies; it does not combine them or replace their retained identities. These permitted metadata corrections remain separate from quantity and production scope changes. Each named Assembly Number is unique within its P.O.; different named assemblies may share a GPN. Select the exact assembly entry when opening files or labels.
 
 ### Spool label contents
 
-The full label shows the readable spool code, P.O., GPN, and separately entered Assembly Number when known. The internal assembly ID and employee assignment are omitted. **Print labels** refreshes label data before printing; **Download label** saves a complete printable label. View the spool's item record for its current employee assignment and custody history.
+The full label shows the readable spool code, P.O., GPN, and separately entered Assembly Number. Correct an older missing Assembly Number through **Edit assembly**; labels do not substitute a GPN or tracking ID for it. The internal assembly ID and employee assignment are omitted. **Print labels** refreshes label data before printing; **Download label** saves a complete printable label. View the spool's item record for its current employee assignment and custody history.
 
 ### Weld progress, material pieces and arrival QA/QC
 
@@ -110,7 +112,7 @@ A spool number such as `643-777-PCW-03-01` receives permanent labels `643-777-PC
 
 The code is saved to the physical spool. Reopening, filtering, sorting or printing cannot change it. Its original internal ID, welds, custody, material history and issued packets stay associated with that same record. Both the new QR and an older printed QR open it. A legacy record with no spool number keeps its original code until a real number is entered; after the readable label is allocated, its spool number is fixed.
 
-Choose **Print labels** at **100% scale**, or **Save as PDF** in the print dialog. **Download label** saves the complete label image named for the readable spool code; **Open spool** opens the record. Labels show the readable code, P.O., GPN, and the actual Assembly Number when entered. Internal assembly IDs are omitted from the labels. **Technical ID** on the screen exposes the retained spool ID if needed for support. Print pages contain up to **100 labels**; use **Next 100** for the following page. Printing refreshes current label data.
+Choose **Print labels** at **100% scale**, or **Save as PDF** in the print dialog. **Download label** saves the complete label image named for the readable spool code; **Open spool** opens the record. Labels show the readable code, P.O., GPN, and the actual Assembly Number. Older records with a missing Assembly Number remain available for correction through **Edit assembly**. Internal assembly IDs are omitted from the labels. **Technical ID** on the screen exposes the retained spool ID if needed for support. Print pages contain up to **100 labels**; use **Next 100** for the following page. Printing refreshes current label data.
 
 A generation request creates at most **500 items**, including parent assemblies. Continue with another batch for larger orders. Existing spools linked to the exact assembly count toward its requirement; unassigned records with the same part number are not claimed. Repeating generation for complete scope creates nothing.
 

@@ -66,7 +66,7 @@ const checks = [], errors = [], imports = [];
   };
   const file = {name: 'synthetic-full-isometric.pdf', mimeType: 'application/pdf', buffer: pdf};
   const create = number => api('post', '/api/order-setup', {expected_version: 0, purchase_order: number,
-    assemblies: [{gpn: 'TEST-100', assembly_quantity: 2, spools: [FIRST, SECOND].map(spool_number => ({spool_number, quantity_per_assembly: 1, welds_per_spool: 2}))}]});
+    assemblies: [{gpn: 'TEST-100', assembly_number: 'TEST-PACKAGE-ASM-100', assembly_quantity: 2, spools: [FIRST, SECOND].map(spool_number => ({spool_number, quantity_per_assembly: 1, welds_per_spool: 2}))}]});
   await api('post', '/api/login', {badge: 'TEST-ADMIN', pin: 'only-for-local-tests-12345'});
   const setup = await create('ISO-UI-' + Date.now()), other = await create('ISO-OTHER-' + Date.now());
   const project = setup.order.project_id, firstRequirement = setup.assemblies[0].spools.find(s => s.spool_number === FIRST).id,
@@ -232,3 +232,4 @@ const checks = [], errors = [], imports = [];
   if (browser) await browser.close();
   process.exitCode = 1;
 });
+

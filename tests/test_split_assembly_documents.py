@@ -32,10 +32,12 @@ def split_csv(gpn, assembly_number):
 
 
 def test_assembly_number_edit_preserves_signed_arrival_piece_and_document_history(api):
+    from test_assembly_identity import legacy_unnamed
     saved = setup(api, quantity=1)
     path = requirement_path(saved)
     uploaded = ok(request_upload(api, path))
     generate(api, saved['order']['project_id'])
+    saved = legacy_unnamed(api, saved)
     item = labels(api, saved['order']['project_id'])['items'][0]
     approve_materials(api, item['id'])
     before = ok(record_arrival(api, item['id']), 201)
@@ -102,7 +104,8 @@ def test_number_edit_requires_fresh_document_preview_but_keeps_saved_scope(api):
 
 @pytest.mark.parametrize('use_gpn_as_number', [False, True])
 def test_unknown_assembly_number_is_not_inferred_from_bom_or_gpn(api, use_gpn_as_number):
-    saved = setup(api, quantity=1)
+    from test_assembly_identity import legacy_unnamed
+    saved = legacy_unnamed(api, setup(api, quantity=1))
     group = saved['assemblies'][0]
     number = group['gpn'] if use_gpn_as_number else '000456'
     path = requirement_path(saved)
@@ -117,3 +120,4 @@ def test_unknown_assembly_number_is_not_inferred_from_bom_or_gpn(api, use_gpn_as
     accepted = ok(request_upload(api, path, files=files))
     assert accepted['active']['bom']['bom']['assembly_identity'] == {
         'gpn': group['gpn'], 'assembly_number': number}
+

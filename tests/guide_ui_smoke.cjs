@@ -80,17 +80,19 @@ async function check(name,fn){await fn();checks.push(name);}
     assert.equal((stages.match(/<li>/g)||[]).length,3,'new-order guidance must have exactly three stages');
     for(const label of ['P.O. number','GPN &amp; assemblies','Spools &amp; welds'])assert.ok(stages.includes(label),label);
     const entries=[...stages.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(m=>m[1]);
-    assert.match(entries[1],/Assembly Number/);assert.match(entries[1],/assembly quantity/);assert.doesNotMatch(entries[1],/Spool number|Welds per spool/);
+    assert.match(entries[1],/required <strong>Assembly Number<\/strong>/);assert.match(entries[1],/Both identifiers are required for every assembly/);assert.match(entries[1],/assembly quantity/);assert.doesNotMatch(entries[1],/Spool number|Welds per spool/);
     assert.match(entries[2],/Spool number/);assert.match(entries[2],/Welds per spool/);assert.match(entries[2],/<strong>Save P.O.<\/strong> on this screen/);
     for(const label of ['Files &amp; BOMs','Upload drawing or BOM','BOM &amp; drawings','More tools','Production records','Production progress','Spool records &amp; Excel','Job Packets','Spool QR labels','GPN records','Edit GPN','Edit assembly'])assert.ok(setup.includes('<strong>'+label+'</strong>'),label+' remains reachable');
     assert.match(setup,/<strong>flat assembly register<\/strong>/);assert.match(setup,/Select one exact assembly to show its spool table, files and physical copies/);assert.match(setup,/A sole assembly opens automatically/);
+    assert.match(setup,/Assembly Number is required when creating or editing an assembly/);assert.match(setup,/Older records missing that number remain visible/);assert.match(setup,/<strong>Assembly Number required<\/strong>/);
+    assert.match(setup,/use <strong>Edit assembly<\/strong> to enter its actual number with a reason/);assert.match(setup,/tracking ID are not substitutes/);assert.match(setup,/does not invent a number/);assert.match(setup,/standalone <strong>GPN record<\/strong> can still exist without an assembly/);
     assert.match(setup,/prepared Excel or CSV BOM/);assert.match(setup,/complete drawing/);assert.match(setup,/physical copies registered to that exact requirement/);
     assert.match(setup,/creates no physical items, completed work or QA approval/);assert.match(setup,/Opening or printing labels does not itself create copies/);
     assert.match(setup,/generation request checks current scope and production locks/);
     assert.match(setup,/initialize matched physical pieces/);assert.match(setup,/exact numbered-copy target or an explicit all-copies declaration/);
     assert.match(setup,/Missing or unassigned facts stay blank/);assert.match(setup,/existing pinned material register needs review/);assert.match(setup,/inspection history remain retained/);
     assert.match(setup,/requires recorded correction and retesting/);assert.match(setup,/correction and testing restarts do not unlock it/);
-    assert.doesNotMatch(setup,/Review &amp; save|Assemblies &amp; spools|combined assembly-and-spools|Save &amp; add files|Edit GPN \/ Assembly Number|Finish setup<\/strong>|Do this later/);
+    assert.doesNotMatch(setup,/Assembly Number \(optional\)|leave an unknown Assembly Number blank|Assembly Number when (?:known|entered|supplied)|Review &amp; save|Assemblies &amp; spools|combined assembly-and-spools|Save &amp; add files|Edit GPN \/ Assembly Number|Finish setup<\/strong>|Do this later/);
     await click('order-setup');assert.deepEqual(routes.at(-1),{module:'ordersetup'});
   });
   await check('resource guide separates component plans, spool exports and reviewed removal',async()=>{

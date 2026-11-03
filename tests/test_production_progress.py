@@ -169,7 +169,7 @@ def test_repeated_gpn_progress_keeps_actual_assembly_numbers_and_exact_group_sco
 
     saved = create_setup(api, assemblies=[
         {**branch('000-SHARED-GPN', 1), 'assembly_number': number}
-        for number in ('000-ASM-A', '000-ASM-B', '')])
+        for number in ('000-ASM-A', '000-ASM-B', '000-ASM-LEGACY')])
     project = saved['order']['project_id']
     expected = {}
     current_version = saved['order']['version']
@@ -182,6 +182,16 @@ def test_repeated_gpn_progress_keeps_actual_assembly_numbers_and_exact_group_sco
             'create_item': {'id': item_id, 'handler': BADGES['handler'], 'location': 'Receiving'}}), 201)
         current_version = registered['order']['version']
         expected[group_row['gpn_id']] = (group_row['assembly_number'], item_id)
+    # Model retained unnamed history after valid fixture registration. New
+    # setup and physical registration must now require a real Assembly Number.
+    from orders import OrderGpn
+    legacy_id = next(row['gpn_id'] for row in saved['assemblies']
+                     if row['assembly_number'] == '000-ASM-LEGACY')
+    with api.session_factory() as session:
+        legacy = session.get(OrderGpn, legacy_id)
+        legacy.assembly_number, legacy.normalized_assembly_number = '', None
+        session.commit()
+    expected[legacy_id] = ('', expected[legacy_id][1])
     before = database_state(api)
     result = report(api, project)
     rows = result['orders'][0]['gpns']

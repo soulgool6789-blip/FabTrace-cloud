@@ -192,7 +192,9 @@ def test_removed_scope_cannot_be_downloaded_as_an_active_label(api, scope):
 
 
 def test_legacy_blank_assembly_is_not_inferred_and_legacy_qr_payload_is_retained(api):
-    setup, rows = registered(api, assembly_number='')
+    from test_assembly_identity import legacy_unnamed
+    setup, rows = registered(api)
+    setup = legacy_unnamed(api, setup)
     project, row = setup['order']['project_id'], rows[0]
     registry = importlib.import_module('order_spools')
     with api.session_factory() as session:
@@ -343,3 +345,4 @@ def test_batch_label_preview_is_bounded_ordered_current_authenticated_and_read_o
     assert api.get('/api/order-labels/items/' + rows[0]['assembly_id'] + '/download.svg').status_code == 409
     assert ok(api.get('/api/items/' + rows[0]['assembly_id']))['qr_label'] is None
     assert database_state(api) == before
+

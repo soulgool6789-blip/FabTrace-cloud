@@ -14,8 +14,11 @@ from test_progress import database_state
 ROOT = '/api/order-setup'
 
 
-def branch(gpn='000-GPN-A', quantity=3, spools=None):
-    return {'gpn': gpn, 'assembly_quantity': quantity,
+def branch(gpn='000-GPN-A', quantity=3, spools=None, *, assembly_number=None):
+    # Deliberately assign a synthetic Assembly Number for ordinary new writes.
+    # Retained unnamed history is seeded explicitly by its own tests.
+    number = assembly_number if assembly_number is not None else 'ASM-' + gpn.strip()[:156]
+    return {'gpn': gpn, 'assembly_number': number, 'assembly_quantity': quantity,
             'spools': spools if spools is not None else [
                 {'spool_number': '000-SP-A', 'quantity_per_assembly': 2},
                 {'spool_number': '000-SP-B', 'quantity_per_assembly': 1}]}
@@ -320,11 +323,13 @@ def test_combined_endpoint_registers_multiple_physical_assemblies_only_to_planne
     for index in range(2):
         response = ok(api.post('/api/orders/'+project_id+'/gpn-assemblies', {
             'expected_version': version(api, project_id), 'gpn_id': row['gpn_id'], 'gpn': row['gpn'],
+            'assembly_number': row['assembly_number'],
             'required_spools': 3, 'create_item': {'location': 'Receiving', 'handler': BADGES['handler']}}), 201)
         assert response['selected_gpn_id'] == row['gpn_id']
     before = database_state(api)
     rejected(api, api.post('/api/orders/'+project_id+'/gpn-assemblies', {
         'expected_version': version(api, project_id), 'gpn': row['gpn'], 'required_spools': 3,
+        'assembly_number': row['assembly_number'],
         'create_item': {'location': 'Receiving', 'handler': BADGES['handler']}}), before, 409)
     assert len(physical_order(api, project_id)['assemblies']) == 2
 
@@ -409,4 +414,5 @@ def test_reads_require_auth_are_pure_and_release_the_auth_connection(api):
         event.remove(engine, 'before_cursor_execute', observe)
     assert peak == 1 and not unsafe
     assert database_state(api) == before
+
 

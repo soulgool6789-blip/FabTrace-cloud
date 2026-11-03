@@ -12,7 +12,7 @@ from test_removal_orders import change
 
 def setup_body(number='SETUP-REMOVAL-001'):
     return {'expected_version': 0, 'purchase_order': number, 'assemblies': [{
-        'gpn': '000-GPN-001', 'assembly_quantity': 2,
+        'gpn': '000-GPN-001', 'assembly_number': '000-ASM-001', 'assembly_quantity': 2,
         'spools': [
             {'spool_number': '000-SP-A', 'quantity_per_assembly': 2},
             {'spool_number': '000-SP-B', 'quantity_per_assembly': 1},
@@ -170,3 +170,4 @@ def test_restoring_original_assembly_cannot_overfill_replacement_capacity(api):
     assert current(api, project)['assemblies'][0]['registered_assemblies'] == 1
     assert not ok(api.get('/api/items/SETUP-PHYSICAL-ASSEMBLY'))['removal']['removed']
     assert ok(api.get('/api/items/SETUP-REPLACEMENT-ASSEMBLY'))['removal']['removed']
+

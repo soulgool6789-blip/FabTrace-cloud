@@ -19,7 +19,8 @@ def register_assembly(api, setup, index=0, item_id='PHYSICAL-ASSEMBLY-1'):
     row = current['assemblies'][index]
     return ok(api.post(f'/api/orders/{project_id}/gpn-assemblies', {
         'expected_version': current['order']['version'], 'gpn_id': row['gpn_id'],
-        'gpn': row['gpn'], 'required_spools': row['spools_per_assembly'],
+        'gpn': row['gpn'], 'assembly_number': row['assembly_number'],
+        'required_spools': row['spools_per_assembly'],
         'create_item': {'id': item_id, 'handler': BADGES['handler'], 'location': 'Receiving'},
     }), 201)
 
@@ -131,3 +132,4 @@ def test_backend_excel_includes_both_quantity_tables_and_retained_lines(api):
     assert {row['assembly_quantity'].value for row in book.records('Assembly quantity plans')} == {2, 3}
     with api.session_factory() as session:
         assert len(session.execute(select(api.application.Base.metadata.tables['items'])).all()) == 0
+

@@ -234,6 +234,7 @@ def test_mixed_legacy_scope_keeps_known_ids_printable_and_requires_explicit_quan
     project = setup['order']['project_id']
     legacy = ok(api.post(f'/api/orders/{project}/gpn-assemblies', {
         'expected_version': 1, 'gpn': 'LEGACY-ASSEMBLY', 'required_spools': 1,
+        'assembly_number': 'LEGACY-ASM-001',
         'create_item': {'id': 'KEEP-LEGACY-QR', 'location': 'Legacy bay', 'handler': BADGES['welder']},
     }), 201)
     register_spool(api, project, 'KEEP-LEGACY-QR', item_id='KEEP-LEGACY-SPOOL')
@@ -366,5 +367,6 @@ def test_missing_child_generation_is_locked_after_release_to_testing(api, step, 
         assert response.status_code == 409, response.text
         assert 'step 17' in response.text
         assert database_state(api) == before
+
 
 
