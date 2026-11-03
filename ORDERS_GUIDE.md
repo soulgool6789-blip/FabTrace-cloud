@@ -1,23 +1,40 @@
 # Purchase-order setup, quantities and later production records
 
-## Set up a P.O. and upload spool documents
+## Set up a P.O. in three stages
 
-Open **Orders** (`/?order-setup=1`) and choose **New P.O.** Orders is the normal landing screen after sign-in; creation and editing follow the employee's existing permissions. The highest level is the P.O.; it can contain multiple assembly setup records, each with its own separate Assembly Number, GPN, quantity and spool requirements.
+Open **Orders** (`/?order-setup=1`) and choose **New P.O.** Orders is the normal landing screen after sign-in; creation and editing follow the employee's existing permissions. A P.O. contains separate GPN records. Each GPN can contain several assembly setup records, each with its own Assembly Number, quantity and spool requirements.
 
 The main menu contains **Orders**, **Production progress**, **Scan & transfer**, **Process flow**, and **Guide**. Use **More tools** for specialist screens such as Projects & welds, Spool parts, Audit readiness and Job Packets. Employee/admin controls, activity and Excel exports remain available there to authorized employees. Each screen has a **Back** control that returns within FabTrace.
 
-1. **P.O. number:** enter the number and choose **Next →**.
-2. **Assemblies:** enter **Assembly Number** and **GPN** in their own fields, then **How many assemblies?** Use **+ Add another assembly number** for each additional number. Choose **Next →**.
-3. **Spools:** beneath each assembly number, enter **Spool number**, **Qty per assembly**, and **Welds per spool**. Use **+ Add spool number** for more spool types. Review the calculated totals and choose **Save & add files**.
-4. **Drawings & BOMs (optional):** the P.O. is now saved. Choose **Upload drawing or BOM** for the assembly and select the file. Reading starts automatically. Include every drawing page, review the detected spool destinations and material rows, then save. A full isometric produces its complete drawing and separate Excel BOMs. Each spool also has one **BOM & drawings** action for uploading or viewing its files. Choose **Finish setup** or **Do this later** to return to the saved P.O.
+1. **P.O. number:** enter the number and continue.
+2. **Assemblies & spools:** enter **Assembly Number** and **GPN** separately, the assembly quantity, and that assembly's spool numbers, **Qty per assembly**, and **Welds per spool** together. Add rows for the additional assemblies and spool numbers. Leave an unknown Assembly Number blank; enter zero welds only for a spool that requires no welds.
+3. **Review & save:** check each assembly, the quantity calculation and its weld counts. Go back to correct entries if needed, then save once. The saved P.O. workspace opens directly.
 
-**Back** keeps your entries during the first three steps. Closing an unfinished setup offers **Resume setup** while the page remains open. **Save & add files** saves the P.O., quantities and weld counts together. Document uploads are separate saves, so a failed upload can be retried without creating a duplicate P.O. A reviewed drawing package saves its full drawing and individual BOMs together to the selected spools. File-ready labels beside each spool remain correct after refreshing the order.
+**Back** keeps your entries between stages. Closing an unfinished setup offers **Resume setup** while the page remains open. The final save records the P.O., quantities and weld counts together. It creates no physical copies, receipt, completed work or QA approval.
+
+Files are available afterward, without a fourth setup stage. Open **Resources → Add drawings & BOMs** to choose an assembly or spool, use **Upload drawing or BOM** on a saved assembly, or open **BOM & drawings** on an exact spool requirement. Upload the complete drawing once, review the detected destinations and material rows, then save. For a prepared Excel or CSV BOM, use its corresponding spool's **BOM & drawings** action. Uploads are separate saves, so a failed upload can be retried without creating another P.O. Each selected spool retains the complete isometric and its own extracted BOM; earlier revisions remain in History.
+
+### Find the existing resources
+
+Find the saved GPN and expand the assembly beneath it to inspect its spool requirements. Expand a spool's physical copies when you need its complete numbered QR identity, recorded station or item record. The compact layout keeps definition quantities separate from registered copies.
+
+| Resource or action | What it opens or records |
+| --- | --- |
+| Resources → Add drawings & BOMs; assembly → Upload drawing or BOM; spool → BOM & drawings | Full isometrics, prepared or extracted BOMs, current versions and document history for the exact saved scope. |
+| Physical copy → Materials & QA/QC | That copy's material pieces, Heat/MTR details, certificate uploads, piece decisions and separate arrival inspection. |
+| Resources → Spool QR labels | Existing labels and the permitted generation action for missing physical copies. Generation also creates their initial declared weld records. |
+| Resources → Production records | Physical assemblies and spool links, assembly weld plans, component plans, individual welds and item actions. |
+| Resources → Production progress | Recorded production and physical stations, including recorded station durations. |
+| Resources → Spool records & Excel | Selection of physical spools and their seven-sheet record workbooks, including testing, failures and rework. |
+| Resources → Job Packets | Evidence, reviews, issued revisions and recorded document handovers. |
+
+**Add GPN**, **Edit GPN**, **Add assembly** and **Edit assembly** act on their separate records. **Edit quantities & welds** and **Set weld counts** remain available only for eligible scope. Administrative removal and **Removed records / restore** retain their existing review and history controls.
 
 ### Separate Assembly Number and GPN
 
 GPN is the Google part number. Assembly Number is the separate assembly identifier you supply. Leave Assembly Number blank when it is unknown; FabTrace displays **Not entered** and retains the existing GPN. The internal `ASM-…` tracking ID identifies one physical copy and is not used to fill either business field.
 
-Use **Edit assembly number** on the saved setup entry to enter or correct its number with a reason. This metadata action remains available after physical registration without changing quantities, spool identities or inspection evidence. Each named Assembly Number is unique within its P.O.; different named assemblies may share a GPN. Select the exact assembly entry when opening files or labels.
+Use **Edit GPN** on the GPN record to correct its number or description, and **Edit assembly** on the exact assembly to enter or correct its separate number or GPN association with a reason. A GPN correction updates the labels of its linked assemblies; it does not combine them or replace their retained identities. These permitted metadata corrections remain separate from quantity and production scope changes. Each named Assembly Number is unique within its P.O.; different named assemblies may share a GPN. Select the exact assembly entry when opening files or labels.
 
 ### Spool label contents
 
@@ -31,7 +48,7 @@ Generate or register the physical spool, then open its QR/item record or **Produ
 
 1. **Confirm the BOM.** Upload/extract a structured BOM or use the reference inherited from this spool's exact setup requirement. Its quantities describe one physical spool. A PDF without a readable material grid stays viewable but needs a structured BOM before arrival approval.
 2. **Check every physical piece.** A BOM line for two flanges creates **two saved material records**, not one shared entry. Each has a persistent piece identifier under this spool. Whole-piece quantities expand individually; fractional lengths and weights remain for review and are never rounded into piece counts.
-3. **Save material details.** Enter any details already available for the piece. Both its heat number and MTR reference are optional through fabrication and must be recorded before step 15, QA/QC-003 — Inspect Welds, can be accepted. Supplier, supplier piece/lot ID, notes and an HTTPS MTR link are optional. Save edits with a reason before recording QA for that piece. Information entered on one piece is not copied to its sibling.
+3. **Review material details.** Explicit Heat Number and MTR Reference values in a reviewed uploaded BOM initialize the matched physical pieces. Check that the source identifies the correct physical spool and piece; absent values stay blank. Shared setup BOMs need an exact physical-spool target or an explicit all-copies declaration before lot facts are assigned across copies. A quantity greater than one needs separate piece rows or explicit confirmation that the facts apply to all pieces. Save any corrections with a reason. Both heat and MTR may remain blank through fabrication and must be recorded before step 15, QA/QC-003 — Inspect Welds, can be accepted. Supplier, supplier piece/lot ID, notes and an HTTPS MTR link are optional. A manual edit on one piece is not copied to its sibling.
 4. **Attach certificates when available.** MTR entry may be deferred until QA/QC-003 after fabrication. Use **Upload MTR** or scan and order all pages. Match the file's reference to the relevant material rows. A reference may also identify an existing controlled paper or external certificate that QA/QC actually verifies; uploading a file alone is not an inspection.
 5. **Record QA-001 for each piece.** QA/QC or an administrator selects **Pass** or **Fail** and chooses **Save QA-001**. For Pass, inspection notes and the supplementary report/checklist reference are optional. Fail requires an inspection reference and a failure reason. Neither option is preselected. Pass requires that piece's saved physical record and current BOM; both heat and MTR may be deferred until QA/QC-003. Fail can record missing evidence or a defect. Use **View QA-001 history** to inspect earlier decisions.
 6. **Record the overall arrival inspection.** Once every piece has a current QA-001 Pass, QA/QC or an administrator verifies spool identity, BOM match and condition, plus heat markings when all heats have been entered and MTRs when all references have been entered, then records the spool's separate **arrival Pass**. Piece checks do not approve the whole spool automatically.
@@ -39,7 +56,7 @@ Generate or register the physical spool, then open its QR/item record or **Produ
 
 A material, BOM or relevant MTR change can make an earlier piece Pass stale and also invalidates the overall arrival basis. A new piece decision requires the overall inspection to be reviewed again. Affected running work pauses; after approval, use the normal **Resume** control when appropriate. Previous decisions remain in history.
 
-If the effective BOM changes after material entry, choose **Review replacement BOM** and explicitly adopt the new source. The new register starts blank while the previous definition, heat/MTR entries and decisions are retained. Shared setup changes affect the physical spools that use that reference; an individual spool override keeps its own scope. Existing records with no QA-001 decisions remain pending until inspected. A 100% weld bar does not grant receiving approval or release.
+If the effective BOM changes after material entry, choose **Review replacement BOM** and explicitly adopt the new source. The new register uses only explicit, correctly scoped facts from that new BOM; other values remain blank and inspection decisions remain pending. The previous definition, heat/MTR entries and decisions are retained in history. A new upload never silently overwrites an existing pinned material register. Shared setup changes affect the physical spools that use that reference; an individual spool override keeps its own scope. A 100% weld bar does not grant receiving approval or release.
 
 ### BOM and isometric files
 
@@ -77,17 +94,17 @@ Assembly and spool quantities must be whole numbers from **1 to 10,000**. A new 
 
 ### Open or update a saved setup
 
-Choose **Open P.O.**, then expand an assembly number to see its spool quantities. Use **Add assembly number** to add another branch. **Edit quantities** updates one eligible branch and requires a reason; it does not replace the P.O.'s other assembly numbers. If someone changes the order while your form is open, choose **Reload saved setup** before making another change.
+Choose **Open P.O.**, find its GPN and expand the exact assembly to see its spool quantities. Use **Add GPN** for a separate part-number record or **Add assembly** beneath the intended GPN. **Edit quantities & welds** updates one eligible assembly and requires a reason; it does not replace the P.O.'s other assemblies. If someone changes the order while your form is open, choose **Reload saved setup** before making another change.
 
-Earlier GPNs with no declared quantity show **Not entered**. If eligible, **Enter quantities** completes that same GPN. Once physical assembly records exist for a branch, including retained removed records, its initial setup is locked; open **Production records** to inspect its existing scope. FabTrace does not infer an ordered quantity from the number of physical records already registered.
+Earlier assembly records with no declared quantity show **Not entered**. If eligible, **Enter quantities** completes that same assembly definition. Once physical assembly records exist for a branch, including retained removed records, its initial setup is locked; open **Production records** to inspect its existing scope. **Set weld counts** can declare eligible missing weld counts without changing existing physical identities or recorded work. FabTrace does not infer an ordered quantity from the number of physical records already registered.
 
-All supported active employees can read this setup. Administrators and supervisors can create or edit eligible quantities. Administrators can use **Remove assembly number**, or **P.O. options and production records → Remove P.O.**, through the existing removal preview. Restoring a removed P.O./GPN retains its saved quantity requirements.
+All supported active employees can read this setup. Administrators and Shop Foremen can create or edit eligible quantities. Administrators can remove the exact P.O., GPN, assembly, saved spool requirement or eligible physical copy through its removal preview. Restoring a removed group retains its saved identities and quantity requirements.
 
 Saving setup establishes requirements. Actual receiving, custody, fabrication and QA records are added later through **Production records**, **Process flow** and the other existing workspaces.
 
 ## Generate readable spool QR labels from the P.O.
 
-Open a saved P.O. and choose **Generate spool QR labels**. Select all assemblies or one exact setup entry, shown with its GPN and separate Assembly Number, then review **QR codes ready** and **QR codes still to generate**. Enter the actual **Current location**, select the **Responsible employee**, and generate the missing records. QR labels are for individual spools; parent assemblies are created as needed to preserve exact ownership.
+Open a saved P.O. and choose **Resources → Spool QR labels**, described as **Open or create labels**. Select all assemblies or one exact setup entry, shown with its GPN and separate Assembly Number, then review **QR codes ready** and **QR codes still to generate**. To request missing records, enter the actual **Current location**, select the **Responsible employee**, and choose **Generate spool QR codes**. Each generation request checks the current scope and production locks; follow any blocker shown. QR labels are for individual spools; parent assemblies are created as needed to preserve exact ownership. Viewing or reprinting existing labels does not create more copies.
 
 A spool number such as `643-777-PCW-03-01` receives permanent labels `643-777-PCW-03-01-[001]`, `643-777-PCW-03-01-[002]`, and onward. Eighteen first copies receive **[001] through [018]**. The counter belongs to that spool number across all P.O.s, so a later order continues the sequence. Removed records keep their labels reserved; replacements receive the next number.
 
@@ -97,16 +114,16 @@ Choose **Print labels** at **100% scale**, or **Save as PDF** in the print dialo
 
 A generation request creates at most **500 items**, including parent assemblies. Continue with another batch for larger orders. Existing spools linked to the exact assembly count toward its requirement; unassigned records with the same part number are not claimed. Repeating generation for complete scope creates nothing.
 
-Declared **Welds per spool** creates individual W01, W02 and subsequent weld records under every physical spool. Undeclared weld counts stay undeclared and can be completed through setup. A valid uploaded BOM inherited by a new physical spool also creates its blank material-piece records. These operations record no heat/MTR values, QA-001 or arrival Pass, production completion or traveler step.
+Declared **Welds per spool** creates individual W01, W02 and subsequent weld records under every physical spool. Undeclared weld counts stay undeclared and can be completed through setup. A valid uploaded BOM inherited by a new physical spool also creates its material-piece records. Explicit source Heat/MTR facts initialize only the correctly scoped pieces; unknown or unassigned facts stay blank. Generation records no QA-001 or arrival Pass, production completion or traveler step.
 
 Administrators and supervisors generate missing records; other active employees can view and reprint. Refresh stale labels before retrying a request, especially after an interrupted response. The print sheet waits for every QR image and keeps printing disabled if an image fails. Removed spools stay out of working label lists, with their identities and history retained.
 
 ## See one P.O. or all P.O.s from Inventory to Finish
 
-Open a saved **P.O.** to see each registered physical copy directly beneath its planned spool number. Assembly sections start open. The full copy number, such as **643-777-PCW-03-01-[001]**, uses its own recorded station color, with a neutral station name and an explicit **Text color** label. Copies of one planned spool can therefore show different colors. A requirement with no registered physical copies says so.
+Open a saved **P.O.**, find its GPN, expand the assembly, then open the physical-copy details beneath the planned spool number. The full copy number, such as **643-777-PCW-03-01-[001]**, keeps its own recorded station and station color. Copies of one planned spool can therefore show different colors. A requirement with no registered physical copies says so.
 
 1. Open **Production progress** from the main navigation. The P.O. dropdown starts at **All P.O.s**; select a particular P.O. to narrow the view. The **Individual spools by process** board shows every registered copy at its recorded station.
-2. Below the board, expand a P.O. to see its GPN / Assembly entries. Expand an assembly to see its individual spools, then expand a spool to see its component parts.
+2. Below the board, expand a P.O. and its assembly entries, identified by their GPN and separate Assembly Number. Expand a physical assembly to see its individual spools, then expand a spool to see its component parts.
 3. Read each item's bar and current step. Expand its process details to see which numbered steps are recorded complete, current, still pending or missing from an earlier baseline.
 4. Use search and status filters to find a P.O., assembly, spool or part. The summary continues to describe the full selected scope, so filtering the list does not turn unfinished work into completion.
 5. Open **Process flow** or **Item & QR** to work with the underlying record. Use **Project detail** for the earlier project progress screen, including structured projects that are not enrolled in a P.O.
@@ -119,12 +136,12 @@ Each physical record follows its applicable production route: a component comple
 
 The bars describe recorded production steps. Missing planned assemblies and their spools, incomplete parts assignments, undeclared scope, open holds and unrecorded baseline steps remain identified beside them. A saved quantity alone does not create a completed step or physical item. Read the scope warning and physical finish status along with a percentage. An administrative release does not record missing work or QA acceptance.
 
-## Remove a P.O., GPN / Assembly or part
+## Remove or restore the exact saved record
 
 Sign in as an **administrator**. Other positions can continue their permitted work but cannot remove or restore records.
 
-1. In simple setup, open the P.O. and use **P.O. options and production records → Remove P.O.**, or expand an assembly number and choose **Remove assembly number**. The detailed Production records screen also retains its **Remove** controls. For a spool or other physical part, open **Item & QR** or find it in the inventory register and select **Remove**.
-2. Review the confirmation. It identifies the entry and shows the P.O.s, GPN / Assembly records and physical items included. Removing a P.O. includes its project scope. Removing an assembly includes its linked descendants; required quantities and links are retained.
+1. In the saved P.O., choose **Remove GPN**, **Remove assembly**, **Remove spool entry**, **Remove copy** or **Remove P.O.** for the exact record. Inside an eligible editor, **Remove saved spool** opens the same saved-requirement preview; a draft row's **Remove row** only discards that unsaved row. The detailed Production records and **Item & QR** screens retain their physical-record removal actions.
+2. Review the confirmation. It identifies the scope and affected records. A GPN and an assembly are separate removal choices: a GPN includes its linked assembly definitions, while one assembly's removal leaves its siblings in place. Removing a P.O. includes its project scope. Removing an assembly includes its linked descendants; requirements, links and documents are retained.
 3. Enter the displayed record number exactly, add the reason, and confirm **Remove**. If the preview says a record changed, refresh the preview and review the current scope before confirming again.
 4. The removed group disappears from normal working lists. Its QR and historical records remain readable with a **Removed** warning; production, transfers, scope edits, approvals and release are blocked while it is removed.
 
@@ -132,9 +149,12 @@ To undo a removal, open **Removed records**, locate the original removal group, 
 
 ### When removal is blocked
 
-- **Linked component or spool:** unassign it through **Spool parts**, or correct its parent link in the weld plan while that scope is still editable. You can remove the containing assembly or P.O. as a whole instead. Existing production locks still apply.
+- **Saved spool requirement:** it can be removed only before physical assembly history exists, including retained removed history. The last active spool requirement cannot be removed on its own. Removing a physical copy leaves the ordered demand intact; it does not remove its saved requirement.
+- **Linked component or spool:** an untouched generated copy with only its initial plan, source material facts and pending QA placeholders may be eligible for **Remove copy** after the preview verifies both its own and its parent's evidence. Production, inspection, transfer or other protected history can block that shortcut. Otherwise, unassign through the existing controlled scope if permitted, or remove the containing assembly or P.O. as a whole. Existing production locks still apply.
 - **Open process timer:** finish a standalone timer first. A timer owned by the numbered process route must close through the route's normal transitions. Removing a record does not finish fabrication or bypass QA/QC.
 - **Retained identity:** removed P.O. numbers and physical QR IDs remain reserved. Restore the existing record instead of creating another item with the same identity.
+
+Restore also checks current capacity and scope. A replacement copy can fill the outstanding requirement while the original remains removed; restoring both cannot exceed the ordered quantity. Registering physical work after removing a saved requirement can prevent restoring that requirement into the now locked scope.
 
 Removing a required material line from a spool's BOM is a separate operation: edit the parts list and save the revised scope with its reference and reason. Unassign any allocated physical components first; existing scope locks remain enforced.
 
@@ -142,7 +162,7 @@ The administrator's full backend Excel export includes **Removed record states**
 
 ## Later: register the actual physical production records
 
-Open **Production records** from the saved setup (`/?orders=1`). The retained detailed navigation follows **P.O → Assembly → Spools** and provides physical QR identities, custody, weld plans, BOMs and readiness. It is separate from the three-step quantity setup above. Choose **P.O. setup** to return to the simple quantities screen.
+Open **Resources → Production records** from the saved P.O. (`/?orders=1`). The detailed navigation follows **P.O → Assembly → Spools** and provides physical QR identities, custody, weld plans, component plans and readiness. Use it to inspect existing physical records or handle registration that needs the detailed controls. Generation through **Spool QR labels** may already have created the required copies; open those existing records rather than registering them again. Choose **P.O. workspace** to return to the saved quantities and files.
 
 Select a P.O. and use **Open spools** on an actual physical assembly. Its required, linked, missing and ready spool counts appear beside the assembly number. Administrators and supervisors manage permitted scope; all supported active employees can view it and download scoped Excel BOMs. Existing job permissions still govern work, inspections, transfers and release.
 
@@ -154,17 +174,17 @@ If the work is already registered, select **Existing project to connect** and do
 
 ## 2. Register one physical assembly
 
-For a saved quantity plan, choose **Register physical assembly** for its GPN. Confirm the planned number and the prefilled **Spools needed** for one assembly, then enter its actual current location and custodian. Save to register one physical assembly and open its Spools screen. Repeat physical registration within the ordered assembly quantity as units become available. The physical part number must match the saved GPN; the Assembly Number is separately displayed.
+For a saved quantity plan that still needs physical records, choose **Register physical assembly** for the exact assembly definition. Confirm its GPN, separate Assembly Number and prefilled **Spools needed** for one assembly, then enter its actual current location and custodian. Save to register one physical assembly and open its Spools screen. Repeat within the ordered assembly quantity as units become available. The physical part number must match the retained planned identity; a corrected current GPN label does not rewrite that identity.
 
 Legacy unplanned work can still use **Add assembly** to register an individual physical assembly with its required spool count and actual custody. This is a later physical-registration form, not the initial P.O. quantity setup.
 
 FabTrace generates the unique physical QR tracking ID automatically. You do not need to invent another number. **More options** lets you enter a custom QR ID, drawing reference or connect an eligible existing physical assembly from this P.O. The form has separate Assembly Number and GPN fields. Existing historical assembly part numbers remain retained information.
 
-### Register physical work for an earlier GPN
+### Register a physical copy for an earlier assembly definition
 
-An existing GPN without an assembly appears in the same register with **Finish setup**. Select it, confirm its prefilled number, enter the required spool count and actual custody/location information, then save. This completes that existing GPN; it does not create another group. For a GPN with saved quantities, required spool counts come from that plan even before physical registration. A GPN with no quantity plan remains explicitly undeclared.
+An existing assembly definition with no registered physical copy appears in the same register. If it has no quantity plan, **Finish setup** opens its detailed registration form: confirm the prefilled identity, required spool count and actual custody/location, then save. A definition with saved quantities offers **Register physical assembly** and uses its per-assembly requirements. A separate GPN record with no assembly needs **Add assembly** in the P.O. workspace first; it has no physical-registration row of its own.
 
-Existing physical assemblies keep their IDs and history. Older records that used a different assembly part number retain that number as secondary information. If an older GPN already contains multiple physical assemblies, each physical assembly remains a separate row with its own QR ID and spool scope. Saved quantity plans allow the declared number of physical assemblies under the same GPN. Legacy unplanned groups retain their existing duplicate-registration guards.
+Existing physical assemblies keep their IDs and history. Older records that used a different assembly part number retain that number as secondary information. If an earlier assembly definition already contains multiple physical copies, each remains a separate row with its own tracking ID and spool scope. Each definition owns its quantity plan; several definitions can share one GPN without sharing their quantities. Legacy unplanned groups retain their existing duplicate-registration guards.
 
 ## 3. Read the required spool count and progress
 
@@ -189,15 +209,15 @@ Use **Register a new spool** for each physical spool, or reuse an eligible spool
 
 Physical items are identified by tracking ID and part number. New item registration and the current bulk CSV template do not require a description. An older CSV containing a description column is still accepted. Current item lists and printed QR labels use identifiers; previously stored descriptions and issued history are retained.
 
-If the spool already has a traveler, use the assembly's **Process flow** linking action at step 17 or 18 after the spool has completed its route and has current ordinary QA readiness. The older planning dialog cannot rewrite a controlled traveler parent link.
+If the spool already has a traveler, use the assembly's available **Process flow** linking action after the spool has completed its route and has current ordinary QA readiness. For the current testing protocol, finalize child scope before the first step 17 YES/NO decision. Scope stays locked through later correction and restart cycles. Historical travelers keep their saved route rules. The planning dialog cannot rewrite a controlled traveler parent link.
 
-The app rejects cross-project links, duplicate use of a physical spool and links exceeding the assembly's required count. For a saved quantity plan, each linked spool's part number must match a planned spool number, and each type's quantity must remain within its per-assembly requirement. For legacy unplanned assemblies, you can correct the required count with a reason while the assembly is unreleased and before its traveler begins, provided it stays at least as large as the linked count. A planned assembly must continue to match its saved per-assembly spool requirement. The same edit form corrects its GPN/Assembly number together when eligible. Numbers shared by multiple older assemblies cannot be renamed through a single row. Once the assembly traveler begins, its declared count and number are locked. A released parent must be returned to work before changing its child scope or links. Stale forms must be refreshed before retrying.
+The app rejects cross-project links, duplicate use of a physical spool and links exceeding the assembly's required count. For a saved quantity plan, each linked spool's part number must match a planned spool number, and each type's quantity must remain within its per-assembly requirement. For legacy unplanned assemblies, you can correct the required count with a reason while the assembly is unreleased and before its traveler begins, provided it stays at least as large as the linked count. A planned assembly must continue to match its saved per-assembly spool requirement. Use the separate **Edit GPN** and **Edit assembly** actions for permitted business-label corrections; the physical form does not rename a shared GPN. Starting the traveler locks its controlled quantity scope. A released parent must be returned to work before an otherwise permitted scope correction. Stale forms must be refreshed before retrying.
 
-Each linked spool provides shortcuts to **Create / edit BOM**, **Welds**, **Process flow** and **Item & QR**. Return through **Production records** to resume that physical scope; the main **Purchase orders** navigation opens the simple setup.
+Each linked spool keeps **Materials & QA/QC**, **Welds** and **Process flow** directly visible. Open **Files, Excel & other records** for **BOM & drawings**, **Edit component plan** or **View component plan**, **Spool record Excel**, and item/QR actions. Return through **Production records** to resume that physical scope; **P.O. workspace** returns to the saved quantities and files.
 
 ## 5. Build the material list for each spool
 
-Choose **Create / edit BOM** beside a linked spool. In Spool parts, create the parts list from the approved drawing/BOM and enter each required component description, material part number when used, whole-piece quantity and source reference. For example, one spool may need 2 flanges and 1 pipe piece.
+Choose **Files, Excel & other records → Edit component plan** beside a linked physical spool. In Spool parts, create the parts list from the approved drawing/BOM and enter each required component description, material part number when used, whole-piece quantity and source reference. For example, one spool may need 2 flanges and 1 pipe piece. **View component plan** opens the same records for employees without edit permission. This allocation plan is separate from the uploaded reference BOM and its Heat/MTR material-piece register.
 
 Required quantities, assigned physical QR records, received quantities and prepared quantities are tracked separately. Register the actual Part items, then allocate them to the appropriate BOM lines. A piece's receipt and preparation progress comes from its recorded traveler; typing a required quantity creates no receipt or preparation record. Put length/dimensions in the description or controlled source record; the quantity is a count of physical pieces.
 
@@ -205,10 +225,10 @@ See [PARTS_GUIDE.md](PARTS_GUIDE.md) for allocation, preparation and controlled 
 
 ## 6. Create the Excel BOM
 
-From the saved P.O., open **Production records**, then choose either:
+From the saved P.O., open **Resources → Production records → Order resources → Component BOM Excel & template**, then choose either:
 
 - **Download BOM Excel** for the currently recorded material requirements and progress.
-- **Excel BOM template** for an editable planning workbook with the selected P.O, GPN/Assembly and spool context and blank material-entry rows.
+- **Excel BOM template** for an editable planning workbook with the selected P.O., separate GPN and assembly context, and blank component-entry rows.
 
 Download from the combined register for the selected P.O scope, or open an assembly's Spools screen for that physical assembly. Older filtered GPN links also retain their displayed selection. The workbook contains **Assembly summary**, **Bill of materials** (or **BOM template**), **Spool register** and **Export info** sheets. When saved quantity requirements exist for the selected scope, it also includes **Setup quantities**.
 
@@ -218,11 +238,17 @@ The BOM carries the P.O number, separate **GPN** and **Assembly number** columns
 
 Materials are counted once per actual physical spool. They are not multiplied again by either the assembly quantity or its required spool count. If a required spool or its BOM has not been entered, the workbook flags the missing planning instead of inventing material quantities. Leading-zero identifiers remain text in Excel.
 
-Both files are editable offline workbooks. **Editing or saving the Excel file does not update FabTrace; this release does not import Excel BOMs.** Enter assembly/spool-number quantity changes in the simple P.O. setup and component material changes in Spool parts, then export again. The administrator backend export includes **Assembly quantity plans** and **Spool quantity plans**, including retained inactive requirement lines. Downloading also does not issue a controlled Job Packet or record a document handover.
+Both files are editable offline workbooks. **Editing or saving the exported Excel file does not update FabTrace.** Enter assembly/spool quantity changes in P.O. setup and component-plan changes in Spool parts, then export again. To import a prepared reference BOM, use the exact spool's **BOM & drawings** upload and review its supported Excel/CSV columns and physical-piece scope. That import is separate from component allocation and does not approve inspections. The administrator backend export includes **Assembly quantity plans** and **Spool quantity plans**, including retained inactive requirement lines. Downloading also does not issue a controlled Job Packet or record a document handover.
+
+For the complete record of individual physical spools, open **Resources → Spool records & Excel** and choose **Export spool records**. Select one or more numbered copies. One selection downloads a workbook; multiple selections download one workbook per spool in a ZIP. Each workbook retains **Spool Record**, **24-step Route**, **Weld Register**, **Material Traceability**, **Inspection History**, **Work and Rework**, and **Kelvion Requirements**. It includes recorded station visits, material Heat/MTR facts, actual weld work, testing decisions, report and QA results, return custody, correction, repeat attempts and retained failures. Shared parent-assembly records are marked as shared scope. Missing or unlinked evidence remains identified instead of being guessed. This is a record export, not a new Job Packet issue or QA approval.
 
 ## 7. Continue through production and final documentation
 
 Use the existing numbered Process flow. The assembly traveler takes its required child-spool count from the PO assembly. Actual work and QA still follow the employee's position, weld requirements, linked-child readiness and applicable hold points. Item QR codes and both-badge transfers continue to identify the same physical records.
+
+On the current assembly route, step 17 requires an explicit **YES** or **NO** testing decision; neither answer is preselected. **NO** routes to Paint/finishing at step 20 and records steps 18 and 19 as not required. **YES** runs **NDT 17 → NDT QA/QC 18 → Floor 19 → pressure testing 17 → pressure QA/QC 18 → Floor 19 → Paint/finishing 20**. Testing staff record the actual report result; QA/QC separately records an explicit **PASS** or **FAIL** at each test review.
+
+A failed test review returns the work to its recorded previous testing station and the employee who sent that attempt into QA/QC. The required correction must be recorded before retesting; a failure cannot be bypassed by changing YES to NO. Corrected pressure failures remain open through any required repeat NDT until their pressure retest is accepted. Use the controlled **Return to testing** action when a changed accepted basis requires it. Setup quantities, file uploads, QR generation and exports do not make any of these decisions. Historical travelers retain their original labels, events and route rules.
 
 Open **Production progress** for the P.O. hierarchy and current flow; its **Project detail** link retains the earlier WIP/finished/shipped/delivered views. Use **Job Packets** for the approved source applicability, expected packet scope, evidence reviews, issue and actual physical/digital handovers. Its configured PO must agree with the order PO. The order's spool count, registered-item progress and expected packet count are different measures; review all three against the approved job scope.
 
@@ -238,10 +264,11 @@ For example, a BOM with two **100708 flanges** and one **102391 pipe** appears a
 
 **PASS ALL:** after inspecting every piece on the selected numbered spool, choose **PASS ALL** in **QA-001 · All pieces**. The inspection reference and notes are optional; choose **Confirm PASS ALL** after reviewing the pieces. The action saves one decision per outstanding piece and retains existing current Pass decisions. Every piece must have its saved physical record and current BOM; both heat numbers and MTR references may be deferred until QA/QC-003, and the page lists missing items with **Go to piece** links. A stale record or incomplete piece stops the whole batch. This action covers only the selected physical spool's material inspection; the overall arrival decision is still recorded separately. Spool, part and MTR choices are sorted in natural numeric order.
 
-When opening a shared BOM from order setup, choose the numbered physical copy being inspected if several copies exist. Every approval belongs to that selected copy. If the copy uses an individual BOM revision, open that copy's current BOM. If its saved material register still uses an earlier revision, review the new pieces and choose **Use this BOM for this spool** on the same page, entering the reason. This starts blank material entries and pending QA-001 decisions for that copy's new BOM, while retaining the previous records and history. Inspect each new physical piece against the current BOM. Record and verify both heat numbers and MTR references before post-fabrication QA/QC-003 acceptance.
+When opening a shared BOM from order setup, choose the numbered physical copy being inspected if several copies exist. Every approval belongs to that selected copy. If the copy uses an individual BOM revision, open that copy's current BOM. If its saved material register still uses an earlier revision, review the new pieces and choose **Use this BOM for this spool** on the same page, entering the reason. The new register initializes only explicit, correctly scoped source facts and leaves absent facts blank, with QA-001 decisions pending; the previous register and history remain retained. Inspect each new physical piece against the current BOM. Record and verify both heat numbers and MTR references before post-fabrication QA/QC-003 acceptance.
 
 The existing approved reference for drawing **643-777 revision 2** remains available for **643-777-PCW-03-01** (sheet 2) and **643-777-PCW-03-02** (sheet 3). Its two BOM lines describe one pipe piece and two flange pieces for one physical spool. The flanges have separate heat/MTR entries and QA-001 decisions even when they share a TAS line number. Uploaded structured BOMs follow the same whole-piece rule.
 
 Material coordinators, supervisors, administrators and QA/QC can enter permitted material information; QA/QC or an administrator records the inspections. A save belongs only to that physical spool and records the actor, time and reason. Concurrent edits require a reload. Released spools or released parent assemblies must return to work before correction.
 
 Saved material facts, piece inspections and the separate overall arrival decision remain connected to the same physical spool through production. Job Packets retain their exact issued evidence, including associated MTR files, while a later correction makes current reviews stale as appropriate. Weld-side material assignment remains explicit for each joint; two flange records do not imply which flange was used on a particular weld.
+

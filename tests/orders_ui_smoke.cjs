@@ -19,6 +19,8 @@ const context={document:{getElementById:id=>nodes.get(id)||null,createElement:()
   setTimeout:(fn,delay)=>{if(delay===10000){fn();return 0;}readTimeouts.set(++timeoutId,{fn,delay});return timeoutId;},clearTimeout:id=>readTimeouts.delete(id),URL:{createObjectURL:()=> 'blob:training',revokeObjectURL:url=>revoked.push(url)},excelDownloadName:()=> 'FabTrace_BOM.xlsx',
   openItem:id=>routes.push({kind:'item',id}),openNewItem:options=>routes.push({type:'register',...options}),qrId:value=>String(value).replace('FABTRACE:ITEM:','').trim(),
   FabRemovals:{open:options=>routes.push({type:'removal',...options}),openList:()=>routes.push({type:'removed-list'})},
+  FabOrderSetup:{open:options=>routes.push({kind:'setup',...options})},FabOrderLabels:{open:options=>routes.push({kind:'labels',...options})},FabSpoolRecords:{open:options=>routes.push({kind:'spool-records',...options})},
+  FabSpoolBom:{spoolLink:id=>`<button data-test-material-id="${esc(id)}">Materials & QA/QC</button>`},FabSpoolDocuments:{link:(kind,id)=>`<button data-test-document-kind="${esc(kind)}" data-test-document-id="${esc(id)}">BOM & drawings</button>`},
   FabTracking:{open:options=>routes.push({kind:'tracking',...options}),openPlan:options=>routes.push({kind:'plan',...options})},FabParts:{open:options=>routes.push({kind:'parts',...options})},FabFlow:{open:options=>routes.push({kind:'flow',...options})},FabDossier:{open:options=>routes.push({kind:'dossier',...options})},FabProgress:{open:options=>routes.push({kind:'progress',...options})},FabProductionProgress:{open:options=>routes.push({kind:'production-progress',...options})},
   fetch:async(url,options)=>{fetches.push({url,options});return {ok:responseStatus===200,status:responseStatus,headers:{get:k=>k==='content-type'?responseType:'attachment; filename="FabTrace_BOM.xlsx"'},blob:async()=>({}),json:async()=>({detail:'Export denied'})};},
   api:async(url,options={})=>{calls.push({url,...options});if(url==='/api/employees/directory'){if(directoryHold)await directoryHold;return [{badge:'HANDLER',name:'Material coordinator',role:'handler'}];}if(options.method){if(writeHold)await writeHold;if(writeError)throw writeError;const body=JSON.parse(options.body),result=structuredClone(detail);result.order.version++;
@@ -86,6 +88,16 @@ const checks=[];async function check(name,fn){await fn();checks.push(name);}
     detail=fixture();await context.FabOrders.open({po:'P1'});await click('progress');assert.deepEqual(routes.at(-1),{kind:'production-progress',project:'P1'});
     detail=fixture();detail.order.removal={removed:true};await context.FabOrders.open({po:'P1'});assert.match(html(),/Project detail/);await click('progress');assert.deepEqual(routes.at(-1),{kind:'progress',project:'P1'});
   });
+  await check('resource shortcuts preserve order and exact spool scope without modifying records',async()=>{
+    context.me={role:'admin'};detail=fixture();await context.FabOrders.open({po:'P1',gpn:'G1',assembly:'ASM-01'});const n=writes().length;
+    assert.match(html(),/aria-label="Order resources"/);assert.match(html(),/<details class="fo-resource-more"><summary>Component BOM Excel &amp; template/);assert.match(html(),/<details class="fo-spool-tools"><summary>Files, Excel &amp; other records/);
+    assert.match(html(),/data-test-material-id="SP-01"/);assert.match(html(),/data-test-document-id="SP-02"/);assert.match(html(),/Edit component plan/);assert.doesNotMatch(html(),/Create \/ edit BOM/);
+    await click('labels');assert.deepEqual(routes.at(-1),{kind:'labels',po:'P1',gpn:'G1'});await click('spool-records');assert.deepEqual(routes.at(-1),{kind:'spool-records',project:'P1'});
+    await click('spool-record','SP-02');assert.deepEqual(routes.at(-1),{kind:'spool-records',project:'P1',item:'SP-02'});let count=routes.length;await click('spool-record','OUTSIDE-THIS-PO');assert.equal(routes.length,count);
+    await click('job-packet');assert.deepEqual(routes.at(-1),{kind:'dossier',project:'P1'});await click('simple-setup');assert.deepEqual(routes.at(-1),{kind:'setup',po:'P1'});assert.equal(writes().length,n);
+    context.me={role:'handler'};detail=fixture();await context.FabOrders.open({po:'P1',assembly:'ASM-01'});assert.match(html(),/View component plan/);assert.doesNotMatch(html(),/Edit component plan/);await click('spool-record','SP-01');assert.deepEqual(routes.at(-1),{kind:'spool-records',project:'P1',item:'SP-01'});assert.equal(writes().length,n);
+    context.me={role:'admin'};detail=fixture();detail.order.removal={removed:true};await context.FabOrders.open({po:'P1'});assert.doesNotMatch(html(),/data-order-action="labels"|data-order-action="spool-records"/);count=routes.length;await click('labels');await click('spool-records');assert.equal(routes.length,count);detail=fixture();
+  });
   await check('readable spool QR resolution preserves exact IDs and stops after cancel, navigation or edited input',async()=>{
     context.me={role:'admin'};detail=fixture();const resolved=[];context.resolveItemQr=async value=>{resolved.push(value);return 'SP-02';};
     await context.FabOrders.open({po:'P1',assembly:'ASM-01'});await click('link-spool','ASM-01');set('spool_id','DRAW-42-SPOOL-01-[002]');await submit();assert.equal(resolved.at(-1),'DRAW-42-SPOOL-01-[002]');assert.deepEqual(routes.at(-1),{kind:'plan',project:'P1',item_id:'SP-02',assembly_id:'ASM-01'});await click('cancel-form');
@@ -129,3 +141,4 @@ const checks=[];async function check(name,fn){await fn();checks.push(name);}
   });
   console.log('PASS: Purchase orders ('+checks.length+' contracts): '+checks.join('; ')+'.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

@@ -2,7 +2,15 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
-## Current application revision: required testing decisions and rework
+## Current application revision: simpler P.O. workspace
+
+Release `2026.11.03-po-workspace.1` simplifies setup into **P.O. number → Assemblies & spools → Review & save**. Each assembly card contains its separate GPN, Assembly Number, quantity and spool rows. The review is read-only; the existing versioned API saves the new order atomically. Add/edit operations on an existing order retain their exact record scope, correction reasons and stale-version guards. Drawings and BOMs remain separate optional saves after the order is saved.
+
+The saved workspace groups assemblies by their explicit canonical GPN record links. It does not infer relationships from matching labels. Legacy or unmatched entries remain visible. Collapsed assembly and physical-copy details retain the original resource and editing actions. Resources provide direct access to production progress, physical records, QR labels, spool-record Excel exports and Job Packets. Uploaded BOM/material records and the component plan are labeled separately; the seven-sheet spool record remains distinct from the component BOM workbook/template.
+
+This release changes the presentation and navigation, not the schema or saved production identities. No P.O., GPN, assembly, spool, document, weld, QA record or movement is recreated or migrated. Explicit API editability flags remain authoritative, including locks caused by retained removed physical records. QR generation remains an explicit action with actual custody details and the existing production/testing-scope checks. Setup does not advance a traveler, record a test decision or grant QA acceptance. Current workflow help describes the separate NDT and pressure phases, mandatory QA dispositions and recorded correction/retest loop introduced below.
+
+## Previous application revision: required testing decisions and rework
 
 Release `2026.11.03-testing-route.1` introduces catalog `CLM-24-v6` and the explicit assembly testing protocol `CLM-TEST-v1`. Step 17 is **Determine if Spool need to be sent to Testing**. The assembly traveler continues to cover its linked physical spools; numeric steps 1–24 and permanent identities are retained.
 

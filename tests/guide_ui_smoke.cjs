@@ -55,6 +55,7 @@ const input=(id,value)=>{elements.get(id).value=value;return elements.get(id).on
 const select=(id,value)=>{elements.get(id).value=value;return elements.get(id).onchange();};
 const status=id=>{const result=html().match(new RegExp('data-guide-stage="'+id+'" data-guide-status="([^"]+)"'));assert.ok(result,'stage '+id+' must be displayed');return result[1];};
 const topics=()=>[...html().matchAll(/class="fg-card fg-topic" id="guide-topic-([^"]+)"/g)].map(v=>v[1]);
+const topic=id=>{const result=html().match(new RegExp('<article class="fg-card fg-topic" id="guide-topic-'+id+'">([\\s\\S]*?)</article>'));assert.ok(result,'topic '+id+' must be displayed');return result[1];};
 const transfer=channel=>{const result=html().match(new RegExp('<article class="fg-transfer"><h3>'+channel+' packet</h3>([\\s\\S]*?)</article>'));assert.ok(result);return result[1];};
 const pending=()=>{let release;const promise=new Promise(resolve=>release=resolve);return {promise,release};};
 const checks=[];
@@ -72,6 +73,35 @@ async function check(name,fn){await fn();checks.push(name);}
     assert.match(html(),/NDT at 17 → NDT QA\/QC at 18 → Floor at 19 → pressure testing at 17 → pressure QA\/QC at 18 → Floor at 19 → Paint\/finishing at 20/);
     assert.match(html(),/exact previous testing station and employee who sent the attempt into QA\/QC/);assert.match(html(),/Scope stays locked through later correction and restart cycles/);
     assert.match(html(),/Return to testing/);assert.match(html(),/QA\/QC controls the QA review/);assert.match(html(),/Historical travelers/);assert.doesNotMatch(html(),/CLM-24-v5/);
+  });
+  await check('three-stage setup guidance preserves separate resources, physical scope and QA',async()=>{
+    setProjects(complete());await context.FabGuide.open({project:'P1',section:'order-setup'});
+    const setup=topic('order-setup'),stages=setup.match(/<ol>([\s\S]*?)<\/ol>/)[1];
+    assert.equal((stages.match(/<li>/g)||[]).length,3,'new-order guidance must have exactly three stages');
+    for(const label of ['P.O. number','Assemblies &amp; spools','Review &amp; save'])assert.ok(stages.includes(label),label);
+    for(const label of ['Add drawings &amp; BOMs','Upload drawing or BOM','BOM &amp; drawings','Production records','Production progress','Spool records &amp; Excel','Job Packets','Spool QR labels','Edit GPN','Edit assembly'])assert.ok(setup.includes('<strong>'+label+'</strong>'),label+' remains reachable');
+    assert.match(setup,/prepared Excel or CSV BOM/);assert.match(setup,/complete drawing/);assert.match(setup,/physical copies registered to that exact requirement/);
+    assert.match(setup,/creates no physical items, completed work or QA approval/);assert.match(setup,/Opening or printing labels does not itself create copies/);
+    assert.match(setup,/generation request checks current scope and production locks/);
+    assert.match(setup,/initialize matched physical pieces/);assert.match(setup,/exact numbered-copy target or an explicit all-copies declaration/);
+    assert.match(setup,/Missing or unassigned facts stay blank/);assert.match(setup,/existing pinned material register needs review/);assert.match(setup,/inspection history remain retained/);
+    assert.match(setup,/requires recorded correction and retesting/);assert.match(setup,/correction and testing restarts do not unlock it/);
+    assert.doesNotMatch(setup,/Save &amp; add files|Edit GPN \/ Assembly Number|Finish setup<\/strong>|Do this later/);
+    await click('order-setup');assert.deepEqual(routes.at(-1),{module:'ordersetup'});
+  });
+  await check('resource guide separates component plans, spool exports and reviewed removal',async()=>{
+    await context.FabGuide.open({project:'P1',section:'scope'});const scope=topic('scope');
+    assert.match(scope,/existing physical records/);assert.match(scope,/Files, Excel &amp; other records → Edit component plan/);
+    assert.match(scope,/separate from the uploaded reference BOM and its material-piece facts/);assert.match(scope,/before its first step 17 testing decision/);
+    await context.FabGuide.open({project:'P1',section:'excel'});const excel=topic('excel');
+    for(const name of ['Spool Record','24-step Route','Weld Register','Material Traceability','Inspection History','Work and Rework','Kelvion Requirements'])assert.ok(excel.includes('<strong>'+name+'</strong>'),name);
+    assert.match(excel,/multiple spools download separate workbooks in a ZIP/);assert.match(excel,/technician reports, separate QA results/);
+    assert.match(excel,/Component BOM Excel &amp; template/);assert.match(excel,/editing Excel does not update FabTrace/);assert.match(excel,/can import reference BOM files/);
+    assert.match(excel,/Shared parent-assembly evidence is identified as shared/);assert.match(excel,/does not approve work or issue a Job Packet/);
+    await context.FabGuide.open({project:'P1',section:'removals'});const removal=topic('removals');
+    for(const label of ['Remove GPN','Remove assembly','Remove saved spool','Remove copy','Remove row','Removed records / restore'])assert.ok(removal.includes('<strong>'+label+'</strong>'),label);
+    assert.match(removal,/Removing a copy leaves the ordered demand intact/);assert.match(removal,/before physical assembly history exists/);assert.match(removal,/Restore cannot exceed that capacity/);
+    assert.equal(calls.filter(c=>c.method&&c.method!=='GET'||c.body!==undefined).length,0,'the operating guide remains read-only');
   });
   await check('empty and zero scope never means finished',async()=>{
     setProjects();await context.FabGuide.open();assert.match(html(),/No structured projects are registered/);assert.doesNotMatch(html(),/data-guide-status="done"/);assert.ok(topics().length>=10);
