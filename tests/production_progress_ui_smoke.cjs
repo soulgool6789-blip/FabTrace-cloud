@@ -90,6 +90,40 @@ const check=name=>checks.push(name);
   const inventoryGroup=html().split('data-spool-process="inventory"')[1].split('data-spool-process="qa_001"')[0];assert.equal(stationSpool.current_step,13);assert.match(inventoryGroup,/data-spool-id="LEGACY-SPOOL"[^>]*fst-color-black/);assert.match(inventoryGroup,/Recorded location: Legacy &lt;Rack&gt; &amp; Bay\. Select a flow station on the next transfer\./);assert.doesNotMatch(html().split('data-spool-process="welding"')[1].split('data-spool-process="qa_003"')[0],/data-process-spool="LEGACY-SPOOL"/);toggle('gpn:G1');assert.match(html(),/>Inventory · Confirm station<\/span>/);
   stationSpool.flow_stage={key:'ready_to_ship',blocked:true};await context.FabProductionProgress.refresh();const readyGroup=html().split('data-spool-process="ready_to_ship"')[1].split('<aside class="fst-legend"')[0];assert.match(readyGroup,/data-spool-id="LEGACY-SPOOL"[^>]*fst-color-green/);assert.match(readyGroup,/Release blocked/);assert.doesNotMatch(readyGroup,/Work blocked/);
   stationSpool.flow_stage={key:'unrecognized_station'};await context.FabProductionProgress.refresh();const unknownGroup=html().split('data-spool-process="unknown"')[1].split('<aside class="fst-legend"')[0];assert.match(unknownGroup,/Status unavailable/);assert.match(unknownGroup,/data-process-spool="LEGACY-SPOOL"/);assert.doesNotMatch(unknownGroup,/fst-color-|fst-text/);hook=null;await context.FabProductionProgress.open();check('Authoritative recorded stations override traveler-step guesses; unknown locations are explained and blocked Ready To Ship stays green without implying release');
+  const clockView=JSON.parse(JSON.stringify(response('P1'))),clockSpool=clockView.orders[0].gpns[0].assemblies[0].children[0],realDate=context.Date;
+  // A fixed browser clock deliberately differs from the saved server snapshot.
+  context.Date=class extends Date{static now(){return Date.parse('2030-01-01T00:00:00Z');}};
+  clockView.as_of='2026-10-30T12:34:56Z';clockSpool.step_entered_at='2026-10-30T11:30:00Z';
+  clockSpool.flow_stage={key:'floor',source_item_id:'ASM-A',inherited:true,station_entered_at:'2026-10-29T08:00:00Z',station_visits:[
+    {stage_key:'floor',label:'Floor',visit:1,entered_at:'2026-10-27T00:00:00Z',departed_at:'2026-10-27T02:00:00Z',source_item_id:'LEGACY-SPOOL',inherited:false},
+    {stage_key:'welding',label:'Process Welder',visit:1,entered_at:'2026-10-27T02:00:00Z',departed_at:'2026-10-29T08:00:00Z',source_item_id:'LEGACY-SPOOL',inherited:false},
+    {stage_key:'floor',label:'Floor',visit:2,entered_at:'2026-10-29T08:00:00Z',departed_at:'2026-10-29T09:00:00Z',source_item_id:'LEGACY-SPOOL',inherited:false},
+    {stage_key:'floor',label:'Floor',visit:2,entered_at:'2026-10-29T09:00:00Z',departed_at:null,source_item_id:'ASM-A',inherited:true},
+  ]};
+  hook=()=>clockView;await context.FabProductionProgress.open({project:'P1'});
+  const timedCard=()=>html().split('data-process-spool="LEGACY-SPOOL"')[1].split('</li>')[0];
+  assert.match(timedCard(),/Time at station<\/span><strong[^>]*>28:34:56<\/strong>/);
+  assert.match(timedCard(),/Shared assembly time/);
+  toggle('gpn:G1');toggle('item:LEGACY-SPOOL');
+  const timedDetail=()=>html().split('data-pp-item="LEGACY-SPOOL"')[1].split('<section class="pp-children">')[0];
+  assert.match(timedDetail(),/Current process<\/span><strong>13 · Synthetic current process<\/strong>/);
+  assert.match(timedDetail(),/Time in current numbered step<\/span><strong[^>]*>01:04:56<\/strong>/);
+  assert.match(timedDetail(),/Time in step<\/span><strong[^>]*>01:04:56<\/strong>/);
+  const timedStage=key=>timedDetail().split('data-pp-stage="'+key+'"')[1].split('</li>')[0];
+  assert.match(timedStage('floor'),/Total time · 2 visits<\/span><strong[^>]*>30:34:56<\/strong>/);
+  assert.match(timedStage('welding'),/Total time · 1 visit<\/span><strong[^>]*>54:00:00<\/strong>/);
+  assert.match(timedStage('preparation'),/No recorded visit/);
+  assert.match(timedDetail(),/Station visit history \(4 records\)/);
+  assert.equal([...timedDetail().matchAll(/<td>Floor<\/td><td>2<\/td>/g)].length,2);
+  assert.match(timedDetail(),/<td>This item<\/td>/);assert.match(timedDetail(),/<td>Shared · ASM-A<\/td>/);
+  clockSpool.flow_stage={key:'floor',station_entered_at:null,station_visits:[],station_timing_status:'unrecorded'};
+  await context.FabProductionProgress.refresh();
+  assert.match(timedCard(),/Time at station<\/span><strong>Entry not recorded<\/strong>/);
+  assert.doesNotMatch(timedCard(),/00:00:00|28:34:56/);
+  assert.match(timedDetail(),/No station entry has been recorded for this item\./);
+  assert.match(timedDetail(),/Time in current numbered step<\/span><strong[^>]*>01:04:56<\/strong>/);
+  context.Date=realDate;hook=null;await context.FabProductionProgress.open();
+  check('Saved station timing exceeds 24 hours, stays separate from numbered steps, counts physical returns across shared segments, and explains unrecorded entries');
   const identityView=JSON.parse(JSON.stringify(response('P1'))),sharedGpn='000-SHARED-GPN';
   identityView.orders[0].gpns=['000-ASM <A>','000-ASM-B',''].map((number,index)=>{
     const parentId='SAME-GPN-ASM-'+index,spoolId='SAME-GPN-SPOOL-'+index;
@@ -117,3 +151,4 @@ const check=name=>checks.push(name);
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');for(const phrase of ['id="productionProgressPage"','id="productionProgressContent"','/static/production-progress.js','/static/production-progress.css','FabProductionProgress.cancelPending','Production progress'])assert.ok(index.includes(phrase),phrase);assert.match(index,/params\.has\('production-progress'\)[\s\S]*FabProductionProgress\.open/);assert.match(index,/params\.has\('progress'\)[\s\S]*FabProgress\.open/);assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));check('Both shells expose the new production view and retain existing project deep links');
   console.log(JSON.stringify({status:'passed',contracts:checks.length,checks},null,2));
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

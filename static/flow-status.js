@@ -89,7 +89,7 @@
         : [row.assembly_number || row.assembly_id];
       const context = [row.purchase_order ? 'P.O. ' + row.purchase_order : row.project_name || row.project_id,
         ...assembly].filter(Boolean);
-      return `<li data-process-spool="${escape(row.item_id)}"><button type="button" class="fst-spool-link" ${attribute}="${escape(row.item_id)}" data-spool-project="${escape(row.project_id || '')}" aria-label="Open process flow for ${escape(spoolNumber(row))}">${spoolText(row, spoolNumber(row), 'strong')}</button>${context.length ? `<small class="fst-spool-context">${context.map(escape).join(' · ')}</small>` : ''}${row.flow_stage?.needs_station_selection ? `<small class="fst-spool-context">Recorded location: ${escape(row.flow_stage.recorded_location_label || 'Unmapped station')}. Select a flow station on the next transfer.</small>` : ''}${row.flow_stage?.blocked || row.on_hold || Number(row.open_exceptions) > 0 ? `<span class="fst-spool-blocked">${row.flow_stage?.key === 'ready_to_ship' ? 'Release blocked' : 'Work blocked'}</span>` : ''}</li>`;
+      return `<li data-process-spool="${escape(row.item_id)}"><button type="button" class="fst-spool-link" ${attribute}="${escape(row.item_id)}" data-spool-project="${escape(row.project_id || '')}" aria-label="Open process flow for ${escape(spoolNumber(row))}">${spoolText(row, spoolNumber(row), 'strong')}</button>${context.length ? `<small class="fst-spool-context">${context.map(escape).join(' · ')}</small>` : ''}${typeof options.renderTiming === 'function' ? options.renderTiming(row) : ''}${row.flow_stage?.needs_station_selection ? `<small class="fst-spool-context">Recorded location: ${escape(row.flow_stage.recorded_location_label || 'Unmapped station')}. Select a flow station on the next transfer.</small>` : ''}${row.flow_stage?.blocked || row.on_hold || Number(row.open_exceptions) > 0 ? `<span class="fst-spool-blocked">${row.flow_stage?.key === 'ready_to_ship' ? 'Release blocked' : 'Work blocked'}</span>` : ''}</li>`;
     };
     const section = (stage, entries, index) => {
       entries.sort((a, b) => compare(spoolNumber(a), spoolNumber(b)) || compare(a.item_id, b.item_id));
@@ -103,4 +103,5 @@
   }
   window.FabFlowStatus = Object.freeze({catalog: Object.freeze(catalog), normalize, className, text, spoolNumber, spoolText, decorateSpool, stationText, badge, legend, processBoard, strip});
 })();
+
 

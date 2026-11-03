@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const ROOT='/api/progress/orders',node=id=>document.getElementById(id),text=v=>String(v??''),arr=v=>Array.isArray(v)?v:[],enc=encodeURIComponent;
-  const state={active:false,sequence:0,loading:false,project:'',choices:[],data:null,error:'',status:'all',kind:'all',query:'',expanded:new Set(),autoOpen:true};
+  const state={active:false,sequence:0,loading:false,project:'',choices:[],data:null,error:'',status:'all',kind:'all',query:'',expanded:new Set(),autoOpen:true,receivedAt:0,timer:null};
   const flowStatus=()=>window.FabFlowStatus;
   const stageText=(value,label,tag='span')=>flowStatus()?.stationText(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;
   const stageBadge=value=>flowStatus()?.badge(value)||'';
@@ -20,6 +20,15 @@
   const finishedLabel=n=>kind(n)==='part'?'Prepared':kind(n)==='spool'?'Fabrication finished':'Finished';
   const statusLabel=n=>n.on_hold?'On hold':n.status==='delivered'?'Delivered':n.status==='shipped'?'Shipped':n.fabrication_finished?finishedLabel(n):'WIP';
   const isFiltered=()=>state.query.trim()||state.status!=='all'||state.kind!=='all';
+
+  const stamp=v=>v?Date.parse(v):NaN;
+  function snapshotNow(){const saved=stamp(state.data?.as_of);return Number.isFinite(saved)?saved+Math.max(0,Date.now()-state.receivedAt):Date.now();}
+  function elapsedLabel(milliseconds){if(!Number.isFinite(milliseconds))return 'Not recorded';const seconds=Math.floor(Math.max(0,milliseconds)/1000);return [Math.floor(seconds/3600),Math.floor(seconds/60)%60,seconds%60].map(v=>String(v).padStart(2,'0')).join(':');}
+  function clock(entered,departed=null,base=0){const start=stamp(entered),end=departed?stamp(departed):snapshotNow();return `<strong class="pp-clock-value" data-pp-clock="${esc(entered||'')}" data-pp-clock-end="${esc(departed||'')}" data-pp-clock-base="${base}">${elapsedLabel(Number.isFinite(start)&&Number.isFinite(end)?base+Math.max(0,end-start):entered?NaN:base)}</strong>`;}
+  function stationClock(row){const station=row.flow_stage||{};return `<div class="pp-station-clock"><span>Time at station</span>${station.station_entered_at?clock(station.station_entered_at):'<strong>Entry not recorded</strong>'}${station.inherited?'<small>Shared assembly time</small>':''}</div>`;}
+  function stationTotal(station,key){const visits=arr(station?.station_visits).filter(v=>v.stage_key===key);if(!visits.length)return '<small class="pp-station-total">No recorded visit</small>';let base=0,entered=null;for(const visit of visits){if(visit.departed_at)base+=Math.max(0,stamp(visit.departed_at)-stamp(visit.entered_at));else entered=visit.entered_at;}return `<div class="pp-station-total"><span>Total time · ${new Set(visits.map(v=>v.visit)).size} visit${new Set(visits.map(v=>v.visit)).size===1?'':'s'}</span>${clock(entered,null,base)}</div>`;}
+  function stationHistory(n){const visits=arr(n.flow_stage?.station_visits);return `<details class="pp-station-history"><summary>Station visit history (${visits.length} records)</summary><p>Elapsed calendar time includes waiting and holds. Each return is a separate visit. Entries marked shared follow the parent assembly. Missing earlier entries remain unrecorded.</p>${visits.length?`<div class="table-wrap"><table><thead><tr><th>Station</th><th>Visit</th><th>Entered</th><th>Departed</th><th>Elapsed HH:MM:SS</th><th>Scope</th></tr></thead><tbody>${visits.map(v=>`<tr><td>${esc(v.label)}</td><td>${quantity(v.visit)}</td><td>${esc(new Date(v.entered_at).toLocaleString())}</td><td>${v.departed_at?esc(new Date(v.departed_at).toLocaleString()):'Current visit'}</td><td>${clock(v.entered_at,v.departed_at)}</td><td>${v.inherited?'Shared · '+esc(v.source_item_id):'This item'}</td></tr>`).join('')}</tbody></table></div>`:'<p>No station entry has been recorded for this item.</p>'}</details>`;}
+  function tickClocks(){if(!state.active)return;for(const el of node('productionProgressContent').querySelectorAll('[data-pp-clock]')){const entered=el.dataset.ppClock,end=el.dataset.ppClockEnd?stamp(el.dataset.ppClockEnd):snapshotNow(),base=Number(el.dataset.ppClockBase)||0;el.textContent=elapsedLabel(entered?base+Math.max(0,end-stamp(entered)):base);}}
   function errorText(error){try{const d=JSON.parse(error.message);if(d.message)return d.message;}catch(_){}return text(error.message||'Production progress could not be loaded.');}
   function key(kind,id){return kind+':'+id;}
   function opened(k,force=false){return force||state.expanded.has(k)?' open':'';}
@@ -45,7 +54,7 @@
   }
   function stageStrip(stages,title='Flow progress',current=null){
     const active=flowStatus()?.normalize(current);
-    const card=(s,index)=>`<li class="pp-stage pp-stage-${esc(s.state)}${active?.key===s.key?' pp-stage-effective-current':''}" data-pp-stage="${esc(s.key)}"${active?.key===s.key?' aria-current="step"':''}><div><strong><span class="pp-stage-sequence">${index+1}</span>${stageText(s,s.label)}</strong><span>${active?.key===s.key?'Current part status':esc(stageNames[s.state]||'Pending')}</span></div>${s.state==='not_applicable'?'<small>No steps on this route</small>':`${meter({completed:s.completed,total:s.total,not_recorded:s.not_recorded,percent:s.percent},s.label,false,true)}`}${quantity(s.missing_records)?`<small class="pp-stage-missing">${quantity(s.missing_records)} required item${s.missing_records===1?'':'s'} still to register</small>`:''}${s.separate?'<small class="pp-shipping-note">Shipment recorded separately</small>':''}</li>`;
+    const card=(s,index)=>`<li class="pp-stage pp-stage-${esc(s.state)}${active?.key===s.key?' pp-stage-effective-current':''}" data-pp-stage="${esc(s.key)}"${active?.key===s.key?' aria-current="step"':''}><div><strong><span class="pp-stage-sequence">${index+1}</span>${stageText(s,s.label)}</strong><span>${active?.key===s.key?'Current part status':esc(stageNames[s.state]||'Pending')}</span></div>${s.state==='not_applicable'?'<small>No steps on this route</small>':`${meter({completed:s.completed,total:s.total,not_recorded:s.not_recorded,percent:s.percent},s.label,false,true)}`}${current?stationTotal(current,s.key):''}${quantity(s.missing_records)?`<small class="pp-stage-missing">${quantity(s.missing_records)} required item${s.missing_records===1?'':'s'} still to register</small>`:''}${s.separate?'<small class="pp-shipping-note">Shipment recorded separately</small>':''}</li>`;
     return `<section class="pp-stage-section"><h3>${esc(title)}</h3><ol class="pp-stage-grid">${arr(stages).map(card).join('')}</ol></section>`;
   }
   function itemStages(n){
@@ -87,25 +96,26 @@
   }
   function stepList(n){
     const k=key('steps',n.id);
-    return `<details class="pp-step-details" data-pp-expand="${esc(k)}"${opened(k)}><summary>Numbered steps for this ${label(n).toLowerCase()} (${quantity(n.progress?.completed)} recorded)</summary><ol class="pp-numbered-steps">${arr(n.steps).map(s=>`<li class="pp-step-${esc(s.state)}"><span class="pp-step-number">${s.number}</span><div><strong>${esc(s.title)}${s.qa?'<span class="pp-qa">QA/QC</span>':''}</strong><small>${esc(stepNames[s.state]||'Pending')}</small></div></li>`).join('')}</ol></details>`;
+    return `<details class="pp-step-details" data-pp-expand="${esc(k)}"${opened(k)}><summary>Numbered steps for this ${label(n).toLowerCase()} (${quantity(n.progress?.completed)} recorded)</summary><ol class="pp-numbered-steps">${arr(n.steps).map(s=>`<li class="pp-step-${esc(s.state)}"><span class="pp-step-number">${s.number}</span><div><strong>${esc(s.title)}${s.qa?'<span class="pp-qa">QA/QC</span>':''}</strong><small>${esc(stepNames[s.state]||'Pending')}</small>${s.state==='current'&&n.step_entered_at?`<div class="pp-step-clock"><span>Time in step</span>${clock(n.step_entered_at)}</div>`:''}</div></li>`).join('')}</ol></details>`;
   }
   function itemDetail(n){
     const hold=arr(n.hold_reasons),warnings=arr(n.blockers),p=n.parts;
     let html=`<div class="pp-current-stage"><span>Flow status</span>${stageBadge(n.flow_stage)||'<strong>Stage not available</strong>'}${n.flow_stage?.inherited?`<small>Following ${esc(n.flow_stage.source_item_id)}</small>`:''}</div><div class="pp-item-facts"><div><span>Current process</span><strong>${n.current_step?`${n.current_step} · `:''}${esc(n.current_title||(n.fabrication_finished?finishedLabel(n):'Route not started'))}</strong></div><div><span>Location</span><strong>${esc(n.location||'Not recorded')}</strong></div><div><span>Responsible employee</span><strong>${esc(n.handler_name||n.handler||'Not recorded')}${n.handler_name&&n.handler?` <small>${esc(n.handler)}</small>`:''}</strong></div></div>`;
+    html+=stationClock(n)+(n.step_entered_at?`<div class="pp-step-clock"><span>Time in current numbered step</span>${clock(n.step_entered_at)}</div>`:'');
     if(n.route_started===false)html+='<p class="pp-info">This item has no started route. The pending steps below show its applicable production path; they do not record any work.</p>';
     if(n.administrative_release)html+='<p class="pp-warning">Administrative release is recorded. It does not complete unrecorded production steps or ordinary QA checks.</p>';
     html+=notes(n.warnings,n.summary);
     if(n.on_hold)html+=`<div class="pp-hold-note"><strong>On hold</strong>${hold.length?`<ul>${hold.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p>Open the process record to review the active hold.</p>'}</div>`;
     if(p?.configured||p?.legacy_scope)html+=`<div class="pp-parts-counts"><strong>${p.configured?'Required components':'Referenced material scope'}</strong><span>${quantity(p.assigned_qty)} / ${quantity(p.required_qty)} assigned</span><span>${quantity(p.received_qty)} received</span><span>${quantity(p.prepared_qty)} prepared</span>${quantity(p.short_qty)?`<span class="pp-warning">${quantity(p.short_qty)} still to assign</span>`:''}${p.reference?`<span>Reference: ${esc(p.reference)}</span>`:''}</div>`;
     if(n.required_spools!==null&&n.required_spools!==undefined)html+=`<p class="pp-info"><strong>Required spools:</strong> ${quantity(n.linked_spools)} linked / ${quantity(n.required_spools)} required${quantity(n.missing_spools)?` · ${quantity(n.missing_spools)} still to link`:''}.</p>`;
-    html+=stageStrip(itemStages(n),`This ${label(n).toLowerCase()}'s flow`,n.flow_stage)+stepList(n);
+    html+=stageStrip(itemStages(n),`This ${label(n).toLowerCase()}'s flow`,n.flow_stage)+stationHistory(n)+stepList(n);
     if(warnings.length)html+=`<details class="pp-readiness"><summary>Readiness checks (${warnings.length})</summary><p>Open requirements can include later QA steps. An open requirement is shown separately from an active hold.</p><ul>${warnings.map(v=>`<li>${esc(v)}</li>`).join('')}</ul></details>`;
     html+=`<div class="actions pp-record-actions">${button('flow','Open process flow',n.id,n.project_id,'primary')}${button('item','Item & QR',n.id,n.project_id)}${n.route==='spool'||n.route==='assembly'?button('welds','Weld records',n.id,n.project_id):''}${n.route==='spool'?button('parts','Parts list',n.id,n.project_id):''}</div>`;
     return html;
   }
   function itemView(n,depth=0){
     const k=key('item',n.id),children=arr(n.children),expanded=opened(k);
-    let html=`<details class="pp-item${n._context?' pp-context':''}" data-pp-expand="${esc(k)}" data-pp-item="${esc(n.id)}"${expanded}><summary><span class="pp-expander" aria-hidden="true"></span><div class="pp-identity"><span class="pp-eyebrow">${esc(label(n))}${n._context?' · Parent context':''}</span>${kind(n)==='spool'?spoolText(n,spoolNumber(n),'strong'):`<strong>${esc(n.id)}</strong>`}${n.part_number?`<small>${kind(n)==='spool'?'Spool number':'Part no.'} ${kind(n)==='spool'?spoolText(n,n.spool_number||n.part_number):esc(n.part_number)}</small>`:''}<div class="pp-identity-stage">${stageBadge(n.flow_stage)}</div><small>${esc(n.current_title||(n.fabrication_finished?finishedLabel(n):'Route not started'))}</small></div><div class="pp-row-progress">${meter(ownProgress(n),`${label(n)} route`,n.fabrication_finished,true)}</div><span class="pp-status ${n.on_hold?'pp-status-hold':n.fabrication_finished?'pp-status-finished':'pp-status-wip'}">${esc(statusLabel(n))}</span></summary>`;
+    let html=`<details class="pp-item${n._context?' pp-context':''}" data-pp-expand="${esc(k)}" data-pp-item="${esc(n.id)}"${expanded}><summary><span class="pp-expander" aria-hidden="true"></span><div class="pp-identity"><span class="pp-eyebrow">${esc(label(n))}${n._context?' · Parent context':''}</span>${kind(n)==='spool'?spoolText(n,spoolNumber(n),'strong'):`<strong>${esc(n.id)}</strong>`}${n.part_number?`<small>${kind(n)==='spool'?'Spool number':'Part no.'} ${kind(n)==='spool'?spoolText(n,n.spool_number||n.part_number):esc(n.part_number)}</small>`:''}<div class="pp-identity-stage">${stageBadge(n.flow_stage)}</div>${stationClock(n)}<small>${esc(n.current_title||(n.fabrication_finished?finishedLabel(n):'Route not started'))}</small></div><div class="pp-row-progress">${meter(ownProgress(n),`${label(n)} route`,n.fabrication_finished,true)}</div><span class="pp-status ${n.on_hold?'pp-status-hold':n.fabrication_finished?'pp-status-finished':'pp-status-wip'}">${esc(statusLabel(n))}</span></summary>`;
     if(!expanded)return html+'</details>';
     html+=`<div class="pp-item-body">${itemDetail(n)}`;
     if(children.length)html+=`<section class="pp-children"><h3>${kind(n)==='assembly'?'Spools':'Individual parts'} <span>${children.length}${isFiltered()?' matching':''}</span></h3>${children.map(c=>itemView(c,depth+1)).join('')}</section>`;
@@ -145,7 +155,7 @@
     else if(state.error)html+=`<div class="pp-state pp-error" role="alert"><strong>Production progress could not be verified.</strong><p>${esc(state.error)}</p>${button('refresh','Try again')}${button('all','All P.O.s')}</div>`;
     else if(state.data){
       const rows=filteredOrders();
-      if(['all','spool'].includes(state.kind))html+=(flowStatus()?.processBoard(processSpools(rows),{attribute:'data-pp-spool'})||'')+(flowStatus()?.legend()||'');
+      if(['all','spool'].includes(state.kind))html+=(flowStatus()?.processBoard(processSpools(rows),{attribute:'data-pp-spool',renderTiming:stationClock})||'')+(flowStatus()?.legend()||'');
       html+='<h2>P.O., assembly &amp; part details</h2>'+summaryView();
       if(isFiltered())html+='<p class="pp-filter-note">Search and status filters keep matching items with their parent context. P.O. progress totals still describe the full selected scope.</p>';
       html+=`<div class="pp-list-tools"><span>${rows.length} matching P.O.${rows.length===1?'':'s'}${state.data.as_of?' · Updated '+esc(new Date(state.data.as_of).toLocaleString()):''}</span><div class="actions">${isFiltered()?button('clear','Clear filters'):''}${button('expand','Expand all')}${button('collapse','Collapse all')}</div></div>`;
@@ -153,7 +163,7 @@
       else html+=`<div class="pp-empty"><strong>${arr(state.data.orders).length?'No items match this view':'No active P.O.s in this view'}</strong><p>${arr(state.data.orders).length?'Clear the search or change the status/type filter.':'Create a P.O. or restore its removed records to see its registered production scope here.'}</p>${isFiltered()?button('clear','Clear filters'):button('orders','Open purchase orders')}</div>`;
       html+='<p class="pp-footnote">Only recorded current-route work advances a bar. Earlier baseline steps stay unrecorded, rework reopens affected steps, and administrative release does not complete route history. Removed records are outside this working view.</p>';
     }
-    node('productionProgressContent').innerHTML=html;node('productionProgressContent').setAttribute('aria-busy',String(state.loading));wire();
+    node('productionProgressContent').innerHTML=html;node('productionProgressContent').setAttribute('aria-busy',String(state.loading));wire();if(state.timer===null&&typeof window.setInterval==='function')state.timer=window.setInterval(tickClocks,1000);
   }
   function wire(){
     const po=node('ppPo');if(po)po.onchange=()=>{state.project=po.value;state.expanded.clear();state.autoOpen=true;return load();};
@@ -172,7 +182,7 @@
   async function load(){
     if(!state.active||!me)return;
     const sequence=++state.sequence,project=state.project;state.loading=true;state.error='';render();
-    try{const d=await api(ROOT+(project?'?project_id='+enc(project):''));if(!state.active||sequence!==state.sequence||project!==state.project)return;if(!validResponse(d,project))throw Error('The production scope response could not be verified. Refresh before relying on this view.');state.data=d;state.choices=d.choices;if(state.autoOpen&&project)state.expanded.add(key('order',project));state.autoOpen=false;expandFiltered();updateUrl();}
+    try{const d=await api(ROOT+(project?'?project_id='+enc(project):''));if(!state.active||sequence!==state.sequence||project!==state.project)return;if(!validResponse(d,project))throw Error('The production scope response could not be verified. Refresh before relying on this view.');state.data=d;state.receivedAt=Date.now();state.choices=d.choices;if(state.autoOpen&&project)state.expanded.add(key('order',project));state.autoOpen=false;expandFiltered();updateUrl();}
     catch(error){if(state.active&&sequence===state.sequence){state.error=errorText(error);state.data=null;}}
     finally{if(state.active&&sequence===state.sequence){state.loading=false;render();}}
   }
@@ -186,5 +196,6 @@
   }
   node('productionProgressContent').addEventListener('click',async event=>{const target=event.target.closest('[data-pp-action],[data-pp-spool]');if(!target||target.disabled)return;try{if(target.dataset.ppSpool)return await act('flow',target.dataset.ppSpool,target.dataset.spoolProject||'');await act(target.dataset.ppAction,target.dataset.ppId||'',target.dataset.ppProject||'');}catch(error){notify(errorText(error));}});
   if(node('navProgress'))node('navProgress').onclick=()=>open();
-  window.FabProductionProgress={open,refresh:load,cancelPending(){state.active=false;state.sequence++;state.loading=false;}};
+  window.FabProductionProgress={open,refresh:load,cancelPending(){state.active=false;state.sequence++;state.loading=false;if(state.timer!==null&&typeof window.clearInterval==='function')window.clearInterval(state.timer);state.timer=null;}};
 })();
+

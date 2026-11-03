@@ -184,11 +184,19 @@ def _piece_definitions(definition):
         for number in range(1, line['quantity'] + 1):
             result.append({'piece_key': f'{line.get("piece_key_prefix", line["item"])}-{number}', 'item': line['item'],
                 'line_number': line_number, 'piece_number': number, 'pieces_on_line': line['quantity'],
+                **({'source_line_number': line['_source_line_number']} if line.get('_source_line_number') else {}),
                 'piece_label': f'Item {line["item"]} · Piece {number:03d} of {line["quantity"]:03d}',
                 **{key: line.get(key, '') for key in ('tas_ln_number', 'description', 'material', 'length_inches', 'length_display')},
                 'part_number': line.get('part_number', line.get('tas_ln_number', '')),
-                'size': line.get('size', ''), 'unit': line.get('unit', 'EA')})
+                'size': line.get('size', ''), 'unit': line.get('unit', 'EA'),
+                **({'source_materials': deepcopy(line['_material_import'])}
+                   if line.get('_material_import') else {})})
     return result
+
+
+def _import_material_values(piece):
+    """Only values explicitly attributed to this piece by the reviewed source."""
+    return {key: (piece.get('source_materials') or {}).get(key, '') for key in MATERIAL_FIELDS}
 
 
 def _source_hash(source):
@@ -196,12 +204,18 @@ def _source_hash(source):
     return hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def _uploaded_definition(document, context):
+def _uploaded_definition(document, context, physical_label=''):
     bom = document.bom or {}
     if not bom.get('lines'):
         return None
-    lines, blockers, total = [], [], 0
+    lines, blockers, total, import_warnings = [], [], 0, []
+    imported = bom.get('traceability_import') or {}
     for index, source in enumerate(bom['lines'], 1):
+        target_id, target_label = source.get('physical_spool_id'), source.get('spool_label')
+        if target_id and target_id != context.get('item_id'):
+            continue
+        if target_label and _key(target_label) != _key(physical_label):
+            continue
         quantity = source.get('quantity')
         try:
             value = Decimal(str(quantity))
@@ -215,17 +229,34 @@ def _uploaded_definition(document, context):
         if whole:
             total += safe_quantity
         prefix = 'L' + hashlib.sha256(f'{document.id}:{document.sha256}:{index}'.encode()).hexdigest()[:20]
-        lines.append({**deepcopy(source), 'quantity': safe_quantity, 'piece_key_prefix': prefix,
+        line = {**deepcopy(source), 'quantity': safe_quantity, 'piece_key_prefix': prefix,
+            '_source_line_number': index,
             'tas_ln_number': str(source.get('part_number') or ''),
             'length_display': str(source.get('length') or ''), 'length_inches': None,
-            'unit': unit, 'item': str(source.get('item') or index)})
+            'unit': unit, 'item': str(source.get('item') or index)}
+        # An inherited requirement is a design scope, not a physical lot.
+        # Only an exact source target or explicit all-copies statement may
+        # propagate lot facts into independently numbered physical spools.
+        source_exact = (imported.get('scope_kind') == 'spool'
+                        and imported.get('physical_spool_id') == context.get('item_id'))
+        assignment_allowed = (source_exact or bool(target_id or target_label)
+                              or source.get('traceability_scope') in ('all_copies', 'all_pieces_all_copies'))
+        source_values = {key: str(source.get(key) or '') for key in MATERIAL_FIELDS if key != 'notes'}
+        if any(source_values.values()):
+            if assignment_allowed and imported.get('version') == 1:
+                line['_material_import'] = {**source_values, 'notes': str(source.get('notes') or '')}
+            else:
+                import_warnings.append(f'Item {line["item"]}: source Heat/MTR or supplier values have not been assigned to this physical spool. Identify the exact physical copy or explicitly confirm the source applies to all copies.')
+        lines.append(line)
+    if not lines:
+        blockers.append('This BOM has no material rows assigned to this physical spool. Upload its own BOM or correct the exact Physical Spool ID / Spool Label in the source.')
     if total > 500:
         blockers.append('The BOM exceeds the 500-piece material-register limit. Review a smaller explicit physical-piece scope; quantities were not rounded or truncated.')
     metadata = _document_source(document)
     return {'catalog_id': 'uploaded:' + document.id, 'spool_number': context['spool_number'],
         'revision': document.revision, 'lines': lines, 'line_count': len(lines),
         'total_pieces': total if not blockers else None, 'traceable': not blockers,
-        'trace_blockers': blockers, '_source': metadata,
+        'trace_blockers': blockers, 'trace_import_warnings': import_warnings, '_source': metadata,
         'source_workbook': {'filename': document.filename, 'sha256': document.sha256,
                             'download_url': metadata['download_url']}}
 
@@ -244,7 +275,12 @@ def physical_bom_state(s, item_id):
     context, item, requirement = _target(s, 'spools', item_id)
     trace = read_get(s, SpoolBomTrace, item.id)
     viewed_document, document, _ = _material_bom_document(s, item.id, requirement)
-    current_definition = _uploaded_definition(document, context) if document else _definition(context['spool_number'])
+    if document:
+        from order_spools import SpoolQrIdentity
+        qr = read_get(s, SpoolQrIdentity, item.id)
+        current_definition = _uploaded_definition(document, context, qr.display_code if qr else '')
+    else:
+        current_definition = _definition(context['spool_number'])
     current = _document_source(document) if document else deepcopy((current_definition or {}).get('_source'))
     viewed = ({**_document_source(viewed_document),
                'view_url': '/api/spool-documents/files/' + quote(viewed_document.id, safe='')}
@@ -316,7 +352,7 @@ def ensure_system_backfill_actor(s):
 
 
 def ensure_material_piece_records(s, item_or_id, actor, reason, *, uploaded_only=True):
-    """Persist blank physical pieces once; caller holds topology and owns commit.
+    """Persist physical pieces and reviewed source facts once; caller owns commit.
 
     An existing pin is never replaced or filled from another source. Revisions
     continue through the explicit adoption workflow, which keeps old history.
@@ -344,12 +380,16 @@ def ensure_material_piece_records(s, item_or_id, actor, reason, *, uploaded_only
     s.flush()
     for piece in pieces:
         s.add(SpoolBomMaterial(spool_id=item.id, piece_key=piece['piece_key'],
-            **{key: '' for key in MATERIAL_FIELDS}, updated_by=actor, updated_at=now))
+            **_import_material_values(piece), updated_by=actor, updated_at=now))
+    imported_materials = [{'piece_key': piece['piece_key'], 'after': _import_material_values(piece)}
+                          for piece in pieces if any(_import_material_values(piece).values())]
     changes = [{'type': 'pieces_initialized', 'source': source, 'piece_count': len(pieces),
-                'after_definition': deepcopy(definition), 'material_values_blank': True}]
+                'after_definition': deepcopy(definition), 'material_values_blank': not bool(imported_materials),
+                'imported_materials': imported_materials}]
     s.add(SpoolBomEvent(spool_id=item.id, version=1, actor=actor, at=now, reason=reason, changes=changes))
     audit(s, item.id, actor, 'SPOOL_MATERIAL_PIECES_INITIALIZED', {
-        'source': source, 'piece_count': len(pieces), 'reason': reason, 'material_values_blank': True})
+        'source': source, 'piece_count': len(pieces), 'reason': reason,
+        'material_values_blank': not bool(imported_materials), 'imported_piece_count': len(imported_materials)})
     s.flush()
     return len(pieces)
 
@@ -692,7 +732,10 @@ def adopt_bom(item_id: str, data: AdoptBomIn, user: Employee = Depends(auth), s:
     trace.updated_by, trace.updated_at = user.badge, now
     for piece in _piece_definitions(definition):
         s.add(SpoolBomMaterial(spool_id=item.id, piece_key=piece['piece_key'],
-            **{key: '' for key in MATERIAL_FIELDS}, updated_by=user.badge, updated_at=now))
+            **_import_material_values(piece), updated_by=user.badge, updated_at=now))
+    changes[0]['imported_materials'] = [
+        {'piece_key': piece['piece_key'], 'after': _import_material_values(piece)}
+        for piece in _piece_definitions(definition) if any(_import_material_values(piece).values())]
     s.add(SpoolBomEvent(spool_id=item.id, version=trace.version, actor=user.badge,
         at=now, reason=data.reason, changes=changes))
     audit(s, item.id, user.badge, 'SPOOL_BOM_ADOPTED', {'version': trace.version, 'reason': data.reason,
@@ -713,4 +756,5 @@ def trace_history(item_id: str, version: int, user: Employee = Depends(auth), s:
         raise HTTPException(404, 'Material history revision not found.')
     return {'spool_id': item_id, 'version': event.version, 'actor': event.actor,
         'at': _stamp(event.at), 'reason': event.reason, 'changes': event.changes}
+
 

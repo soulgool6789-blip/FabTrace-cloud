@@ -75,8 +75,15 @@ def test_exact_eighteen_assembly_thirty_six_spool_correction_preserves_qr_materi
     assert changed_group['gpn_label'] == CURRENT_GPN
     assert changed_group['assembly_number'] == ASSEMBLY_NUMBER
     after = json.loads(database_state(api))
-    for table in set(before) - {'order_gpns', 'purchase_orders', 'audit_events'}:
+    for table in set(before) - {'order_gpns', 'order_google_part_numbers',
+                                'order_assembly_gpn_links', 'purchase_orders', 'audit_events'}:
         assert after[table] == before[table], table
+    # A legacy single-assembly identity correction now explicitly re-parents
+    # that assembly to the separate current GPN record; physical evidence is
+    # still byte-for-byte unchanged by the correction above.
+    assert changed_group['gpn_record_id'] != saved['assemblies'][0]['gpn_record_id']
+    assert next(row for row in changed['gpn_records']
+                if row['id'] == changed_group['gpn_record_id'])['gpn'] == CURRENT_GPN
     old_group = next(row for row in before['order_gpns'] if row['id'] == target)
     new_group = next(row for row in after['order_gpns'] if row['id'] == target)
     assert old_group['gpn_label'] is None and new_group['gpn_label'] == CURRENT_GPN
@@ -196,3 +203,4 @@ def test_current_gpn_correction_keeps_version_order_scope_and_assembly_uniquenes
     assert api.patch(path(corrected, index), {**body(corrected), 'gpn': CURRENT_GPN}).status_code == 422
     assert database_state(api) == before
     assert detail(api, other['order']['project_id'])['assemblies'][0]['gpn_label'] == 'UNCONFIRMED-643-777'
+

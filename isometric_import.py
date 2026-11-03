@@ -34,10 +34,10 @@ from orders import _key
 from removals import item_not_removed
 from isometric_bom import extract_isometric_boms
 from spool_documents import (
-    BOM_COLUMNS, MAX_LINES, MAX_SCOPE_BYTES, XLSX_MEDIA, SpoolDocument,
+    BOM_COLUMNS, TRACEABILITY_COLUMNS, MAX_LINES, MAX_SCOPE_BYTES, XLSX_MEDIA, SpoolDocument,
     SpoolDocumentFile, SpoolDocumentFileLink, SpoolDocumentSet, _bom_grid,
     _assembly_identity, _can_upload, _detail, _fail, _locked_reason, _metadata,
-    _prepare, _safe_filename, _set_for, _stamp, _stored_file, _target, _text,
+    _prepare, _safe_filename, _set_for, _stamp, _stored_file, _target, _text, _validate_bom_physical_targets,
 )
 
 
@@ -331,7 +331,11 @@ def _reviewed_bom(lines, candidate, context):
                   'source_page': ', '.join(str(page) for page in candidate['source_pages'])}
         rows.append([values.get(field, '') for field in EXCEL_COLUMNS])
     bom = _bom_grid(rows, context['spool_number'], context['assembly_number'], 'BOM')
-    bom['warnings'] = list(candidate.get('warnings', []))
+    bom['traceability_import'] = {'version': 1, 'scope_kind': context['kind'],
+        'physical_spool_id': context.get('item_id'), 'source_line_count': sum(
+            any(line.get(key) for key in ('heat_number', 'mtr_reference', 'mtr_url', 'supplier_piece_id'))
+            for line in bom['lines'])}
+    bom['warnings'] = list(candidate.get('warnings', [])) + bom.get('warnings', [])
     bom['source_pages'] = candidate['source_pages']
     return bom
 
@@ -339,7 +343,7 @@ def _reviewed_bom(lines, candidate, context):
 def _material_values(lines):
     """Comparable reviewed fields; source blanks stay blank for provenance."""
     return [{field: (line.get(field) if field == 'quantity' else
-                     _text(line.get(field), 2000 if field == 'notes' else 1000)
+                     _text(line.get(field), 2000 if field in ('notes', 'mtr_url') else 1000)
                      or ('EA' if field == 'unit' else ''))
              for field in BOM_COLUMNS} for line in lines]
 
@@ -359,7 +363,9 @@ def build_bom_excel(bom, context, *, source=None, revision='', provenance=None):
     sheet = workbook.active
     sheet.title = 'BOM'
     sheet.sheet_view.showGridLines = False
-    last_column = get_column_letter(len(EXCEL_COLUMNS))
+    columns = [field for field in EXCEL_COLUMNS if field not in TRACEABILITY_COLUMNS
+               or any(line.get(field) for line in bom['lines'])]
+    last_column = get_column_letter(len(columns))
     sheet.merge_cells(f'A1:{last_column}1')
     _write_text(sheet['A1'], 'FABTRACE  |  SPOOL BILL OF MATERIAL')
     sheet['A1'].font = Font(name='Aptos', size=17, bold=True, color='FFFFFF')
@@ -371,19 +377,21 @@ def build_bom_excel(bom, context, *, source=None, revision='', provenance=None):
             ('Document revision', revision),
             ('Source drawing', (source or {}).get('filename', 'Uploaded BOM')),
             ('Source pages', ', '.join(str(page) for page in bom.get('source_pages', []))),
-            ('Quantity basis', 'One spool; quantities are not multiplied by assembly or order quantity.')]
+            ('Quantity basis', ('Named physical spools; each targeted row applies only to its named copy.'
+                                if bom.get('quantity_basis') == 'named_physical_spools' else
+                                'One spool; quantities are not multiplied by assembly or order quantity.'))]
     for row_number, (label, value) in enumerate(meta, 3):
         _write_text(sheet.cell(row_number, 1), label)
         sheet.cell(row_number, 1).font = Font(name='Aptos', bold=True, color='17304B')
-        sheet.merge_cells(start_row=row_number, start_column=2, end_row=row_number, end_column=len(EXCEL_COLUMNS))
+        sheet.merge_cells(start_row=row_number, start_column=2, end_row=row_number, end_column=len(columns))
         _write_text(sheet.cell(row_number, 2), value)
     start = 11
-    for column, field in enumerate(EXCEL_COLUMNS, 1):
+    for column, field in enumerate(columns, 1):
         _write_text(sheet.cell(start, column), field)
         sheet.cell(start, column).font = Font(name='Aptos', bold=True, color='FFFFFF')
         sheet.cell(start, column).fill = PatternFill('solid', fgColor='17304B')
     for row_number, line in enumerate(bom['lines'], start + 1):
-        for column, field in enumerate(EXCEL_COLUMNS, 1):
+        for column, field in enumerate(columns, 1):
             cell = sheet.cell(row_number, column)
             value = line.get(field, context.get('spool_number', '') if field == 'spool_number' else '')
             if field == 'quantity':
@@ -398,8 +406,13 @@ def build_bom_excel(bom, context, *, source=None, revision='', provenance=None):
     table = Table(displayName='SpoolBOM', ref=f'A{start}:{last_column}{start + len(bom["lines"])}')
     table.tableStyleInfo = TableStyleInfo(name='TableStyleMedium2', showRowStripes=True)
     sheet.add_table(table)
-    for column, width in zip('ABCDEFGHIJKLM', [30, 9, 12, 9, 18, 64, 14, 19, 20, 62, 23, 13, 15]):
-        sheet.column_dimensions[column].width = width
+    widths = {'spool_number': 30, 'item': 9, 'quantity': 12, 'unit': 9, 'part_number': 18,
+              'description': 64, 'size': 14, 'material': 19, 'length': 20, 'notes': 62,
+              'drawing': 23, 'revision': 13, 'source_page': 15, 'heat_number': 22,
+              'mtr_reference': 30, 'mtr_url': 46, 'supplier': 25, 'supplier_piece_id': 25,
+              'physical_spool_id': 34, 'spool_label': 34, 'traceability_scope': 26}
+    for number, field in enumerate(columns, 1):
+        sheet.column_dimensions[get_column_letter(number)].width = widths.get(field, 24)
     sheet.freeze_panes = f'F{start + 1}'
     sheet.print_title_rows = f'1:{start}'
     sheet.print_options.horizontalCentered = True
@@ -526,6 +539,7 @@ def import_isometric(scope: str, identity: str, review: str = Form(...),
                 _fail(current['locked_reason'] or 'You cannot update documents for this spool.', 409)
             if current['version'] != plan['target']['version']:
                 _fail('Documents for a selected spool changed after preview. Refresh the drawing review.', 409)
+            _validate_bom_physical_targets(s, current['context'], plan['bom'])
 
         package_id = 'sip_' + uuid.uuid4().hex
         reviewed_at = _stamp(utcnow())
@@ -657,3 +671,4 @@ def download_bom_excel(document_id: str, user: Employee = Depends(auth), s: Sess
         'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy': "sandbox; default-src 'none'; frame-ancestors 'self'",
         'X-Frame-Options': 'SAMEORIGIN'})
+

@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const ROOT='/api/order-setup',node=id=>document.getElementById(id),arr=v=>Array.isArray(v)?v:[],text=v=>String(v??''),enc=encodeURIComponent;
-  const state={active:false,sequence:0,loading:false,saving:false,po:'',list:null,detail:null,error:'',notice:'',query:'',wizard:null,documentSetup:null,formError:'',stale:false,key:0,pausedDraft:null};
+  const state={active:false,sequence:0,loading:false,saving:false,po:'',list:null,detail:null,error:'',notice:'',query:'',wizard:null,gpnEditor:null,documentSetup:null,formError:'',stale:false,key:0,pausedDraft:null};
   const limits={assemblies:100,spools:200,quantity:10000,welds:500};
   const permissions=()=>state.detail?.permissions||state.list?.permissions||{};
   const canManage=()=>window.FabPermissions?.can('manage_production')===true&&permissions().can_manage===true;
@@ -68,10 +68,42 @@
     const d=state.detail,o=d.order;
     let html=headline(`P.O. ${o.purchase_order}`,'Assembly quantities, spool quantities and the number of welds on each spool.',button('home','← All orders')+button('qr-labels',canManage()?'Generate spool QR labels':'View spool QR labels','','primary',state.saving)+(canManage()?button('add','Add assembly number','', '',state.saving):''));
     html+=counts(d.totals)+unknown(d.totals)+(window.FabFlowStatus?.legend()||'');
+    html+=gpnRecords();
     if(!d.assemblies.length)html+=`<section class="os-empty"><h2>Add the first assembly number</h2><p>Enter its Google part number, the number of assemblies needed and its spool quantities.</p>${canManage()?button('add','Add assembly number','','primary',state.saving):''}</section>`;
-    else html+=`<div class="os-assembly-list">${d.assemblies.map(a=>`<details class="os-saved-assembly" open><summary><span class="os-chevron" aria-hidden="true"></span><div>${assemblyIdentity(a)}</div><div class="os-assembly-count"><span>Assemblies needed</span><strong>${display(a.assembly_quantity)}</strong></div><div class="os-assembly-count"><span>Total spools</span><strong>${display(a.total_spools)}</strong></div></summary><div class="os-saved-body">${a.assembly_quantity===null?'<p class="os-attention">Assembly quantity and spool requirements have not been entered for this number.</p>':`<p class="os-quantity-explanation"><strong>${display(a.assembly_quantity)} assemblies</strong> × <strong>${display(a.spools_per_assembly)} spools per assembly</strong> = <strong>${display(a.total_spools)} total spools</strong></p>`}${assemblyUpload(a)}${a.spools.length?`<div class="os-table-wrap"><table class="os-saved-spools"><thead><tr><th>Spool number / individual copies</th><th>Qty per assembly</th><th>Welds per spool</th><th>Total on this P.O.</th></tr></thead><tbody>${a.spools.map(s=>`<tr><td>${spoolIdentity(s)}<div>${window.FabSpoolDocuments?.link('requirements',s.id,s.spool_number,'BOM & drawings','bom')||''}</div><p class="os-document-status" id="osDocumentStatus-${esc(s.id)}">${documentStatus(s)}</p></td><td data-label="Qty per assembly">${display(s.quantity_per_assembly)}</td><td data-label="Welds per spool">${display(s.welds_per_spool)}${weldProgress(s)}</td><td data-label="Total on this P.O.">${display(s.total_quantity)}</td></tr>`).join('')}</tbody></table></div>`:''}${a.locked_reason?`<p class="os-note">${esc(a.locked_reason)}</p>`:''}<div class="actions os-assembly-actions">${canManage()&&a.assembly_number_editable===true?button('identity','Edit GPN / Assembly Number',a.gpn_id):''}${canManage()&&a.editable?button('edit',a.assembly_quantity===null?'Enter quantities':'Edit quantities & welds',a.gpn_id):canManage()&&a.welds_editable?button('edit','Set weld counts',a.gpn_id):''}${button('qr-gpn','Spool QR labels',a.gpn_id)}${button('production-gpn','Production records',a.gpn_id)}${canRemove()?button('remove-gpn','Remove assembly',a.gpn_id,'fr-danger'):''}</div></div></details>`).join('')}</div>`;
+    else html+=`<div class="os-assembly-list">${d.assemblies.map(a=>`<details class="os-saved-assembly" open><summary><span class="os-chevron" aria-hidden="true"></span><div>${assemblyIdentity(a)}</div><div class="os-assembly-count"><span>Assemblies needed</span><strong>${display(a.assembly_quantity)}</strong></div><div class="os-assembly-count"><span>Total spools</span><strong>${display(a.total_spools)}</strong></div></summary><div class="os-saved-body">${a.assembly_quantity===null?'<p class="os-attention">Assembly quantity and spool requirements have not been entered for this number.</p>':`<p class="os-quantity-explanation"><strong>${display(a.assembly_quantity)} assemblies</strong> × <strong>${display(a.spools_per_assembly)} spools per assembly</strong> = <strong>${display(a.total_spools)} total spools</strong></p>`}${assemblyUpload(a)}${a.spools.length?`<div class="os-table-wrap"><table class="os-saved-spools"><thead><tr><th>Spool number / individual copies</th><th>Qty per assembly</th><th>Welds per spool</th><th>Total on this P.O.</th></tr></thead><tbody>${a.spools.map(s=>`<tr><td>${spoolIdentity(s)}<div>${window.FabSpoolDocuments?.link('requirements',s.id,s.spool_number,'BOM & drawings','bom')||''}</div><p class="os-document-status" id="osDocumentStatus-${esc(s.id)}">${documentStatus(s)}</p></td><td data-label="Qty per assembly">${display(s.quantity_per_assembly)}</td><td data-label="Welds per spool">${display(s.welds_per_spool)}${weldProgress(s)}</td><td data-label="Total on this P.O.">${display(s.total_quantity)}</td></tr>`).join('')}</tbody></table></div>`:''}${a.locked_reason?`<p class="os-note">${esc(a.locked_reason)}</p>`:''}<div class="actions os-assembly-actions">${canManage()&&a.assembly_number_editable===true?button('identity','Edit assembly',a.gpn_id):''}${canManage()&&a.editable?button('edit',a.assembly_quantity===null?'Enter quantities':'Edit quantities & welds',a.gpn_id):canManage()&&a.welds_editable?button('edit','Set weld counts',a.gpn_id):''}${button('qr-gpn','Spool QR labels',a.gpn_id)}${button('production-gpn','Production records',a.gpn_id)}${canRemove()?button('remove-gpn','Remove assembly',a.gpn_id,'fr-danger'):''}</div></div></details>`).join('')}</div>`;
     html+=`<details class="os-secondary"><summary>P.O. options and production records</summary><div class="actions">${button('refresh','Refresh','', '',state.saving)}${button('production','Production records')}${button('progress','Production progress')}${canRemove()?button('remove-order','Remove P.O.',o.project_id,'fr-danger'):''}</div></details>`;
     return html;
+  }
+  function gpnRecords(){
+    const rows=arr(state.detail?.gpn_records);
+    return `<section class="os-gpn-section"><div class="os-gpn-heading"><div><h2>Google part numbers</h2><p class="os-note">Each GPN has its own record. Add one or more assemblies under the matching GPN.</p></div>${canManage()?button('add-gpn','Add GPN','', '',state.saving):''}</div>${rows.length?`<div class="os-gpn-records">${rows.map(r=>`<article class="os-gpn-record" data-os-gpn-record="${esc(r.id)}"><div><span class="os-eyebrow">GPN</span><h3>${esc(r.gpn)}</h3>${r.description?`<p class="os-note">${esc(r.description)}</p>`:''}<span class="os-note">${display(r.assembly_count)} assembly ${r.assembly_count===1?'record':'records'}</span></div><div class="actions">${canManage()?button('edit-gpn','Edit GPN',r.id)+button('add-gpn-assembly','Add assembly',r.id):''}</div></article>`).join('')}</div>`:'<p class="os-note">No GPN records have been added yet.</p>'}</section><h2 class="os-assemblies-heading">Assembly records</h2>`;
+  }
+  function parentGpnChoice(a){
+    const label=businessGpn(a),rows=arr(state.detail?.gpn_records);
+    if(!rows.length)return field('osGpn-'+a.key,'Parent GPN record',a.gpn_label,{data:`data-os-field="gpn_label" data-os-assembly="${a.key}"`,placeholder:'Enter the Google part number'});
+    const values=rows.map(r=>r.gpn);if(!values.includes(label))values.unshift(label);
+    return `<div class="field"><label for="osGpn-${a.key}">Parent GPN record</label><select id="osGpn-${a.key}" data-os-field="gpn_label" data-os-assembly="${a.key}"${state.saving?' disabled':''}>${values.map(value=>`<option value="${esc(value)}"${value===label?' selected':''}>${esc(value)}</option>`).join('')}</select></div>`;
+  }
+  function gpnEditor(){
+    const f=state.gpnEditor;
+    return headline(f.id?'Edit GPN record':'Add GPN record',`P.O. ${state.detail.order.purchase_order}`,button('close-gpn','Close','', '',state.saving))+
+      (state.formError?`<div class="os-form-error" role="alert"><p>${esc(state.formError)}</p>${state.stale?button('reload','Reload saved order'):''}</div>`:'')+
+      `<form id="osGpnRecordForm" novalidate><fieldset${state.saving?' disabled':''}><section class="os-entry-card">${field('osGpnRecordNumber','Google part number',f.gpn,{data:'data-os-gpn-field="gpn"',placeholder:'Enter the GPN'})}${field('osGpnRecordDescription','Description (optional)',f.description,{max:500,data:'data-os-gpn-field="description"'})}${f.id?`<p class="os-note">This correction applies to the GPN label on all ${display(f.assembly_count)} linked assembly records. Each assembly keeps its own number, quantities and production history.</p>${field('osGpnRecordReason','Reason for this correction',f.reason,{max:3000,data:'data-os-gpn-field="reason"'})}`:''}</section></fieldset><div class="os-wizard-footer"><span>${f.id?'Edit this GPN independently from assembly numbers.':'Add assemblies to this GPN after saving.'}</span><button type="submit" class="primary"${state.saving||state.stale?' disabled':''}>${state.saving?'Saving…':'Save GPN record'}</button></div></form>`;
+  }
+  function beginGpn(id=''){
+    if(!canManage()||state.saving)return;
+    const row=id?arr(state.detail?.gpn_records).find(r=>r.id===id):null;if(id&&!row)return;
+    state.wizard=null;state.documentSetup=null;state.formError='';state.stale=false;state.notice='';
+    state.gpnEditor={id,gpn:row?.gpn||'',description:row?.description||'',assembly_count:row?.assembly_count||0,reason:''};render();node('osGpnRecordNumber')?.focus();
+  }
+  async function saveGpn(){
+    const f=state.gpnEditor;if(!f||state.saving||state.stale||!canManage())return;
+    state.formError=!f.gpn.trim()||f.gpn.trim().length>160?'Enter a GPN from 1 to 160 characters.':f.description.length>500?'Keep the description within 500 characters.':f.id&&(f.reason.trim().length<4||f.reason.trim().length>3000)?'Enter a reason from 4 to 3,000 characters.':'';
+    if(state.formError){render();return;}
+    const sequence=++state.sequence,payload={expected_version:state.detail.order.version,gpn:f.gpn.trim(),description:f.description.trim(),...(f.id?{reason:f.reason.trim()}:{})};state.saving=true;render();
+    try{const d=await api(ROOT+'/'+enc(state.po)+'/gpn-records'+(f.id?'/'+enc(f.id):''),{method:f.id?'PATCH':'POST',body:JSON.stringify(payload)});if(!state.active||sequence!==state.sequence)return;if(!validDetail(d,state.po)||!arr(d.gpn_records).some(r=>r.id===d.saved_gpn_record_id))throw Error('The saved GPN response could not be verified. Reload the P.O.');state.detail=d;state.gpnEditor=null;state.notice='GPN record saved.';state.formError='';}
+    catch(error){if(state.active&&sequence===state.sequence){state.formError=errorText(error);state.stale=error.status===409||error.message.startsWith('The saved GPN');}}
+    finally{if(sequence===state.sequence){state.saving=false;if(state.active)render();}}
   }
   function documentStatus(spoolRow){
     const saved={...spoolRow.documents,...state.documentSetup?.saved?.[spoolRow.id]};
@@ -109,9 +141,9 @@
   }
   function identityEditor(){
     const f=state.wizard,a=f.assemblies[0];
-    return headline('Edit GPN / Assembly Number',`P.O. ${state.detail.order.purchase_order}`,button('pause','Close setup','', '',state.saving))+
-      (state.formError?`<div class="os-form-error" role="alert"><strong>Please check the GPN and assembly number</strong><p>${esc(state.formError)}</p>${state.stale?button('reload','Reload saved setup','', '',state.saving):''}</div>`:'')+
-      `<form id="orderSetupForm" novalidate><fieldset${state.saving?' disabled':''}><section class="os-entry-card"><div class="os-assembly-fields os-identity-fields">${field('osAssemblyNumber-'+a.key,'Assembly Number (optional)',a.assembly_number,{data:`data-os-field="assembly_number" data-os-assembly="${a.key}"`,placeholder:'Enter when known'})}${field('osGpn-'+a.key,'GPN',a.gpn_label,{data:`data-os-field="gpn_label" data-os-assembly="${a.key}"`,placeholder:'Enter the Google part number'})}</div><p class="os-note">These values apply to this assembly entry and its physical copies. GPN is required; leave the Assembly Number blank when unknown.</p>${field('osReason','Reason for this update',f.reason,{max:3000,data:'data-os-field="reason"',placeholder:'Explain the GPN or assembly number correction'})}</section></fieldset><div class="os-wizard-footer"><span>${state.saving?'Saving the GPN and assembly number…':'Spool quantities and physical records are retained.'}</span><div class="actions"><button id="osSave" type="submit" class="primary"${state.saving||state.stale?' disabled':''}>${state.saving?'Saving…':'Save GPN and assembly number'}</button></div></div></form>`;
+    return headline('Edit assembly record',`P.O. ${state.detail.order.purchase_order}`,button('pause','Close setup','', '',state.saving))+
+      (state.formError?`<div class="os-form-error" role="alert"><strong>Please check the assembly number and GPN selection</strong><p>${esc(state.formError)}</p>${state.stale?button('reload','Reload saved setup','', '',state.saving):''}</div>`:'')+
+      `<form id="orderSetupForm" novalidate><fieldset${state.saving?' disabled':''}><section class="os-entry-card"><div class="os-assembly-fields os-identity-fields">${field('osAssemblyNumber-'+a.key,'Assembly Number (optional)',a.assembly_number,{data:`data-os-field="assembly_number" data-os-assembly="${a.key}"`,placeholder:'Enter when known'})}${parentGpnChoice(a)}</div><p class="os-note">Choose the parent GPN for this assembly. To correct a GPN across all its assemblies, use Edit GPN under Google part numbers. Leave the Assembly Number blank when unknown.</p>${field('osReason','Reason for this update',f.reason,{max:3000,data:'data-os-field="reason"',placeholder:'Explain the GPN or assembly number correction'})}</section></fieldset><div class="os-wizard-footer"><span>${state.saving?'Saving the GPN and assembly number…':'Spool quantities and physical records are retained.'}</span><div class="actions"><button id="osSave" type="submit" class="primary"${state.saving||state.stale?' disabled':''}>${state.saving?'Saving…':'Save assembly record'}</button></div></div></form>`;
   }
   function documentStep(){
     const setup=state.documentSetup,d=state.detail,groups=d.assemblies.filter(a=>setup.gpn_ids.includes(a.gpn_id));
@@ -124,10 +156,11 @@
     if(!state.active)return;let html='';
     if(state.loading)html=headline('Purchase orders','')+'<div class="os-state" role="status">Loading purchase orders…</div>';
     else if(state.error)html=headline('Purchase orders','')+`<div class="os-state os-form-error" role="alert"><strong>The P.O. could not be opened.</strong><p>${esc(state.error)}</p><div class="actions">${button('refresh','Try again')}${button('home','All P.O.s')}</div></div>`;
-    else{html+=pausedDraftNotice();if(state.notice)html+=`<div class="os-notice" role="status">${esc(state.notice)}</div>`;html+=state.documentSetup?documentStep():state.wizard?wizard():state.detail?detail():board();}
+    else{html+=pausedDraftNotice();if(state.notice)html+=`<div class="os-notice" role="status">${esc(state.notice)}</div>`;html+=state.gpnEditor?gpnEditor():state.documentSetup?documentStep():state.wizard?wizard():state.detail?detail():board();}
     node('orderSetupContent').innerHTML=html;node('orderSetupContent').setAttribute('aria-busy',String(state.loading));
     const search=node('osSearch');if(search)search.oninput=()=>{state.query=search.value;const caret=search.selectionStart;render();node('osSearch')?.focus();node('osSearch')?.setSelectionRange(caret,caret);};
     const form=node('orderSetupForm');if(form)form.onsubmit=e=>{e.preventDefault();return !state.wizard.identityOnly&&state.wizard.step<3?next():save();};
+    const gpnForm=node('osGpnRecordForm');if(gpnForm)gpnForm.onsubmit=e=>{e.preventDefault();return saveGpn();};
     window.FabNavigation?.changed();
   }
   function validation(lastStep){
@@ -159,6 +192,7 @@
     state.notice='';state.formError='';state.stale=false;state.documentSetup=null;state.wizard={mode,identityOnly:mode==='identity',weldsOnly:mode==='edit'&&!a.editable,step:mode==='new'?1:mode==='edit'&&!a.editable?3:2,gpn_id:gpnId,purchase_order:mode==='new'?'':state.detail.order.purchase_order,reason:'',assemblies:[assembly(a)]};render();focusStep();
   }
   function input(target){
+    if(state.gpnEditor&&target?.dataset?.osGpnField&&!state.saving){const key=target.dataset.osGpnField;if(['gpn','description','reason'].includes(key))state.gpnEditor[key]=target.value;return;}
     const f=state.wizard;if(!f||state.saving||target?.disabled||!target?.dataset?.osField)return;const name=target.dataset.osField;
     if(name==='purchase_order'||name==='reason'){f[name]=target.value;return;}
     if(f.weldsOnly&&name!=='welds_per_spool'||f.identityOnly&&!['assembly_number','gpn_label'].includes(name))return;
@@ -179,12 +213,12 @@
     finally{if(sequence===state.sequence){state.saving=false;if(state.active)render();}}
   }
   async function load(){
-    if(!state.active||!me||state.saving)return;const sequence=++state.sequence,po=state.po;state.loading=true;state.error='';state.wizard=null;state.documentSetup=null;state.formError='';state.stale=false;render();
+    if(!state.active||!me||state.saving)return;const sequence=++state.sequence,po=state.po;state.loading=true;state.error='';state.wizard=null;state.gpnEditor=null;state.documentSetup=null;state.formError='';state.stale=false;render();
     try{const d=await api(ROOT+(po?'/'+enc(po):''));if(!state.active||sequence!==state.sequence||po!==state.po)return;if(po?!validDetail(d,po):!validList(d))throw Error('The P.O. response could not be verified. Refresh to try again.');if(po)state.detail=d;else{state.list=d;state.detail=null;}url();}
     catch(error){if(state.active&&sequence===state.sequence){state.error=errorText(error);state.detail=null;}}
     finally{if(state.active&&sequence===state.sequence){state.loading=false;render();}}
   }
-  async function open(options={}){if(!me)return;show('orderSetupPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;state.saving=false;state.po=text(options.po||'');state.detail=null;state.list=null;state.query='';state.notice='';state.wizard=null;state.documentSetup=null;await load();}
+  async function open(options={}){if(!me)return;show('orderSetupPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;state.active=true;state.saving=false;state.po=text(options.po||'');state.detail=null;state.list=null;state.query='';state.notice='';state.wizard=null;state.documentSetup=null;await load();if(state.active&&state.detail&&options.gpnRecord&&canManage())beginGpn(options.gpnRecord);if(state.active&&state.detail&&options.addGpn===true&&canManage())beginGpn();}
   const copy=value=>JSON.parse(JSON.stringify(value));
   function pauseDraft(){
     if(state.saving||!state.wizard)return;
@@ -197,7 +231,7 @@
   }
   function navigationState(){
     return copy({po:state.po,list:state.list,detail:state.detail,error:state.error,notice:state.notice,query:state.query,
-      wizard:state.wizard,documentSetup:state.documentSetup,formError:state.formError,stale:state.stale,key:state.key,pausedDraft:state.pausedDraft});
+      wizard:state.wizard,gpnEditor:state.gpnEditor,documentSetup:state.documentSetup,formError:state.formError,stale:state.stale,key:state.key,pausedDraft:state.pausedDraft});
   }
   async function restoreNavigation(snapshot){
     if(!me||!snapshot||typeof snapshot.po!=='string')return open();
@@ -205,6 +239,7 @@
     const nextKey=Math.max(state.key,snapshot.key||0),sequence=state.sequence+1;
     Object.assign(state,copy(snapshot),{active:true,saving:false,loading:false,key:nextKey,sequence});
     url();
+    if(state.gpnEditor){render();node('osGpnRecordNumber')?.focus();return;}
     if(state.wizard){render();focusStep();return;}
     const documentSetup=state.documentSetup,notice=state.notice;
     await load();
@@ -212,6 +247,7 @@
   }
   async function back(){
     if(!state.active)return false;if(state.saving||state.loading)return true;
+    if(state.gpnEditor){state.gpnEditor=null;state.formError='';render();return true;}
     if(state.wizard){
       const f=state.wizard;if(!f.weldsOnly&&f.step>(f.mode==='new'?1:2)){f.step--;state.formError='';render();focusStep();}else pauseDraft();
       return true;
@@ -223,6 +259,9 @@
   async function act(action,id){
     if(state.saving)return;
     if(action==='physical-spool')return openItem(id);
+    if(action==='add-gpn')return beginGpn();if(action==='edit-gpn')return beginGpn(id);
+    if(action==='close-gpn'){state.gpnEditor=null;state.formError='';render();return;}
+    if(action==='add-gpn-assembly'){const row=arr(state.detail?.gpn_records).find(r=>r.id===id);if(!row||!canManage())return;begin('add');state.wizard.assemblies[0].gpn=row.gpn;state.wizard.assemblies[0].gpn_label=row.gpn;render();focusStep();return;}
     if(action==='pause')return pauseDraft();if(action==='resume')return resumeDraft();if(action==='documents-back')return back();
     if(action==='finish-documents'||action==='skip-documents'){state.documentSetup=null;state.notice='P.O. setup saved. You can upload or view documents beside each spool number at any time.';render();return;}
     if(action==='upload-assembly'){const a=state.detail?.assemblies.find(a=>a.gpn_id===id);if(a?.spools.length)return window.FabSpoolDocuments.open({kind:'requirements',id:a.spools[0].id,tab:'upload'});return;}
@@ -241,6 +280,7 @@
   }
   node('orderSetupContent').addEventListener('click',async event=>{const target=event.target.closest('[data-os-action]');if(!target||target.disabled)return;try{await act(target.dataset.osAction,target.dataset.osId||'');}catch(error){notify(errorText(error));}});
   node('orderSetupContent').addEventListener('input',event=>input(event.target));
+  node('orderSetupContent').addEventListener('change',event=>input(event.target));
   document.addEventListener('fabtrace:spool-documents-saved',event=>{
     const change=event.detail;if(!state.active||change?.kind!=='requirements'||!['bom','isometric'].includes(change.document_kind))return;
     if(state.documentSetup){const saved=state.documentSetup.saved[change.id]||(state.documentSetup.saved[change.id]={});saved[change.document_kind]=true;}
@@ -249,4 +289,5 @@
   if(node('navOrders'))node('navOrders').onclick=()=>open();
   window.FabOrderSetup={open,refresh:load,navigationState,restoreNavigation,back,canNavigateAway:()=>!state.saving,cancelPending(){state.active=false;state.sequence++;state.loading=false;state.saving=false;}};
 })();
+
 

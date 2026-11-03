@@ -13,7 +13,7 @@ import io
 import json
 import re
 import unicodedata
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import uuid
 import zipfile
 
@@ -45,8 +45,10 @@ MAX_SCOPE_BYTES = 256 * 1024 * 1024
 MAX_FILES = 40
 MAX_PAGES = 200
 MAX_LINES = 500
+TRACEABILITY_COLUMNS = ['heat_number', 'mtr_reference', 'mtr_url', 'supplier',
+                        'supplier_piece_id', 'physical_spool_id', 'spool_label', 'traceability_scope']
 BOM_COLUMNS = ['item', 'quantity', 'unit', 'part_number', 'description', 'size',
-               'material', 'length', 'notes']
+               'material', 'length', 'notes', *TRACEABILITY_COLUMNS]
 XLSX_MEDIA = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 
@@ -474,6 +476,18 @@ ALIASES = {
     'source_page': ('sourcepage', 'sourcepages', 'sourcesheet', 'sheet', 'page'),
     'assembly_number': ('assemblynumber', 'assembly'),
     'gpn': ('gpn', 'googlepartnumber'),
+    'heat_number': ('heatnumber', 'heatno', 'heat', 'heatid', 'melt', 'meltnumber', 'meltno'),
+    'mtr_reference': ('mtrreference', 'mtrref', 'mtrnumber', 'mtrno', 'mtr',
+                      'milltestreport', 'milltestreportnumber', 'materialtestreport',
+                      'materialtestreportnumber', 'materialtestreportreference', 'milltestreportreference',
+                      'mtrdocument', 'materialcertificate', 'certificate', 'certificatenumber', 'certno', 'certref'),
+    'mtr_url': ('mtrurl', 'mtrlink', 'mtrdocumentlink', 'certificatelink'),
+    'supplier': ('supplier', 'vendor', 'suppliername'),
+    'supplier_piece_id': ('supplierpieceid', 'pieceid', 'pieceidentifier', 'materialpieceid',
+                          'componentid', 'serialnumber', 'serialno'),
+    'physical_spool_id': ('physicalspoolid', 'spoolinstanceid', 'spoolrecordid'),
+    'spool_label': ('spoollabel', 'physicalspoollabel', 'physicalspoolnumber', 'spoolqr', 'spoolqrcode'),
+    'traceability_scope': ('traceabilityscope', 'materialscope', 'heatscope'),
 }
 HEADER_MAP = {alias: field for field, aliases in ALIASES.items() for alias in aliases}
 
@@ -492,6 +506,70 @@ def _text(value, maximum=1000):
     return text
 
 
+def _validate_import_trace(line, row_number):
+    """Keep lot facts textual and require explicit scope for quantity expansion."""
+    limits = {'heat_number': 160, 'mtr_reference': 300, 'mtr_url': 2000,
+              'supplier': 160, 'supplier_piece_id': 160, 'physical_spool_id': 60,
+              'spool_label': 180, 'traceability_scope': 80}
+    for field, maximum in limits.items():
+        line[field] = _text(line.get(field), maximum)
+    scope = re.sub(r'[\s-]+', '_', line['traceability_scope'].lower())
+    if scope not in ('', 'this_spool', 'all_pieces', 'all_copies', 'all_pieces_all_copies'):
+        _fail(f'BOM row {row_number}: Traceability Scope must be blank, this spool, all pieces, all copies, or all pieces all copies.')
+    line['traceability_scope'] = scope
+    if line['mtr_url']:
+        try:
+            parsed = urlsplit(line['mtr_url'])
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username is not None
+                    or parsed.password is not None or any(c.isspace() for c in line['mtr_url'])):
+                raise ValueError
+            parsed.port
+        except ValueError:
+            _fail(f'BOM row {row_number}: MTR links must be HTTPS URLs without embedded login credentials.')
+    lot_values = any(line[field] for field in ('heat_number', 'mtr_reference', 'mtr_url', 'supplier_piece_id'))
+    if lot_values and line['quantity'] != 1:
+        if line['supplier_piece_id']:
+            _fail(f'BOM row {row_number}: a supplier piece ID identifies one physical piece. Use quantity 1 and a separate row for each piece.')
+        if scope not in ('all_pieces', 'all_pieces_all_copies'):
+            _fail(f'BOM row {row_number}: Heat/MTR values cover a quantity greater than one. Use one row per physical piece, or enter "all pieces" in Traceability Scope to explicitly confirm the same Heat/MTR applies to every piece on this line.')
+    if line['supplier_piece_id'] and scope in ('all_copies', 'all_pieces_all_copies'):
+        _fail(f'BOM row {row_number}: a supplier piece ID cannot be copied to every physical spool. Identify its exact physical spool.')
+    if (line['physical_spool_id'] or line['spool_label']) and scope in ('all_copies', 'all_pieces_all_copies'):
+        _fail(f'BOM row {row_number}: choose either an exact physical spool or all_copies, not both.')
+
+
+def _validate_bom_physical_targets(s, context, bom):
+    """Resolve explicit copy targets within this exact PO requirement, twice."""
+    if not bom:
+        return
+    from order_spools import resolve_spool_qr_identity
+    resolved_piece_ids = set()
+    for index, line in enumerate(bom.get('lines', []), 1):
+        identity, label = line.get('physical_spool_id'), line.get('spool_label')
+        if not identity and not label:
+            continue
+        if label:
+            qr = resolve_spool_qr_identity(s, label)
+            if qr is None:
+                _fail(f'BOM line {index}: the named physical Spool Label does not exist. Generate the physical spool labels before assigning per-copy material facts.')
+            if identity and identity != qr.item_id:
+                _fail(f'BOM line {index}: Physical Spool ID and Spool Label identify different records.')
+            identity = qr.item_id
+        if context['kind'] == 'spool':
+            if identity != context.get('item_id'):
+                _fail(f'BOM line {index}: the material belongs to a different physical spool.')
+        else:
+            registration = read_get(s, OrderSpool, identity)
+            if registration is None or registration.requirement_id != context['requirement_id']:
+                _fail(f'BOM line {index}: the named physical spool does not belong to this PO and spool requirement.')
+            require_active_item(s, identity)
+        if line.get('supplier_piece_id'):
+            piece_identity = (identity, _key(line['supplier_piece_id']))
+            if piece_identity in resolved_piece_ids:
+                _fail(f'BOM line {index}: this supplier piece ID is repeated for the same physical spool.')
+            resolved_piece_ids.add(piece_identity)
+
+
 def _bom_grid(rows, spool_number, assembly_number, sheet='', *, gpn=None):
     header_index, fields = None, None
     for index, row in enumerate(rows[:30]):
@@ -504,7 +582,7 @@ def _bom_grid(rows, spool_number, assembly_number, sheet='', *, gpn=None):
             break
     if fields is None:
         _fail('The BOM needs Quantity and Description columns. Download the BOM template for the supported headings.')
-    lines, source_spools, skipped = [], set(), 0
+    lines, source_spools, skipped, piece_ids = [], set(), 0, set()
     for index, row in enumerate(rows[header_index + 1:], start=header_index + 2):
         if not any(value is not None and str(value).strip() for value in row):
             continue
@@ -535,10 +613,16 @@ def _bom_grid(rows, spool_number, assembly_number, sheet='', *, gpn=None):
         description = _text(values.get('description'))
         if not description:
             _fail(f'BOM row {index} needs a Description.')
-        line = {key: _text(values.get(key), 2000 if key == 'notes' else 1000) for key in BOM_COLUMNS if key != 'quantity'}
+        line = {key: _text(values.get(key), 2000 if key in ('notes', 'mtr_url') else 1000) for key in BOM_COLUMNS if key != 'quantity'}
         line['item'] = line['item'] or str(len(lines) + 1)
         line['quantity'] = int(quantity) if quantity == quantity.to_integral_value() else float(quantity)
         line['unit'] = line['unit'] or 'EA'
+        _validate_import_trace(line, index)
+        if line['supplier_piece_id']:
+            identity_key = (line['physical_spool_id'], _key(line['spool_label']), _key(line['supplier_piece_id']))
+            if identity_key in piece_ids:
+                _fail(f'BOM row {index}: the supplier piece ID is repeated for the same physical spool. Resolve the duplicate before upload.')
+            piece_ids.add(identity_key)
         for key in ('spool_number', 'drawing', 'revision', 'source_page', 'assembly_number', 'gpn'):
             if key in values:
                 line[key] = _text(values[key])
@@ -547,9 +631,13 @@ def _bom_grid(rows, spool_number, assembly_number, sheet='', *, gpn=None):
             _fail(f'A spool BOM can contain at most {MAX_LINES} material lines.')
     if not lines:
         _fail('No material lines match the selected spool number.' if source_spools else 'The BOM contains no material lines.')
+    named_copies = any(line.get('physical_spool_id') or line.get('spool_label') for line in lines)
+    warnings = ([f'{skipped} row(s) for other spool numbers were excluded from this spool preview.'] if skipped else [])
+    if named_copies:
+        warnings.append('Rows with a Physical Spool ID or Spool Label are imported only into that exact physical copy; their quantities are not repeated for sibling spools.')
     return {'columns': BOM_COLUMNS, 'lines': lines, 'line_count': len(lines),
-            'quantity_basis': 'one_spool', 'sheet': sheet, 'source_spools': sorted(source_spools),
-            'warnings': ([f'{skipped} row(s) for other spool numbers were excluded from this spool preview.'] if skipped else [])}
+            'quantity_basis': 'named_physical_spools' if named_copies else 'one_spool',
+            'sheet': sheet, 'source_spools': sorted(source_spools), 'warnings': warnings}
 
 
 def _xlsx_rows(content, sheet):
@@ -669,7 +757,7 @@ def _read_files(files):
     return sources
 
 
-def _prepare(files, kind, sheet, context, *, assembly_identity=None):
+def _prepare(files, kind, sheet, context, *, assembly_identity=None, physical_label=''):
     if kind not in ('bom', 'isometric'):
         _fail('Choose Bill of material or Isometric drawings.')
     sources = _read_files(files)
@@ -711,6 +799,24 @@ def _prepare(files, kind, sheet, context, *, assembly_identity=None):
                                 selected_sheet, gpn=assembly_identity.get('gpn'))
             if assembly_identity is not None:
                 bom['assembly_identity'] = dict(assembly_identity)
+            trace_lines = [line for line in bom['lines'] if any(line.get(key) for key in
+                ('heat_number', 'mtr_reference', 'mtr_url', 'supplier_piece_id'))]
+            bom['traceability_import'] = {'version': 1, 'scope_kind': context['kind'],
+                'physical_spool_id': context.get('item_id'), 'source_line_count': len(trace_lines)}
+            if trace_lines:
+                bom['warnings'].append('Heat/MTR values shown here are imported as material facts when the reviewed BOM is assigned to its physical spool. They do not record QA acceptance or upload an MTR certificate.')
+                if context['kind'] == 'requirement' and any(not line.get('physical_spool_id')
+                        and not line.get('spool_label') and line.get('traceability_scope') not in
+                        ('all_copies', 'all_pieces_all_copies') for line in trace_lines):
+                    bom['warnings'].append('Shared setup BOM: rows without an exact Physical Spool ID / Spool Label remain unassigned. Upload those rows to the individual spool, or enter "all copies" in Traceability Scope to explicitly confirm the same Heat/MTR applies to every physical spool copy.')
+            if context['kind'] == 'spool':
+                foreign = [line for line in bom['lines'] if line.get('physical_spool_id')
+                           and line['physical_spool_id'] != context.get('item_id')]
+                if foreign:
+                    _fail('This BOM contains a different Physical Spool ID. Choose that physical spool before importing its materials.')
+                if any(line.get('spool_label') and _key(line['spool_label']) != _key(physical_label)
+                       for line in bom['lines']):
+                    _fail('This BOM contains a different physical Spool Label. Choose the numbered spool shown in the source before importing its materials.')
     else:
         writer = PdfWriter()
         normalized_bytes = 0
@@ -758,7 +864,16 @@ def _prepare(files, kind, sheet, context, *, assembly_identity=None):
 def bom_template(user: Employee = Depends(auth)):
     columns = ['spool_number', *BOM_COLUMNS, 'drawing', 'revision', 'source_page']
     output = io.StringIO(newline='')
-    csv.writer(output).writerow(columns)
+    writer = csv.writer(output)
+    for guidance in (
+        'FabTrace BOM template: enter material rows below the column headings.',
+        'Use one row per physical piece with quantity 1 and its Heat Number and MTR Reference. Leave unknown values blank.',
+        'For quantity greater than 1: enter all pieces in traceability_scope only when every piece on that line shares the same Heat/MTR.',
+        'For shared setup BOMs: identify the exact spool_label or physical_spool_id; use all copies or all pieces all copies only when the Heat/MTR applies to every physical copy.',
+        'Allowed traceability_scope values: blank; this spool; all pieces; all copies; all pieces all copies.',
+    ):
+        writer.writerow([guidance])
+    writer.writerow(columns)
     return Response(output.getvalue().encode('utf-8-sig'), media_type='text/csv', headers={
         'Content-Disposition': 'attachment; filename="FabTrace_Spool_BOM_Template.csv"',
         'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
@@ -806,8 +921,12 @@ def preview_documents(scope: str, identity: str, kind: str = Form(...),
     locked = _locked_reason(s, scope, identity, item, requirement)
     if locked:
         _fail(locked, 409)
+    from order_spools import spool_qr_identity
+    qr = spool_qr_identity(s, item.id) if item else None
     prepared = _prepare(files, kind, sheet.strip(), context,
-                        assembly_identity=_assembly_identity(s, context))
+                        assembly_identity=_assembly_identity(s, context),
+                        physical_label=qr.display_code if qr else '')
+    _validate_bom_physical_targets(s, context, prepared.get('bom'))
     return {key: value for key, value in prepared.items() if key != 'content'}
 
 
@@ -830,7 +949,10 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
     # under the same lock used by release, removal and production writers.
     initial_context, _, _ = _target(s, scope, identity)
     initial_identity = _assembly_identity(s, initial_context)
-    prepared = _prepare(files, kind, sheet, initial_context, assembly_identity=initial_identity)
+    from order_spools import spool_qr_identity
+    qr = spool_qr_identity(s, identity) if scope == 'spools' else None
+    prepared = _prepare(files, kind, sheet, initial_context, assembly_identity=initial_identity,
+                        physical_label=qr.display_code if qr else '')
     if prepared['sheet_required']:
         _fail('Choose the worksheet containing the selected spool BOM, then preview it again.')
     if prepared['selection_sha256'] != expected_sha256:
@@ -847,6 +969,7 @@ def upload_documents(scope: str, identity: str, kind: str = Form(...),
     locked = _locked_reason(s, scope, identity, item, requirement)
     if locked:
         _fail(locked, 409)
+    _validate_bom_physical_targets(s, context, prepared.get('bom'))
     doc_set = _set_for(s, scope, identity)
     if expected_version != (doc_set.version if doc_set else 0):
         _fail('Spool documents have changed. Reload the saved documents before uploading this revision.', 409)
@@ -973,4 +1096,5 @@ def _stored_file(s, document):
 # own bounded, atomic workflow while sharing the same immutable document model.
 from isometric_import import router as isometric_import_router
 router.include_router(isometric_import_router)
+
 

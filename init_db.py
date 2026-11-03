@@ -188,15 +188,19 @@ def initialize():
                 print('Employee accounts already exist; bootstrap skipped')
             from gpn_label_corrections import apply_confirmed_gpn_label_corrections
             label_corrections=apply_confirmed_gpn_label_corrections(s)
+            from orders import backfill_gpn_records
+            gpn_records=backfill_gpn_records(s)
             from order_spools import backfill_spool_qr_identities
             assigned=backfill_spool_qr_identities(s)
             from spool_boms import backfill_material_piece_records
             material_records=backfill_material_piece_records(s)
             s.flush()
             print(f'Confirmed GPN labels ready: {label_corrections}')
+            print(f'Separate GPN records ready: {gpn_records}')
             print(f"Spool QR labels ready: {assigned['created']} permanent labels added; {assigned['missing_spool_number']} records still need a spool number")
             print(f'Individual material records ready: {material_records}')
     print('Schema ready: legacy records preserved; purchase orders, administration, weld, timing, process flow, transfers, audit readiness and Job Packet tables available')
 if __name__=='__main__':initialize()
+
 
 

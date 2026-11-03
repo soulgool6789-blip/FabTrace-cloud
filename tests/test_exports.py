@@ -35,6 +35,8 @@ TABLES = {
     "Projects": ("tracking", "Project"),
     "Purchase orders": ("orders", "PurchaseOrder"),
     "Order GPNs": ("orders", "OrderGpn"),
+    "Google part numbers": ("orders", "GooglePartNumber"),
+    "Assembly GPN links": ("orders", "AssemblyGpnLink"),
     "Order assemblies": ("orders", "OrderAssembly"),
     "Assembly quantity plans": ("order_setup", "OrderAssemblyRequirement"),
     "Registered order spools": ("order_spools", "OrderSpool"),
@@ -871,4 +873,5 @@ def test_audit_readiness_export_includes_training_recorded_under_another_require
     assert BADGES["supervisor"] in row["collected_evidence"].value
     assert f"under requirement ID {training_requirement_id}" in row["collected_evidence"].value
     assert "TEST-QMS Rev A" in row["supporting_documentation"].value
+
 

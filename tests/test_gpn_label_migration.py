@@ -331,9 +331,17 @@ def test_startup_adds_nullable_label_before_optional_assembly_rebuild_and_is_ide
         assert connection.scalar(text('SELECT count(*) FROM order_gpns WHERE gpn_label IS NOT NULL')) == 0
         assert connection.exec_driver_sql('PRAGMA foreign_key_check').all() == []
         assert connection.exec_driver_sql('PRAGMA foreign_keys').scalar() == 1
-    assert _rows(api) == before
+    after = _rows(api)
+    # The new independent GPN hierarchy adds only its own master/link rows.
+    # All pre-existing identities, source bytes, history and QA stay unchanged.
+    added_tables = {'order_google_part_numbers', 'order_assembly_gpn_links'}
+    assert {name: rows for name, rows in after.items() if name not in added_tables} == {
+        name: rows for name, rows in before.items() if name not in added_tables}
+    assert len(after['order_google_part_numbers']) == 2
+    assert {row['assembly_definition_id'] for row in after['order_assembly_gpn_links']} == {
+        OTHER_GROUP, LOOKALIKE_GROUP}
     initializer.initialize()
-    assert _rows(api) == before
+    assert _rows(api) == after
 
 
 def test_startup_conflict_rolls_back_nullable_ddl_and_all_records(api, monkeypatch):
@@ -360,3 +368,4 @@ def test_startup_conflict_rolls_back_nullable_ddl_and_all_records(api, monkeypat
             "SELECT name, sql FROM sqlite_master WHERE tbl_name='order_gpns' ORDER BY name")).all() == schema_before
         assert connection.exec_driver_sql('PRAGMA foreign_key_check').all() == []
     assert _rows(api) == before
+

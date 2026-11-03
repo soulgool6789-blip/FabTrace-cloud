@@ -78,6 +78,33 @@ class OrderAssembly(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class GooglePartNumber(Base):
+    """One editable business GPN record per purchase order.
+
+    ``OrderGpn`` remains the retained assembly-setup identity used by existing
+    documents, QR labels and spool requirements. A separate link gives that
+    assembly setup a parent here without rewriting any historical key.
+    """
+    __tablename__ = 'order_google_part_numbers'
+    __table_args__ = (UniqueConstraint('project_id', 'normalized_gpn',
+                                     name='uq_order_google_part_number'),)
+    id = Column(String(60), primary_key=True)
+    project_id = Column(String(80), ForeignKey('purchase_orders.project_id'), nullable=False, index=True)
+    gpn = Column(String(160), nullable=False)
+    normalized_gpn = Column(String(480), nullable=False)
+    description = Column(String(500), nullable=False, default='')
+    created_by = Column(String(80), ForeignKey('employees.badge'), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AssemblyGpnLink(Base):
+    """Explicit relationship from an assembly definition to its GPN record."""
+    __tablename__ = 'order_assembly_gpn_links'
+    assembly_definition_id = Column(String(60), ForeignKey('order_gpns.id'), primary_key=True)
+    gpn_record_id = Column(String(60), ForeignKey('order_google_part_numbers.id'), nullable=False, index=True)
+
+
 class Input(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
 
@@ -116,6 +143,15 @@ class CreateGpnIn(VersionIn):
 
 class EditGpnIn(CreateGpnIn):
     assembly_number: str | None = Field(default=None, max_length=160)
+    reason: str = Field(min_length=4, max_length=3000)
+
+
+class CreateGpnRecordIn(VersionIn):
+    gpn: str = Field(min_length=1, max_length=160)
+    description: str = Field(default='', max_length=500)
+
+
+class EditGpnRecordIn(CreateGpnRecordIn):
     reason: str = Field(min_length=4, max_length=3000)
 
 
@@ -183,6 +219,105 @@ def _key(value):
 def business_gpn(group):
     """Current business label; the original GPN remains the identity basis."""
     return group.gpn_label or group.gpn
+
+
+def sync_gpn_record(s, group):
+    """Persist an explicit parent after an authorized assembly write only."""
+    label = business_gpn(group)
+    record = s.scalar(select(GooglePartNumber).where(
+        GooglePartNumber.project_id == group.project_id,
+        GooglePartNumber.normalized_gpn == _key(label)))
+    if record is None:
+        record = GooglePartNumber(id=new_id('GPN'), project_id=group.project_id,
+            gpn=label, normalized_gpn=_key(label), description='',
+            created_by=group.created_by, created_at=group.created_at or utcnow())
+        s.add(record)
+        _flush(s)
+    link = s.get(AssemblyGpnLink, group.id)
+    if link is None:
+        s.add(AssemblyGpnLink(assembly_definition_id=group.id, gpn_record_id=record.id))
+    elif link.gpn_record_id != record.id:
+        link.gpn_record_id = record.id
+    _flush(s)
+    return record
+
+
+def backfill_gpn_records(s):
+    """Add missing GPN parents once, preserving every existing assembly ID.
+
+    Called during initialization after confirmed current-label corrections.
+    Existing links are never moved by a later startup. No physical record,
+    source document or production evidence is updated.
+    """
+    known = set(s.scalars(select(AssemblyGpnLink.assembly_definition_id)))
+    groups = s.scalars(select(OrderGpn).order_by(OrderGpn.project_id, OrderGpn.id)).all()
+    count = 0
+    for group in groups:
+        if group.id not in known:
+            sync_gpn_record(s, group)
+            count += 1
+    return count
+
+
+def gpn_record_rows(s, project_id, assembly_rows):
+    """Read-only canonical GPNs and their separate assembly definitions."""
+    identifiers = [row.get('gpn_id', row.get('id')) for row in assembly_rows]
+    links = dict(s.execute(select(AssemblyGpnLink.assembly_definition_id,
+        AssemblyGpnLink.gpn_record_id).where(
+            AssemblyGpnLink.assembly_definition_id.in_(identifiers))).all()) if identifiers else {}
+    by_record = defaultdict(list)
+    for row in assembly_rows:
+        identity = row.get('gpn_id', row.get('id'))
+        row['assembly_definition_id'] = identity
+        row['gpn_record_id'] = links.get(identity)
+        if row['gpn_record_id']:
+            by_record[row['gpn_record_id']].append(row)
+    records = s.scalars(select(GooglePartNumber).where(
+        GooglePartNumber.project_id == project_id).order_by(GooglePartNumber.gpn, GooglePartNumber.id)).all()
+    return [{**_row(record, ('id', 'project_id', 'gpn', 'description', 'created_by', 'created_at', 'updated_at')),
+             'assembly_definition_ids': [row['assembly_definition_id'] for row in by_record[record.id]],
+             'assembly_count': len(by_record[record.id])} for record in records]
+
+
+def create_gpn_record_value(s, order, data, user):
+    if s.scalar(select(GooglePartNumber.id).where(
+            GooglePartNumber.project_id == order.project_id,
+            GooglePartNumber.normalized_gpn == _key(data.gpn))):
+        raise HTTPException(409, 'This GPN already has its own record in this P.O. Add another assembly under that GPN.')
+    record = GooglePartNumber(id=new_id('GPN'), project_id=order.project_id,
+        gpn=data.gpn, normalized_gpn=_key(data.gpn), description=data.description,
+        created_by=user.badge)
+    s.add(record)
+    _flush(s)
+    _event(s, order, user, 'GPN_RECORD_CREATED', after={
+        'gpn_record_id': record.id, 'gpn': record.gpn, 'description': record.description})
+    return record
+
+
+def edit_gpn_record_value(s, order, record_id, data, user):
+    record = s.get(GooglePartNumber, record_id)
+    if record is None or record.project_id != order.project_id:
+        raise HTTPException(404, 'GPN record not found in this P.O.')
+    duplicate = s.scalar(select(GooglePartNumber.id).where(
+        GooglePartNumber.project_id == order.project_id,
+        GooglePartNumber.normalized_gpn == _key(data.gpn), GooglePartNumber.id != record.id))
+    if duplicate:
+        raise HTTPException(409, 'That GPN already has a separate record. Choose its existing record; records are not silently merged.')
+    groups = s.scalars(select(OrderGpn).join(AssemblyGpnLink,
+        AssemblyGpnLink.assembly_definition_id == OrderGpn.id).where(
+            AssemblyGpnLink.gpn_record_id == record.id)).all()
+    before = {'gpn_record_id': record.id, 'gpn': record.gpn,
+              'description': record.description,
+              'assembly_definition_ids': [group.id for group in groups]}
+    record.gpn, record.normalized_gpn = data.gpn, _key(data.gpn)
+    record.description, record.updated_at = data.description, utcnow()
+    # Current business labels may change; the retained GPN/document basis,
+    # permanent physical IDs, BOMs, QR aliases and QA fingerprints stay intact.
+    for group in groups:
+        group.gpn_label, group.updated_at = data.gpn, utcnow()
+    _event(s, order, user, 'GPN_RECORD_UPDATED', before=before,
+        after={**before, 'gpn': record.gpn, 'description': record.description}, reason=data.reason)
+    return record
 
 
 def _assembly_number_key(value):
@@ -491,9 +626,12 @@ def order_summary(s, order):
     linked = sum(linked_counts.values())
     required = sum(row.required_spools for row in mappings)
     setup_needed = len(groups) - len({row.gpn_id for row in mappings})
+    canonical_count = s.scalar(select(func.count()).select_from(GooglePartNumber)
+        .where(GooglePartNumber.project_id == order.project_id))
     return {**_row(order, ORDER_FIELDS), 'project_name': project.name,
             'removal': removal_summary(s, 'order', order.project_id),
-            'gpn_count': len(groups), 'assembly_count': len(mappings),
+            'gpn_count': canonical_count or len({_key(business_gpn(group)) for group in groups}),
+            'assembly_definition_count': len(groups), 'assembly_count': len(mappings),
             'combined_count': len(mappings) + setup_needed, 'setup_needed_count': setup_needed, 'required_spools': required,
             'linked_spools': linked, 'missing_spools': sum(max(0, row.required_spools - linked_counts[row.item_id]) for row in mappings)}
 
@@ -577,8 +715,14 @@ def order_detail(s, project_id, user=None):
                           'planning_needed': plan is None})
     events = s.scalars(select(Audit).where(Audit.event.like('ORDER_%'), Audit.details['project_id'].as_string() == project_id)
                        .order_by(Audit.id.desc()).limit(100)).all()
+    canonical_gpns = gpn_record_rows(s, project_id, gpns)
+    parent_ids = {group['id']: group['gpn_record_id'] for group in gpns}
+    for assembly in assemblies:
+        assembly['assembly_definition_id'] = assembly['gpn_id']
+        assembly['gpn_record_id'] = parent_ids.get(assembly['gpn_id'])
     return {'order': {**_row(order, ORDER_FIELDS), 'project_name': project.name, 'removal': removal}, 'gpns': gpns, 'assemblies': assemblies,
-            'totals': {'gpn_count': len(gpns), 'assembly_count': len(assemblies),
+            'gpn_records': canonical_gpns,
+            'totals': {'gpn_count': len(canonical_gpns) or len({_key(group['gpn_label']) for group in gpns}), 'assembly_count': len(assemblies),
                        'combined_count': len(assemblies) + sum(not g['assemblies'] for g in gpns),
                        'setup_needed_count': sum(not g['assemblies'] for g in gpns),
                        **{key: sum(row[key] for row in assemblies) for key in ('required_spools', 'linked_spools', 'missing_spools', 'ready_spools', 'not_ready_spools')}},
@@ -678,6 +822,7 @@ def create_gpn(project_id: str, data: CreateGpnIn, user: Employee = Depends(auth
     _set_assembly_number(group, data.assembly_number)
     s.add(group)
     _flush(s)
+    sync_gpn_record(s, group)
     _event(s, row, user, 'GPN_CREATED', after=_row(group, GPN_FIELDS))
     _commit(s)
     return order_detail(s, project_id, user)
@@ -703,9 +848,28 @@ def edit_gpn(project_id: str, gpn_id: str, data: EditGpnIn, user: Employee = Dep
     group.gpn, group.normalized_gpn, group.description = data.gpn, _key(data.gpn), data.description
     _set_assembly_number(group, assembly_number)
     group.updated_at = utcnow()
+    sync_gpn_record(s, group)
     _event(s, row, user, 'GPN_UPDATED', before=before, after=_row(group, GPN_FIELDS), reason=data.reason)
     _commit(s)
     return order_detail(s, project_id, user)
+
+
+@router.post('/{project_id}/gpn-records', status_code=201)
+def create_gpn_record(project_id: str, data: CreateGpnRecordIn,
+                      user: Employee = Depends(auth), s: Session = Depends(db)):
+    order = _locked(s, project_id, data.expected_version, user)
+    record = create_gpn_record_value(s, order, data, user)
+    _commit(s)
+    return {**order_detail(s, project_id, user), 'saved_gpn_record_id': record.id}
+
+
+@router.patch('/{project_id}/gpn-records/{gpn_record_id}')
+def edit_gpn_record(project_id: str, gpn_record_id: str, data: EditGpnRecordIn,
+                    user: Employee = Depends(auth), s: Session = Depends(db)):
+    order = _locked(s, project_id, data.expected_version, user)
+    record = edit_gpn_record_value(s, order, gpn_record_id, data, user)
+    _commit(s)
+    return {**order_detail(s, project_id, user), 'saved_gpn_record_id': record.id}
 
 
 @router.post('/{project_id}/assemblies', status_code=201)
@@ -811,6 +975,8 @@ def create_combined_assembly(project_id: str, data: CreateCombinedAssemblyIn,
         s.add(group)
         _flush(s)
 
+    sync_gpn_record(s, group)
+
     if data.create_item is not None:
         new_item_id = data.create_item.id or new_id('ASM')
         if s.get(Item, new_item_id):
@@ -885,9 +1051,11 @@ def edit_combined_assembly(project_id: str, item_id: str, data: EditCombinedAsse
         group.updated_at = utcnow()
     mapping.required_spools, mapping.notes = data.required_spools, data.notes
     mapping.updated_at = utcnow()
+    sync_gpn_record(s, group)
     _event(s, order, user, 'GPN_ASSEMBLY_UPDATED', before=before,
            after={'gpn': _row(group, GPN_FIELDS), 'assembly': _row(mapping, ASSEMBLY_FIELDS),
                   'physical_part_number': item.google_part_number},
            reason=data.reason, item_id=item.id)
     _commit(s)
     return _selected_assembly_detail(s, project_id, user, group.id, item.id)
+

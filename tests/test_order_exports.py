@@ -320,9 +320,10 @@ def test_full_admin_export_includes_order_models_with_exact_raw_columns(api, ord
     book = Workbook(response.content)
     assert book.headers('Purchase orders') == ['project_id', 'purchase_order', 'normalized_number',
         'customer', 'normalized_customer', 'notes', 'version', 'created_by', 'created_at', 'updated_at']
-    assert book.headers('Order GPNs') == ['id', 'project_id', 'gpn', 'normalized_gpn',
+    assert book.headers('Order GPNs') == ['id', 'project_id', 'gpn', 'normalized_gpn', 'gpn_label',
         'assembly_number', 'normalized_assembly_number', 'description', 'created_by', 'created_at', 'updated_at']
     assert book.headers('Order assemblies') == ['item_id', 'gpn_id', 'assembly_part_number',
         'required_spools', 'notes', 'created_by', 'created_at', 'updated_at']
     assert values(book, 'Purchase orders')[0]['purchase_order'] == '000012345'
     assert len(values(book, 'Order assemblies')) == 2
+

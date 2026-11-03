@@ -18,7 +18,9 @@ from tracking import Project, new_id
 from flow import lock_topology
 from orders import (Input, OrderAssembly, OrderGpn, PurchaseOrder, _commit, _event,
                     _flush, _gpn, _key, _locked, _guard_group_number,
-                    _set_assembly_number, business_gpn, read_snapshot)
+                    _set_assembly_number, business_gpn, read_snapshot,
+                    sync_gpn_record, gpn_record_rows, CreateGpnRecordIn,
+                    EditGpnRecordIn, create_gpn_record_value, edit_gpn_record_value)
 from permissions import has_capability
 from removals import (gpn_not_removed, item_not_removed, project_is_removed,
                       project_not_removed)
@@ -316,9 +318,11 @@ def setup_detail(s, project_id, user):
     if order is None:
         raise HTTPException(404, 'Active purchase order not found')
     rows = _groups(s, {project_id}, include_status=True)[project_id]
+    records = gpn_record_rows(s, project_id, rows)
     return {'order': {'project_id': order.project_id, 'purchase_order': order.purchase_order,
                      'customer': order.customer, 'version': order.version},
-            'assemblies': rows, 'totals': _totals(rows), 'permissions': _permissions(user)}
+            'assemblies': rows, 'gpn_records': records,
+            'totals': _totals(rows), 'permissions': _permissions(user)}
 
 
 def _saved_detail(s, project_id, user, gpn_ids):
@@ -395,6 +399,7 @@ def _add_group(s, order, data, user):
     _set_assembly_number(group, data.assembly_number)
     s.add(group)
     _flush(s)
+    sync_gpn_record(s, group)
     _save_requirements(s, group, data, user)
     return group
 
@@ -575,6 +580,7 @@ def edit_assembly_requirement(project_id: str, gpn_id: str, data: EditAssemblyRe
     before = _basis(s, group)
     group.gpn, group.normalized_gpn, group.updated_at = data.gpn, _key(data.gpn), utcnow()
     _set_assembly_number(group, assembly_number)
+    sync_gpn_record(s, group)
     _save_requirements(s, group, data, user)
     _event(s, order, user, 'SETUP_ASSEMBLY_UPDATED', before=before,
            after=_basis(s, group), reason=data.reason)
@@ -595,10 +601,30 @@ def edit_assembly_identity(project_id: str, gpn_id: str, data: EditAssemblyIdent
     if data.gpn_label is not None:
         group.gpn_label = data.gpn_label
     group.updated_at = utcnow()
+    sync_gpn_record(s, group)
     _event(s, order, user, 'SETUP_ASSEMBLY_IDENTITY_UPDATED', before=before,
         after={'gpn_id': group.id, 'gpn': group.gpn, 'gpn_label': group.gpn_label,
                'business_gpn': business_gpn(group), 'assembly_number': group.assembly_number},
         reason=data.reason)
     _commit(s)
     return _saved_detail(s, project_id, user, [group.id])
+
+
+@router.post('/{project_id}/gpn-records', status_code=201)
+def create_setup_gpn_record(project_id: str, data: CreateGpnRecordIn,
+                            user: Employee = Depends(auth), s: Session = Depends(db)):
+    order = _locked(s, project_id, data.expected_version, user)
+    record = create_gpn_record_value(s, order, data, user)
+    _commit(s)
+    return {**setup_detail(s, project_id, user), 'saved_gpn_record_id': record.id}
+
+
+@router.patch('/{project_id}/gpn-records/{gpn_record_id}')
+def edit_setup_gpn_record(project_id: str, gpn_record_id: str, data: EditGpnRecordIn,
+                          user: Employee = Depends(auth), s: Session = Depends(db)):
+    order = _locked(s, project_id, data.expected_version, user)
+    record = edit_gpn_record_value(s, order, gpn_record_id, data, user)
+    _commit(s)
+    return {**setup_detail(s, project_id, user), 'saved_gpn_record_id': record.id}
+
 

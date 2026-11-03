@@ -39,7 +39,7 @@ from progress import project_rows, summarize as progress_summary
 from parts import SpoolPartsPlan, PartLine, PartAllocation, PartEvent, parts_snapshot
 from transfers import ItemTransferState, TransferLocation
 from administration import EmployeeAccessState, EmployeeRemovalState
-from orders import PurchaseOrder, OrderGpn, OrderAssembly
+from orders import PurchaseOrder, OrderGpn, OrderAssembly, GooglePartNumber, AssemblyGpnLink
 from order_setup import OrderAssemblyRequirement, OrderSpoolRequirement
 from order_spools import OrderSpool, SpoolQrIdentity
 from spool_boms import SpoolBomTrace, SpoolBomMaterial, SpoolBomEvent
@@ -95,7 +95,9 @@ TABLE_SPECS = (
     _spec(TransferLocation, 'Transfer locations', 'id label normalized_label active version created_by created_at updated_by updated_at'),
     _spec(Project, 'Projects', 'id name client description created_by created_at'),
     _spec(PurchaseOrder, 'Purchase orders', 'project_id purchase_order normalized_number customer normalized_customer notes version created_by created_at updated_at', 'project_id'),
-    _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn assembly_number normalized_assembly_number description created_by created_at updated_at'),
+    _spec(OrderGpn, 'Order GPNs', 'id project_id gpn normalized_gpn gpn_label assembly_number normalized_assembly_number description created_by created_at updated_at'),
+    _spec(GooglePartNumber, 'Google part numbers', 'id project_id gpn normalized_gpn description created_by created_at updated_at'),
+    _spec(AssemblyGpnLink, 'Assembly GPN links', 'assembly_definition_id gpn_record_id', 'assembly_definition_id'),
     _spec(OrderAssembly, 'Order assemblies', 'item_id gpn_id assembly_part_number required_spools notes created_by created_at updated_at', 'item_id'),
     _spec(OrderAssemblyRequirement, 'Assembly quantity plans', 'gpn_id assembly_quantity created_by created_at updated_at', 'gpn_id'),
     _spec(OrderSpool, 'Registered order spools', 'item_id assembly_id requirement_id created_by created_at', 'item_id'),
@@ -205,6 +207,8 @@ OVERFLOW_COLUMNS = (
 )
 
 RELATIONSHIPS = (
+    'order_google_part_numbers stores one canonical Google Part Number record within a purchase order. order_assembly_gpn_links.assembly_definition_id -> order_gpns.id and gpn_record_id -> order_google_part_numbers.id. Multiple assembly definitions may share one canonical GPN; physical assembly and spool identities remain unchanged.',
+    'order_gpns.gpn retains the historical document/evidence identity. gpn_label is the current corrected business label. Current business GPN and assembly numbers are separate from saved QA/document contexts.',
     'item_transfer_states.item_id -> items.id; version is the current handoff/location edit revision. An absent row means no new-format transfer has been recorded; historical badges and statuses are not invented.',
     'transfer_locations stores managed custom destination choices; built-in work centers are application definitions. location_id may reference a built-in or custom choice, or be blank for a preserved legacy location. items.location retains the actual last recorded label, so renaming a catalog choice does not rewrite history.',
     'Audit TRANSFER details retain both scanned badge identities, before/after location and operational status, custody_changed and the authenticated recorder. Badge identification is not independent sender or recipient acknowledgement.',
@@ -465,7 +469,7 @@ class WorkbookWriter:
         self.write_rows('Text overflow', 'overflow_chunks', OVERFLOW_COLUMNS, rows(),
                         self.overflow_rows, group='overflow', overflow_allowed=False)
 
-    def finish(self, created_at):
+    def finish(self, created_at, *, styles_xml=None, title='FabTrace business data export'):
         ordered = sorted(self.sheets, key=lambda row: (0 if row.group == 'manifest' else 1, row.id))
         sheets_xml = ''.join(f'<sheet name={quoteattr(row.name)} sheetId="{row.id}" r:id="rId{row.id}"/>' for row in ordered)
         self.archive.writestr('xl/workbook.xml', f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{SHEET_NS}" xmlns:r="{REL_NS}"><bookViews><workbookView/></bookViews><sheets>{sheets_xml}</sheets></workbook>')
@@ -475,9 +479,9 @@ class WorkbookWriter:
         overrides = ''.join(f'<Override PartName="/xl/worksheets/sheet{row.id}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for row in self.sheets)
         self.archive.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>' + overrides + '</Types>')
         self.archive.writestr('_rels/.rels', f'<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{REL_NS}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="{REL_NS}/extended-properties" Target="docProps/app.xml"/></Relationships>')
-        self.archive.writestr('xl/styles.xml', STYLES_XML)
+        self.archive.writestr('xl/styles.xml', styles_xml or STYLES_XML)
         stamp = _utc(created_at).isoformat().replace('+00:00', 'Z')
-        self.archive.writestr('docProps/core.xml', f'<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>FabTrace Cloud</dc:creator><dc:title>FabTrace business data export</dc:title><dcterms:created xsi:type="dcterms:W3CDTF">{stamp}</dcterms:created></cp:coreProperties>')
+        self.archive.writestr('docProps/core.xml', f'<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>FabTrace Cloud</dc:creator><dc:title>{_xml_text(title)}</dc:title><dcterms:created xsi:type="dcterms:W3CDTF">{stamp}</dcterms:created></cp:coreProperties>')
         self.archive.writestr('docProps/app.xml', '<?xml version="1.0" encoding="UTF-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>FabTrace Cloud</Application></Properties>')
 
 
@@ -923,3 +927,4 @@ def export_excel(u: Employee = Depends(auth), s: Session = Depends(db)):
     return StreamingResponse(_stream_file(file), media_type=XLSX_MEDIA_TYPE,
         headers={'Content-Disposition': f'attachment; filename="{filename}"', 'Content-Length': str(size)},
         background=BackgroundTask(file.close))
+

@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.02-gpn-label.1'
+APP_VERSION='2026.11.03-spool-records.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -642,6 +642,8 @@ def health(s:Session=Depends(db)):
     s.execute(select(EmployeeRemovalState.badge).limit(1))
     s.execute(select(PurchaseOrder.project_id).limit(1))
     s.execute(select(OrderGpn.id).limit(1))
+    s.execute(select(GooglePartNumber.id).limit(1))
+    s.execute(select(AssemblyGpnLink.assembly_definition_id).limit(1))
     s.execute(select(OrderAssembly.item_id).limit(1))
     s.execute(select(RecordRemoval.record_id).limit(1))
     s.execute(select(OrderAssemblyRequirement.gpn_id).limit(1))
@@ -694,7 +696,8 @@ app.include_router(transfers_router)
 from administration import router as administration_router, EmployeeAccessState, EmployeeRemovalState
 app.include_router(administration_router)
 
-from orders import router as orders_router, PurchaseOrder, OrderGpn, OrderAssembly
+from orders import (router as orders_router, PurchaseOrder, OrderGpn, OrderAssembly,
+                    GooglePartNumber, AssemblyGpnLink)
 app.include_router(orders_router)
 
 from removals import router as removals_router, RecordRemoval
@@ -729,6 +732,10 @@ app.include_router(exports_router)
 
 from orders_excel import router as orders_excel_router
 app.include_router(orders_excel_router)
+
+from spool_records import router as spool_records_router
+app.include_router(spool_records_router)
+
 
 
 

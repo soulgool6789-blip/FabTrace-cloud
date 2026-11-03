@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import SpoolPlan, TrackingHold
 from flow import FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER, flow_stage_for_item
-from orders import PurchaseOrder, OrderGpn, OrderAssembly, business_gpn, read_snapshot
+from orders import PurchaseOrder, OrderGpn, OrderAssembly, business_gpn, read_snapshot, gpn_record_rows
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
 from order_setup import requirements_by_gpn
@@ -33,6 +33,7 @@ DEFINITIONS = {
     'routes': 'A part follows preparation, a spool follows fabrication, and an assembly follows final assembly/finish. Parent work is not credited to a child’s own route.',
     'flow_colors': 'Individual spool colors show the last recorded station transfer. New records stay in Inventory until movement is recorded. QA results, work steps and release blockers do not move a spool. Completed linked children follow a later recorded parent movement.',
     'testing': 'Testing includes assembly collection and dimensional inspection, with the existing required test/evidence gates retained before coating.',
+    'station_time': 'Elapsed calendar time from saved physical station transfers; same-station custody handoffs do not reset the clock. Separate visits retain returns and rework. Unknown historical entries remain unrecorded. Shared assembly visits are identified.',
 }
 COUNT_KEYS = ('items', 'parts', 'spools', 'assemblies', 'finished', 'wip', 'on_hold',
               'planning_needed', 'completed_steps', 'total_steps', 'not_recorded_steps',
@@ -391,9 +392,10 @@ def _tree(s, selected_project_id=''):
         for field, count in planned_gaps.items():
             summary[field] += count
         summary = _finish_summary(summary)
+        canonical_gpns = gpn_record_rows(s, order.project_id, gpns)
         results.append({'project_id': order.project_id, 'purchase_order': order.purchase_order,
             'customer': order.customer, 'version': order.version, 'summary': summary,
-            'stages': _stages(nodes, identifiers, summary), 'gpns': gpns,
+            'stages': _stages(nodes, identifiers, summary), 'gpns': gpns, 'gpn_records': canonical_gpns,
             'unassigned': unassigned, 'warnings': warnings})
     overall = {key: sum(order['summary'][key] for order in results) for key in COUNT_KEYS}
     overall = _finish_summary(overall)
@@ -422,4 +424,5 @@ def order_progress(project_id: str = Query('', max_length=80),
     s.rollback()
     with read_snapshot(s) as snapshot:
         return _tree(snapshot, project_id)
+
 

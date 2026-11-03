@@ -6,7 +6,7 @@
   const fresh=()=>({files:[],sheet:'',revision:'',reason:'',reasonAutomatic:false,requiresReason:false,preview:null,error:'',stale:false,expanded:false});
   const idOK=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(value);
   const fileUrl=value=>typeof value==='string'&&/^\/api\/spool-documents\/files\/[A-Za-z0-9_-]{1,100}(?:\/bom\.xlsx|\?download=1)?$/.test(value)?value:'';
-  const BOM_FIELDS=[['item','Item'],['quantity','Qty'],['unit','Unit'],['part_number','Part / TAS number'],['description','Description'],['size','Size'],['material','Material'],['length','Length'],['notes','Notes']];
+  const BOM_FIELDS=[['item','Item'],['quantity','Qty'],['unit','Unit'],['part_number','Part / TAS number'],['description','Description'],['size','Size'],['material','Material'],['length','Length'],['notes','Notes'],['heat_number','Heat number'],['mtr_reference','MTR reference'],['mtr_url','MTR link'],['supplier','Supplier'],['supplier_piece_id','Supplier piece ID'],['physical_spool_id','Physical spool ID'],['spool_label','Spool label'],['traceability_scope','Traceability scope']];
   const UPLOAD_ACCEPT='.pdf,.jpg,.jpeg,.png,.xlsx,.csv,.tsv,application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
   const MAX_REVIEW_BYTES=900*1024;
   const documentKind=review=>['bom','isometric'].includes(review?.data.source.document_kind)?review.data.source.document_kind:null;
@@ -52,7 +52,7 @@
     if(!bom||!Array.isArray(bom.lines))return '';
     const columns=[...BOM_FIELDS,['source_page','Drawing page']];
     const shown=columns.filter(([key])=>['item','quantity','description'].includes(key)||bom.lines.some(row=>row[key]!==undefined&&row[key]!==null&&String(row[key]).length));
-    return `<p class="sdoc-meta">${bom.lines.length} material line${bom.lines.length===1?'':'s'} · Quantities for one spool${bom.sheet?' · Worksheet: '+esc(bom.sheet):''}</p>${arr(bom.warnings).map(w=>`<p class="sdoc-warning">${esc(w)}</p>`).join('')}<div class="sdoc-table" tabindex="0" role="region" aria-label="${esc(caption)}"><table><caption>${esc(caption)}</caption><thead><tr>${shown.map(([,name])=>`<th scope="col">${esc(name)}</th>`).join('')}</tr></thead><tbody>${bom.lines.map(row=>`<tr>${shown.map(([key])=>`<td>${esc(row[key]??'')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    return `<p class="sdoc-meta">${bom.lines.length} material line${bom.lines.length===1?'':'s'} · ${bom.quantity_basis==='named_physical_spools'?'Quantities for the named physical spools':'Quantities for one spool'}${bom.sheet?' · Worksheet: '+esc(bom.sheet):''}</p>${arr(bom.warnings).map(w=>`<p class="sdoc-warning">${esc(w)}</p>`).join('')}<div class="sdoc-table" tabindex="0" role="region" aria-label="${esc(caption)}"><table><caption>${esc(caption)}</caption><thead><tr>${shown.map(([,name])=>`<th scope="col">${esc(name)}</th>`).join('')}</tr></thead><tbody>${bom.lines.map(row=>`<tr>${shown.map(([key])=>`<td>${esc(row[key]??'')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   }
   function documentActions(doc){
     const view=fileUrl(doc.view_url),download=fileUrl(doc.download_url),excel=fileUrl(doc.excel_url),source=fileUrl(doc.source_view_url),pdf=doc.media_type==='application/pdf';
@@ -385,7 +385,8 @@
     window.FabDocumentPieceQa?.restore(snapshot.pieceQa);state.resume=null;render();return true;
   }
   function template(){
-    const content='spool_number,item,quantity,unit,part_number,description,size,material,length,notes,drawing,revision,source_page\r\n';
+    const guidance=['FabTrace BOM template: enter material rows below the column headings.','Use one row per physical piece with quantity 1 and its Heat Number and MTR Reference. Leave unknown values blank.','For quantity greater than 1: enter all pieces in traceability_scope only when every piece on that line shares the same Heat/MTR.','For shared setup BOMs: identify the exact spool_label or physical_spool_id; use all copies or all pieces all copies only when the Heat/MTR applies to every physical copy.','Allowed traceability_scope values: blank; this spool; all pieces; all copies; all pieces all copies.'];
+    const content='\uFEFF'+guidance.map(line=>'"'+line.replace(/"/g,'""')+'"').join('\r\n')+'\r\n'+['spool_number',...BOM_FIELDS.map(([key])=>key),'drawing','revision','source_page'].join(',')+'\r\n';
     const url=URL.createObjectURL(new Blob([content],{type:'text/csv;charset=utf-8'})),anchor=document.createElement('a');anchor.href=url;anchor.download='FabTrace_Spool_BOM_Template.csv';document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
   }
   dialog.addEventListener('click',event=>{
@@ -440,3 +441,4 @@
   document.addEventListener('click',event=>{const target=event.target.closest?.('[data-sdoc-kind]');if(!target||target.disabled)return;event.preventDefault();open({kind:target.dataset.sdocKind,id:target.dataset.sdocId,spool_number:target.dataset.sdocNumber,tab:target.dataset.sdocTab},target);});
   window.FabSpoolDocuments={link,open,navigationState,restoreNavigation,back,canNavigateAway:()=>!state.saving&&!pieceSaving(),cancelPending:()=>close(true,true)};
 })();
+
