@@ -40,7 +40,7 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:null,curr
  }
 };
 for(const name of ['Tracking','Quality','Flow','Handoff'])context['Fab'+name]={open:value=>routes.push({type:name.toLowerCase(),...value})};
-elements.get('navStaff').onclick=()=>routes.push({type:'staff'});elements.get('navAudit').onclick=()=>routes.push({type:'audit'});context.window=context;vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/admin.js'),'utf8'),context);
+elements.get('navStaff').onclick=()=>routes.push({type:'staff'});elements.get('navAudit').onclick=()=>routes.push({type:'audit'});context.window=context;vm.createContext(context);require('./ui_permissions_fixture.cjs').install(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/employee-roster.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/admin.js'),'utf8'),context);
 const html=()=>elements.get('adminContent').innerHTML,el=id=>{assert.ok(elements.has(id),'missing '+id);return elements.get(id)},set=(id,value)=>{el(id).value=String(value);el(id).oninput?.()},click=(action,id='')=>el('adminContent').listeners.click({target:{closest:()=>({disabled:false,dataset:{adminAction:action,adminId:id}})}}),submit=id=>el(id).onsubmit({preventDefault(){},target:el(id)}),writes=()=>calls.filter(c=>c.method),flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function check(name,fn){await fn();checks.push(name)}
 (async()=>{

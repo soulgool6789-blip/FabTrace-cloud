@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.03-employee-badge-sheets.1'
+APP_VERSION='2026.11.03-employee-roster-groups.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass

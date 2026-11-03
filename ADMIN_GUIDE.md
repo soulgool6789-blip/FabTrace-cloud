@@ -84,7 +84,7 @@ Each badge shows the current name, current position, permanent badge ID and exis
 
 ## Manage employee accounts
 
-Open **Admin controls → Employee accounts**. Search by name, badge or role, then choose **Account controls**.
+Open **Admin controls → Employee accounts**. Employees are grouped under their actual job positions, with an employee count for each group and names in alphabetical order. The same categories appear in **Employees** and the employee badge-sheet picker. Current positions follow the job-position selector; populated retained or unrecognized positions remain visible in their own groups. Search by name, badge or position, then choose **Account controls**. Changing a position moves the employee into the corresponding group when the roster refreshes.
 
 ### Edit an account
 

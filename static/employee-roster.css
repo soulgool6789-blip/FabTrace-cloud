@@ -1,0 +1,15 @@
+.fer-group{margin:18px 0 0;border:1px solid #dce3ea;border-radius:9px;overflow:hidden}
+.fer-group:first-child{margin-top:12px}
+.fer-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:12px;background:#eaf0f7;color:#183a56;font-size:16px;overflow-wrap:anywhere}
+.fer-heading .badge{flex-shrink:0;background:white;color:#536575;font-weight:600}
+.fer-employee{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border-top:1px solid #e3e9ef;flex-wrap:wrap}
+.fer-identity{min-width:0;overflow-wrap:anywhere}
+.fer-identity strong{display:block;font-size:15px}
+.fer-identity small{display:block;color:#617283;margin-top:3px}
+.fer-employee .actions button{font-size:13px;padding:7px 9px}
+.fa-table .fer-table-heading{background:#eaf0f7;color:#183a56;text-transform:none;font-size:15px;padding:12px}
+.fer-table-heading .badge{margin-left:10px;background:white;color:#536575;font-weight:600}
+.feb-position-group{margin:0;padding:0}
+.feb-position-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 8px;margin:10px 0 0;background:#eaf0f7;border-radius:6px;font-size:15px;color:#183a56;overflow-wrap:anywhere}
+.feb-position-heading small{flex-shrink:0;font-size:12px;font-weight:500;color:#536575}
+@media(max-width:580px){.fer-heading{align-items:flex-start;font-size:15px}.fer-heading .badge{font-size:11px}.fer-employee .actions{gap:6px}}

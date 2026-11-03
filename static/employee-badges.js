@@ -26,7 +26,8 @@
   function renderRows() {
     const query = node('employeeBadgeSearch').value.trim().toLocaleLowerCase();
     const visible = state.employees.filter(employee => !query || [employee.name, employee.badge, employee.role_label].some(value => value.toLocaleLowerCase().includes(query)));
-    node('employeeBadgeRows').innerHTML = state.loading ? '<p class="muted">Loading current employees…</p>' : visible.length ? visible.map(employee => `<label class="feb-choice"><input type="checkbox" data-employee-badge="${esc(employee.badge)}"${state.selected.has(employee.badge) ? ' checked' : ''}><span><strong>${esc(employee.name)}</strong><span>${esc(employee.role_label)}</span><small>Badge ID: ${esc(employee.badge)}</small></span></label>`).join('') : `<p class="muted">${state.employees.length ? 'No employees match this search. Your other selections are kept.' : 'There are no active employees to print.'}</p>`;
+    const groups = window.FabEmployeeRoster.groups(visible);
+    node('employeeBadgeRows').innerHTML = state.loading ? '<p class="muted">Loading current employees…</p>' : visible.length ? groups.map(group => `<section class="feb-position-group" data-employee-role="${esc(group.role)}"><h3 class="feb-position-heading"><span>${esc(group.label)}</span><small>${group.employees.length} ${group.employees.length === 1 ? 'employee' : 'employees'}</small></h3>${group.employees.map(employee => `<label class="feb-choice"><input type="checkbox" data-employee-badge="${esc(employee.badge)}"${state.selected.has(employee.badge) ? ' checked' : ''}><span><strong>${esc(employee.name)}</strong><span>${esc(employee.role_label)}</span><small>Badge ID: ${esc(employee.badge)}</small></span></label>`).join('')}</section>`).join('') : `<p class="muted">${state.employees.length ? 'No employees match this search. Your other selections are kept.' : 'There are no active employees to print.'}</p>`;
     node('employeeBadgeRows').querySelectorAll('[data-employee-badge]').forEach(input => {
       input.onchange = () => {
         if (state.loading || state.printing) return;
@@ -170,7 +171,7 @@
       const employees = await roster();
       if (job.cancelled || popup.closed) return;
       if (!requireJob('admin')) throw Error('Administrator access is required to print employee badges.');
-      const chosen = employees.filter(employee => selected.has(employee.badge));
+      const chosen = window.FabEmployeeRoster.groups(employees.filter(employee => selected.has(employee.badge))).flatMap(group => group.employees);
       if (chosen.length !== selected.size) throw Error('A selected employee is no longer active or available. Refresh employees and select the current badges again.');
       popup.document.open();
       popup.document.write(sheetHtml(chosen));

@@ -108,7 +108,7 @@ function harness(roster = [employee('EMP-A'), employee('EMP-B')]) {
     }
   };
   context.window = context; context.$ = id => document.getElementById(id);
-  vm.createContext(context); vm.runInContext(source, context, {filename: 'employee-badges.js'});
+  vm.createContext(context); vm.runInContext(fs.readFileSync(path.join(__dirname, '../static/employee-roster.js'), 'utf8'), context, {filename: 'employee-roster.js'}); vm.runInContext(source, context, {filename: 'employee-badges.js'});
   const app = context.FabEmployeeBadges;
   assert.ok(app && typeof app.open === 'function' && typeof app.printSelected === 'function');
   return {state, nodes, calls, sheets, messages, events, timers, context, app,
