@@ -163,7 +163,7 @@ def flow_step_roles(number):
         return ('admin', 'welder', 'process_welder')
     if number == 21:
         return ('admin', 'painter')
-    return ('admin', 'supervisor', 'handler') if 1 <= number <= 24 else ()
+    return ('admin', 'supervisor', 'handler') if 1 <= number <= 25 else ()
 
 
 def can_control_process(user, key):
@@ -177,7 +177,7 @@ def can_control_process(user, key):
         # and QA result decisions keep their separate flow_step_roles guards.
         if role in TESTING_ROLES and step in (17, 18):
             return True
-        return 1 <= step <= 24 and (role in ('admin', 'supervisor') or role in flow_step_roles(step))
+        return 1 <= step <= 25 and (role in ('admin', 'supervisor') or role in flow_step_roles(step))
     return key in PROCESS_KEYS.get(role, ())
 
 

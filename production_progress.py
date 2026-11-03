@@ -14,19 +14,20 @@ from sqlalchemy.orm import Session
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import SpoolPlan, TrackingHold
 from flow import (FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER,
-                  LEGACY_STEP_17, flow_stage_for_item)
+                  LEGACY_STEP_17, LEGACY_VERSION, VERSION, catalog_version, route_definition,
+                  step_definition, ready_to_ship_step, shipment_step, flow_stage_for_item)
 from orders import PurchaseOrder, OrderGpn, OrderAssembly, business_gpn, read_snapshot, gpn_record_rows
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
 from order_setup import requirements_by_gpn
-from flow_stages import STAGES, STAGE_BY_STEP
+from flow_stages import stages_for_versions
 from flow_stations import station_positions
 from flow_testing import FlowTestingState, project_step_states
 
 
 router = APIRouter(prefix='/api/progress', tags=['P.O. production progress'])
 DEFINITIONS = {
-    'recorded_progress': 'Current recorded fabrication steps through step 22, weighted by each unique physical item. Shipping steps 23–24 and delivery are separate.',
+    'recorded_progress': 'Current recorded fabrication steps through final QA at step 22, weighted by each unique physical item. The current route’s shipment Floor return at 23, ready-to-ship at 24, shipment at 25 and delivery are separate. Historical 24-step travelers keep their saved shipping positions.',
     'expected_steps': 'Parts and spools each have eight applicable fabrication steps; assemblies have six through final inspection. Explicitly not-required testing steps are excluded. A route that has not started contributes no completed steps.',
     'finished': 'Current physical preparation or ordinary fabrication release from the existing quality projection. This is separate from the recorded-step percentage.',
     'scope': 'Declared spool/BOM shortfalls and unassigned or undeclared scope remain visible. A recorded 100% alone does not mean the P.O. is complete.',
@@ -34,7 +35,7 @@ DEFINITIONS = {
     'holds': 'Hold indicators describe current item holds, tracking holds, open rework or process exceptions. Other readiness warnings are shown separately.',
     'routes': 'A part follows preparation, a spool follows fabrication, and an assembly follows final assembly/finish. Parent work is not credited to a child’s own route.',
     'flow_colors': 'Individual spool colors show the last recorded station transfer. New records stay in Inventory until movement is recorded. QA results, work steps and release blockers do not move a spool. Completed linked children follow a later recorded parent movement.',
-    'testing': 'Step 17 records the required YES/NO decision. YES requires separate NDT and pressure-test attempts with QA/QC approval and floor handoffs; NO excludes the testing review and floor-return steps. Required non-testing quality gates remain before coating.',
+    'testing': 'Step 17 records the required YES/NO decision. YES requires separate NDT and pressure-test attempts with QA/QC approval and floor handoffs; NO excludes only the testing review and testing Floor-return steps. Current routes distinguish NDT QA/QC-004, pressure QA/QC-005 and final QA/QC-006. Numeric step 18 counts once in overall progress; its two recorded review phases are shown separately by station. Required non-testing quality gates remain before coating.',
     'station_time': 'Elapsed calendar time from saved physical station transfers; same-station custody handoffs do not reset the clock. Separate visits retain returns and rework. Unknown historical entries remain unrecorded. Shared assembly visits are identified.',
 }
 COUNT_KEYS = ('items', 'parts', 'spools', 'assemblies', 'finished', 'wip', 'on_hold',
@@ -59,10 +60,50 @@ def _route(item, plan, flow):
     return 'component'
 
 
+def _testing_review_stages(flow, events, testing, current_definition):
+    """Project each recorded test review without duplicating numeric step 18.
+
+    A numeric advance alone never proves both tests passed. Saved phase
+    results distinguish NDT from pressure, including returns and new cycles.
+    """
+    keys = {'ndt': 'qa_test_results', 'pressure': 'qa_pressure_results'}
+    pending = 'not_recorded' if flow and flow.baseline_step > 18 else 'pending'
+    states = {key: pending for key in keys.values()}
+    for event in events:
+        data = event.data or {}
+        action = data.get('testing_action')
+        typed = data.get('testing_protocol') == 'CLM-TEST-v1'
+        if typed and action in ('restart', 'decision'):
+            status = 'not_required' if action == 'decision' and data.get('testing_decision') == 'NO' else 'pending'
+            states = {key: status for key in keys.values()}
+        elif typed and data.get('test_kind') in keys:
+            key = keys[data['test_kind']]
+            if action == 'review' and data.get('test_result') == 'PASS' and event.action == 'advance':
+                states[key] = 'completed'
+            elif action in ('start', 'complete', 'correct') or action == 'review' and (
+                    data.get('test_result') == 'FAIL' or event.action == 'fail'):
+                states[key] = 'pending'
+        elif event.action in ('fail', 'reopen', 'admin_return_to_work'):
+            target = data.get('return_step', event.step)
+            if type(target) is int and target <= 18:
+                states = {key: 'pending' for key in keys.values()}
+    if testing and testing.decision == 'NO' and testing.phase == 'not_required':
+        states = {key: 'not_required' for key in keys.values()}
+    if flow and flow.status == 'active' and flow.current_step == 18:
+        key = {'ndt_qa': 'qa_test_results', 'pressure_qa': 'qa_pressure_results'}.get(
+            getattr(testing, 'phase', None))
+        key = key or (current_definition or {}).get('flow_stage_key')
+        if key in states:
+            states[key] = 'current'
+    return states
+
+
 def _steps(route, flow, events, testing=None, current_definition=None):
-    definition = ROUTE_BY_ID[route]
+    definition = route_definition(flow) if flow else ROUTE_BY_ID[route]
+    version = catalog_version(flow) if flow else VERSION
     states = {n: 'not_recorded' if flow and n < flow.baseline_step else 'pending'
               for n in range(definition['first_step'], definition['last_step'] + 1)}
+    definitions = {n: step_definition(flow, n) if flow else STEP_BY_NUMBER[n] for n in states}
     for event in events:
         if event.action in ('fail', 'reopen', 'admin_return_to_work'):
             target = (event.data or {}).get('return_step', event.step)
@@ -78,14 +119,23 @@ def _steps(route, flow, events, testing=None, current_definition=None):
               for number, state in states.items()}
     if flow and flow.status == 'active' and flow.current_step in states:
         states[flow.current_step] = 'current'
-    titles = {n: STEP_BY_NUMBER[n]['title'] for n in states}
-    if route == 'assembly' and flow and testing is None:
-        titles[17] = LEGACY_STEP_17['title']
+    if route == 'assembly' and flow and testing is None and definition['last_step'] == 24:
+        definitions[17] = LEGACY_STEP_17
+    # Actual saved definitions remain authoritative for completed history.
+    # Current and unrecorded positions use the traveler's own frozen catalog.
+    for event in events:
+        saved = (event.data or {}).get('step_definition')
+        if event.action == 'advance' and states.get(event.step) == 'completed' and isinstance(saved, dict):
+            definitions[event.step] = {**definitions[event.step], **saved}
     if current_definition and flow and flow.current_step in states:
-        titles[flow.current_step] = current_definition['title']
-    return [{'number': n, 'title': titles[n], 'state': state,
-             'stage': STAGE_BY_STEP[n], 'qa': STEP_BY_NUMBER[n]['qa'],
-             'fabrication': n <= 22} for n, state in states.items()]
+        definitions[flow.current_step] = current_definition
+    review_stages = (_testing_review_stages(flow, events, testing, current_definition)
+                     if route == 'assembly' and definition['last_step'] == 25 else None)
+    return [{'number': n, 'title': definitions[n]['title'], 'state': state,
+             'stage': definitions[n]['flow_stage_key'], 'qa': definitions[n]['qa'],
+             'catalog_version': version, 'fabrication': n <= 22,
+             **({'stage_states': review_stages} if n == 18 and review_stages is not None else {})}
+            for n, state in states.items()]
 
 
 def _finish_summary(value):
@@ -109,10 +159,29 @@ def _summary(nodes, identifiers, extra_undeclared=0):
     return _finish_summary(result)
 
 
-def _stages(nodes, identifiers, summary, last_applicable_step=24):
-    steps = [step for identifier in set(identifiers) for step in nodes[identifier]['steps']]
+def _catalog_versions(nodes, identifiers):
+    identifiers = set(identifiers)
+    versions = {nodes[identifier].get('catalog_version') or next(
+        (step['catalog_version'] for step in nodes[identifier]['steps'] if step.get('catalog_version')), VERSION)
+        for identifier in identifiers}
+    if any((nodes[identifier].get('flow_stage') or {}).get('key') == 'qa_004' for identifier in identifiers):
+        versions.add(LEGACY_VERSION)
+    if any((nodes[identifier].get('flow_stage') or {}).get('key') in ('qa_pressure_results', 'qa_final')
+           for identifier in identifiers):
+        versions.add(VERSION)
+    return versions or {VERSION}
+
+
+def _stages(nodes, identifiers, summary, last_applicable_step=None):
+    identifiers = set(identifiers)
+    catalog = stages_for_versions(_catalog_versions(nodes, identifiers))
+    if last_applicable_step is None:
+        last_applicable_step = max(number for stage in catalog for number in stage['steps'])
+    steps = [{**step, 'stage': key, 'state': state}
+             for identifier in identifiers for step in nodes[identifier]['steps']
+             for key, state in (step.get('stage_states') or {step['stage']: step['state']}).items()]
     result = []
-    for stage in STAGES:
+    for stage in catalog:
         all_selected = [step for step in steps if step['stage'] == stage['key']]
         selected = [step for step in all_selected if step['state'] != 'not_required']
         not_required = len(all_selected) - len(selected)
@@ -124,7 +193,8 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
                    summary['missing_parts'] + summary['missing_spools'] if stage['key'] == 'preparation' else
                    summary['missing_parts'] + summary['missing_spools'] + summary['missing_assemblies'] if stage['key'] == 'floor' else
                    summary['missing_spools'] if stage['key'] in ('qa_002', 'welding', 'qa_003') else
-                   summary['missing_assemblies'] if stage['key'] in ('testing', 'qa_test_results', 'paint', 'qa_004') else 0)
+                   summary['missing_assemblies'] if stage['key'] in (
+                       'testing', 'qa_test_results', 'qa_pressure_results', 'paint', 'qa_004', 'qa_final') else 0)
         unrecorded = sum(step['state'] == 'not_recorded' for step in selected)
         unknown = bool((summary['undeclared_scope'] or summary['missing_spools'] or not summary['items'])
                        and stage['steps'][0] <= last_applicable_step)
@@ -191,6 +261,7 @@ def _tree(s, selected_project_id=''):
         from flow import current_step_definition
         current_definition = current_step_definition(s, flow) if flow and flow.current_step else None
         steps = _steps(route, flow, events[identifier], testing_states.get(identifier), current_definition)
+        shipping_steps = (ready_to_ship_step(flow), shipment_step(flow))
         not_required = sum(step['fabrication'] and step['state'] == 'not_required' for step in steps)
         fabrication = [step for step in steps if step['fabrication'] and step['state'] != 'not_required']
         completed = sum(step['state'] == 'completed' for step in fabrication)
@@ -205,6 +276,7 @@ def _tree(s, selected_project_id=''):
         part_summary = ({'configured': True, 'reference': parts['reference'],
                          **parts['totals']} if parts else None)
         nodes[identifier] = {'id': identifier, 'item_kind': item.kind, 'route': route,
+            'catalog_version': catalog_version(flow),
             **identity_fields(item, identities.get(identifier), is_spool=route == 'spool'),
             'part_number': item.google_part_number, 'project_id': row['project_id'],
             'parent_id': row['parent_id'], 'location': item.location, 'handler': item.handler,
@@ -213,7 +285,7 @@ def _tree(s, selected_project_id=''):
             'flow_stage': {**stations[identifier], 'blocked': bool(reasons
                     or row['administrative_release'] or (row.get('receiving') or {}).get('required')
                     and not (row.get('receiving') or {}).get('can_proceed')
-                    or (row['current_step'] in (23, 24) or stations[identifier]['key'] == 'ready_to_ship')
+                    or (row['current_step'] in shipping_steps or stations[identifier]['key'] == 'ready_to_ship')
                     and not row['fabrication_finished'])},
             'status': row['status'], 'fabrication_finished': row['fabrication_finished'],
             'on_hold': bool(reasons), 'hold_reasons': reasons, 'blockers': row['blockers'],
@@ -234,7 +306,7 @@ def _tree(s, selected_project_id=''):
                 'total_steps': len(fabrication), 'not_recorded_steps': unrecorded, 'not_required_steps': not_required,
                 'shipped': int(row['flow_status'] in ('shipped', 'delivered')),
                 'delivered': int(row['flow_status'] == 'delivered')}}
-        if route == 'assembly' and (stations[identifier]['key'] == 'ready_to_ship' or row['current_step'] in (23, 24)
+        if route == 'assembly' and (stations[identifier]['key'] == 'ready_to_ship' or row['current_step'] in shipping_steps
                                     or row['flow_status'] in ('shipped', 'delivered')):
             # Check authoritative shipping readiness once per candidate assembly,
             # not once per descendant part. Optional project/packet gates and a
@@ -345,7 +417,7 @@ def _tree(s, selected_project_id=''):
         node['_ids'] = identifiers
         node['summary'] = _summary(nodes, identifiers)
         node['stages'] = _stages(nodes, identifiers, node['summary'],
-                               ROUTE_BY_ID[node['route']]['last_step'])
+                               max(step['number'] for step in node['steps']))
         return identifiers
 
     roots = [node for identifier, node in nodes.items() if identifier not in parents]
@@ -424,7 +496,8 @@ def _tree(s, selected_project_id=''):
     for node in nodes.values():
         node.pop('_counts', None); node.pop('_ids', None)
     return {'as_of': _stamp(utcnow()), 'selected_project_id': selected_project_id,
-            'choices': choices, 'definitions': DEFINITIONS, 'stage_catalog': list(STAGES),
+            'choices': choices, 'definitions': DEFINITIONS,
+            'stage_catalog': list(stages_for_versions(_catalog_versions(nodes, nodes))),
             'summary': overall, 'stages': stages, 'orders': results}
 
 

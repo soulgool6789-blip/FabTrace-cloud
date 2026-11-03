@@ -83,8 +83,10 @@ def test_flow_catalog_matches_requested_stage_order_and_colors(api):
         ('Inventory', 'black'), ('QA/QC-001', 'black'), ('Prep/Fabrication', 'red'),
         ('QA/QC-002', 'red'), ('Floor', 'yellow'), ('Process Welder', 'blue'),
         ('QA/QC-003', 'blue'), ('Testing', 'orange'), ('QA/QC-004', 'orange'),
-        ('Paint', 'pink'), ('QA/QC-005', 'pink'), ('Ready To Ship', 'green')]
-    assert sorted(number for stage in result['stage_catalog'] for number in stage['steps']) == list(range(1, 25))
+        ('QA/QC-005', 'orange'), ('Paint', 'pink'), ('QA/QC-006', 'pink'), ('Ready To Ship', 'green')]
+    assert sorted({number for stage in result['stage_catalog'] for number in stage['steps']}) == list(range(1, 26))
+    assert [stage['key'] for stage in result['stage_catalog'] if 18 in stage['steps']] == [
+        'qa_test_results', 'qa_pressure_results']
     assert result['stage_catalog'] == ok(api.get('/api/flow/catalog'))['stage_catalog']
 
 
@@ -140,11 +142,12 @@ def test_tree_counts_each_identity_once_and_keeps_missing_spools_and_bom_pieces(
     assert stages['qa_001']['total'] == 3 and stages['qa_001']['missing_records'] == 2
     assert stages['preparation']['total'] == 5 and stages['preparation']['missing_records'] == 3
     assert stages['qa_002']['total'] == 1 and stages['qa_002']['missing_records'] == 1
-    assert stages['floor']['total'] == 4 and stages['floor']['missing_records'] == 3
+    assert stages['floor']['total'] == 5 and stages['floor']['missing_records'] == 3
     assert stages['testing']['total'] == stages['qa_test_results']['total'] == 1
     assert stages['qa_test_results']['label'] == 'QA/QC-004'
-    assert stages['paint']['total'] == 2 and stages['qa_004']['total'] == 1
-    assert stages['qa_004']['label'] == 'QA/QC-005'
+    assert stages['qa_pressure_results']['total'] == 1 and stages['qa_pressure_results']['completed'] == 0
+    assert stages['paint']['total'] == 2 and stages['qa_final']['total'] == 1
+    assert stages['qa_final']['label'] == 'QA/QC-006'
     assert stages['ready_to_ship']['total'] == 2 and stages['ready_to_ship']['separate']
     assert rows[spool]['blockers'] and not rows[spool]['on_hold']
     assert all(not row['route_started'] for row in rows.values())
@@ -271,6 +274,7 @@ def test_assembly_finish_stops_at_22_shipping_and_delivery_are_separate(api):
     assert all(child['flow_stage']['source_item_id'] == assembly and child['flow_stage']['inherited'] for child in children)
     assert all(child['progress']['total'] == 8 for child in children)
     assert len(row['steps']) == 8
+    assert row['catalog_version'] == 'CLM-24-v6'
     shipping = next(stage for stage in row['stages'] if stage['key'] == 'ready_to_ship')
     assert shipping['current'] == 1 and shipping['completed'] == 0
     assert before['summary']['total_steps'] == 14
@@ -341,7 +345,7 @@ def test_shipping_document_gate_reports_blocker_without_relocating_the_recorded_
 @pytest.mark.parametrize('action', ['fail', 'reopen', 'admin_return_to_work'])
 def test_each_return_event_resets_completed_steps_without_resetting_earlier_work(api, action):
     module = importlib.import_module('production_progress')
-    flow = SimpleNamespace(baseline_step=9, current_step=14, status='active')
+    flow = SimpleNamespace(route='spool', catalog_version=None, baseline_step=9, current_step=14, status='active')
     events = [SimpleNamespace(action='advance', step=step, data={}) for step in range(9, 17)]
     events.append(SimpleNamespace(action=action, step=15, data={'return_step': 14}))
     states = {step['number']: step['state'] for step in module._steps('spool', flow, events)}

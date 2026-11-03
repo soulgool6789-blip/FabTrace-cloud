@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.03-required-assembly.1'
+APP_VERSION='2026.11.03-testing-branches.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -628,7 +628,7 @@ def health(s:Session=Depends(db)):
     # A database connection alone is insufficient if the tracking migration was skipped.
     s.execute(select(SpoolPlan.item_id).limit(1))
     s.execute(select(SpoolProcessEvent.id).limit(1))
-    s.execute(select(FlowPlan.item_id).limit(1))
+    s.execute(select(FlowPlan.item_id, FlowPlan.catalog_version).limit(1))
     s.execute(select(FlowTestingState.item_id).limit(1))
     s.execute(select(QualityWorkspace.id).limit(1))
     s.execute(select(DossierProject.project_id).limit(1))

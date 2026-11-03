@@ -49,18 +49,22 @@ Only **Fit-up welder**, **Administrator** and retained legacy **Welder** account
 
 **Fab Prep Technician** or Administrator completes component-preparation step **7**. **Painter** or Administrator completes combined sandblast/paint step **21**. That combined step includes painting; a Fab Prep Technician's preparation responsibility does not authorize its completion.
 
-QA steps **2, 11, 15, 18 and 22** require **QA/QC** or Administrator. The current **CLM-24-v6 / CLM-TEST-v1** route gives steps **17–19** explicit phases:
+QA steps **2, 11, 15, 18 and 22** require **QA/QC** or Administrator. The current **CLM-25-v1 / CLM-TEST-v1** route gives steps **17–19** explicit phases:
 
 | Current phase | Authorized position |
 | --- | --- |
 | Step 17: required YES/NO testing decision and child-spool verification | Material coordinator, Shop Foreman or Administrator |
 | Step 17: NDT receipt, technician report and required correction | NDT or Administrator |
 | Step 17: pressure-test receipt, technician report and required correction | Pressure Testing Technician or Administrator |
-| Step 18: explicit QA/QC PASS/FAIL for the current NDT or pressure attempt | QA/QC or Administrator |
+| Step 18: explicit QA/QC-004 NDT or QA/QC-005 pressure PASS/FAIL for the current attempt | QA/QC or Administrator |
 | Step 19: actual Floor handoff after each QA PASS | Material coordinator, Shop Foreman or Administrator |
+| Step 22: QA/QC-006 final paint inspection | QA/QC or Administrator |
+| Step 23: actual shipment Return to Floor handoff | Material coordinator, Shop Foreman or Administrator |
 | Return to testing, when offered by the server | Shop Foreman or Administrator, with a reason and reference |
 
-YES follows **NDT → QA/QC → Floor → pressure testing → QA/QC → Floor → Paint/finishing**. NO continues to step 20 and records steps 18/19 as **Not required**. Neither decision is preselected. Each technician records the actual report result and reference; this does not grant QA acceptance. A non-admin testing employee must receive using their own badge. The recorded testing custodian or an administrator submits the report and correction.
+YES follows **NDT → QA/QC-004 → Floor → pressure testing → QA/QC-005 → Floor → Paint/finishing**. NO continues to step 20 and records only testing steps 18/19 as **Not required**. Neither decision is preselected. Shipment Floor step 23 remains required after QA/QC-006. Each technician records the actual report result and reference; this does not grant QA acceptance. A non-admin testing employee must receive using their own badge. The recorded testing custodian or an administrator submits the report and correction.
+
+Current ready-to-ship and shipment actions are steps 24 and 25. Retained 24-step travelers keep their original permissions and meanings at steps 23 and 24, with final QA/QC-005 at 22. A new catalog does not relabel earlier decisions or grant a testing employee final QA authority.
 
 QA FAIL requires a reference, failure details and scanned return to the exact previous testing station and employee who sent the attempt into QA. Completed correction, a fresh test attempt and another QA decision are mandatory. An existing YES cannot be changed to NO on rework. Scope and child links lock after the initial testing decision and stay locked through restarts. A pending QA attempt must receive its disposition, and required correction must be completed before a controlled restart is available. The server advertises the eligible restart action; its availability is not determined by the numbered step alone.
 

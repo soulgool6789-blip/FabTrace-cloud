@@ -2,7 +2,17 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
-## Current application revision: required Assembly Number
+## Current application revision: testing branches and shipment floor handoff
+
+Release `2026.11.03-testing-branches.1` introduces catalog `CLM-25-v1`. Step 17 shows the explicit testing branches: **YES → NDT → QA/QC-004 → Floor → Pressure Testing → QA/QC-005 → Floor → Paint/finishing** and **NO → Paint/finishing**. The visible branch actions retain the existing versioned testing phases, separate technician reports, mandatory QA PASS/FAIL, real custody handoffs, and failure/correction/retest gates. They do not create extra inspection passes from position or a previewed choice.
+
+The new catalog labels final inspection at step 22 **QA/QC-006**, adds a mandatory scanned **Return to Floor** at step 23 in Shipment, and moves **Release to Ready to Ship** to 24 and **Ship to Customer** to 25. Shipping details remain mandatory at the actual shipment action. The floor handoff requires the real sender, receiving material coordinator and Floor destination; release alone does not record that movement.
+
+Each new traveler records its `catalog_version`. Initialization adds a nullable column without rewriting old rows; a retained NULL identifies the frozen 24-step route. Historical step 23/24 events, final QA labels, release evidence, timers and issued-document snapshots retain their original meaning. Read models, exports and the selected traveler map use that traveler's definitions. The separate `qa_pressure_results` and `qa_final` station keys identify the new QA/QC-005 pressure review and QA/QC-006 final inspection; retained `qa_004` continues to mean the old final inspection. Station time still comes only from actual recorded movement.
+
+The production database was read-only checked before this change and contained zero rows in `flow_plans`, `flow_events`, `flow_exceptions` and `flow_testing_states`. Existing PO, assembly, spool, material, document and QA records are retained. The earlier required Assembly Number correction remains in force.
+
+## Previous application revision: required Assembly Number
 
 Release `2026.11.03-required-assembly.1` requires an independently supplied, nonblank **Assembly Number** when creating an assembly definition. Setup, identity correction, physical registration and assembly editing enforce the same rule in the UI and on the server. Whitespace-only values and attempts to clear a saved number are rejected. A PATCH may omit the field only when the exact existing definition already has a valid number. Leading zeroes and permanent record IDs are preserved; a GPN or internal physical ID is never substituted for the Assembly Number.
 

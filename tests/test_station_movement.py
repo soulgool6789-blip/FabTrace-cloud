@@ -76,7 +76,7 @@ def test_explicit_qa_choices_and_ambiguous_historical_destinations_remain_distin
     item_id = labels(api, project)['items'][0]['id']
     options = ok(api.get('/api/transfers/options'))['locations']
     assert {row['flow_stage_key'] for row in options if row.get('active') and row.get('flow_stage_key')} == {
-        'inventory', 'qa_001', 'preparation', 'qa_002', 'floor', 'welding', 'qa_003', 'testing', 'qa_test_results', 'paint', 'qa_004', 'ready_to_ship'}
+        'inventory', 'qa_001', 'preparation', 'qa_002', 'floor', 'welding', 'qa_003', 'testing', 'qa_test_results', 'qa_pressure_results', 'paint', 'qa_004', 'qa_final', 'ready_to_ship'}
     assert not next(row for row in options if row['id'] == 'qa_qc')['active']
     legacy = move(api, item_id, 'qa_qc')
     assert legacy['flow_stage']['key'] == 'inventory' and legacy['flow_stage']['needs_station_selection']
@@ -130,13 +130,75 @@ def test_legacy_final_inspection_station_stays_pink_and_new_test_review_is_disti
     assert database_state(api) == before
 
 
+def test_new_pressure_and_final_stations_retain_distinct_visits_and_legacy_final_meaning(api):
+    item = api.item('QA-STATION-REVISION', kind='Spool', welds_required=0)
+    identifier = item['id']
+    legacy = move(api, identifier, 'qa_004')['flow_stage']
+    pressure = move(api, identifier, 'qa_pressure_results')['flow_stage']
+    final = move(api, identifier, 'qa_final')['flow_stage']
+    assert (legacy['key'], legacy['label'], legacy['color']) == ('qa_004', 'QA/QC-005', 'pink')
+    assert (pressure['key'], pressure['label'], pressure['color']) == ('qa_pressure_results', 'QA/QC-005', 'orange')
+    assert (final['key'], final['label'], final['color']) == ('qa_final', 'QA/QC-006', 'pink')
+    assert [(row['stage_key'], row['label']) for row in final['station_visits']] == [
+        ('qa_004', 'QA/QC-005'), ('qa_pressure_results', 'QA/QC-005'), ('qa_final', 'QA/QC-006')]
+    before = database_state(api)
+    assert detail(api, identifier)['flow_stage'] == final
+    assert database_state(api) == before
+
+
+def test_label_only_legacy_qa005_remains_final_inspection(api):
+    item = api.item('LEGACY-QA005-LABEL', kind='Spool', welds_required=0)
+    move(api, item['id'], 'qa_004')
+    with api.session_factory() as session:
+        row = session.scalar(select(api.application.Audit).where(
+            api.application.Audit.item_id == item['id'], api.application.Audit.event == 'TRANSFER'))
+        row.details = {**row.details, 'to': {**row.details['to'], 'location_id': None, 'location': 'QA/QC-005'}}
+        session.commit()
+    before = database_state(api)
+    stage = detail(api, item['id'])['flow_stage']
+    assert stage['key'] == 'qa_004' and stage['color'] == 'pink'
+    assert stage['station_visits'][0]['stage_key'] == 'qa_004'
+    assert database_state(api) == before
+
+
+@pytest.mark.parametrize('label_only', [False, True])
+def test_recorded_pressure_review_definition_disambiguates_qa005_history(api, label_only):
+    assembly = create_item(api, 'PRESSURE-QA-HISTORY', kind='Assembly')
+    enroll(api, assembly, 'assembly', start_step=18, expected_children=1, legacy_catalog=True)
+    move(api, assembly, 'testing')
+    move(api, assembly, 'qa_qc')
+    flow = importlib.import_module('flow')
+    # Model an imported historical movement with its exact saved pressure
+    # definition. The current cursor alone must not determine its station.
+    with api.session_factory() as session:
+        event = session.scalar(select(flow.FlowEvent).where(
+            flow.FlowEvent.item_id == assembly, flow.FlowEvent.action == 'custody_transfer')
+            .order_by(flow.FlowEvent.sequence.desc()))
+        event.data = {**event.data, 'definition_version': 'CLM-25-v1',
+            'step_definition': {'number': 18, 'title': 'QA/QC-005 - Verify Pressure Test Results',
+                'display_qa_code': 'QA/QC-005', 'flow_stage_key': 'qa_pressure_results',
+                'testing_phase': 'pressure_qa', 'catalog_version': 'CLM-25-v1'}}
+        if label_only:
+            audit = session.scalar(select(api.application.Audit).where(
+                api.application.Audit.item_id == assembly, api.application.Audit.event == 'TRANSFER')
+                .order_by(api.application.Audit.id.desc()))
+            audit.details = {**audit.details, 'to': {**audit.details['to'],
+                'location_id': None, 'location': 'QA/QC-005'}}
+        session.commit()
+    before = database_state(api)
+    stage = detail(api, assembly)['flow_stage']
+    assert stage['key'] == 'qa_pressure_results' and stage['label'] == 'QA/QC-005'
+    assert stage['color'] == 'orange' and not stage['needs_station_selection']
+    assert database_state(api) == before
+
+
 @pytest.mark.parametrize('legacy_definition', [None, {
     'number': 18, 'title': 'Create Assembly ID', 'qa': False,
     'display_qa_code': None, 'flow_stage_key': 'testing',
 }])
 def test_historical_generic_step_18_move_needs_a_recorded_test_review_definition(api, legacy_definition):
     assembly = create_item(api, 'HISTORICAL-TESTING-ASSEMBLY', kind='Assembly')
-    enroll(api, assembly, 'assembly', start_step=18, expected_children=1)
+    enroll(api, assembly, 'assembly', start_step=18, expected_children=1, legacy_catalog=True)
     move(api, assembly, 'testing')
     move(api, assembly, 'qa_qc')
     flow = importlib.import_module('flow')
@@ -160,4 +222,5 @@ def test_historical_generic_step_18_move_needs_a_recorded_test_review_definition
     assert identified['key'] == 'qa_test_results'
     assert identified['label'] == 'QA/QC-004' and identified['color'] == 'orange'
     assert not identified['needs_station_selection']
+
 

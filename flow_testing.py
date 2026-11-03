@@ -81,7 +81,14 @@ def _stamp(value):
 @read_cached(lambda s, plan: plan.item_id)
 def _eligible_pending(s, plan):
     """Only untouched Step17 work adopts the new protocol automatically."""
-    if plan.route != 'assembly' or plan.status != 'active' or plan.current_step != 17 or plan.baseline_step > 17:
+    if plan.route != 'assembly' or plan.status != 'active' or plan.current_step != 17:
+        return False
+    from flow import VERSION, catalog_version
+    # Current-catalog returns to testing always begin an explicit new
+    # decision. A late controlled baseline cannot reopen the old combined QA.
+    if catalog_version(plan) == VERSION:
+        return True
+    if plan.baseline_step > 17:
         return False
     cached = projection_get(s, 'testing_legacy_work', plan.item_id)
     if cached is not PROJECTION_MISSING:
@@ -136,12 +143,27 @@ def _label(kind):
     return 'NDT' if kind == 'ndt' else 'Pressure Test'
 
 
+def _qa_position(kind, version):
+    from flow import VERSION
+    pressure = kind == 'pressure' and version == VERSION
+    return {'qa_code': 'QA-005' if pressure else 'QA-004',
+            'display_qa_code': 'QA/QC-005' if pressure else 'QA/QC-004',
+            'qa_stage': 'qa_pressure_results' if pressure else 'qa_test_results'}
+
+
+def test_qa_position(plan, kind):
+    from flow import catalog_version
+    return _qa_position(kind, catalog_version(plan))
+
+
 def phase_definition(state, base):
     if state is None or state.phase not in ACTIVE_PHASES or PHASE_STEP[state.phase] != base['number']:
         return base
     action, phase = action_for(state), state.phase
     kind = WORK_PHASES.get(phase) or QA_PHASES.get(phase) or CORRECTION_PHASES.get(phase)
+    qa_position = _qa_position(kind, base.get('catalog_version'))
     definition = {**base, 'roles': [], 'qa': False, 'return_steps': [],
+        'qa_code': None, 'display_qa_code': None, 'qa_stage': None,
         'requires_scan': True, 'requires_reference': False, 'requires_handoff': False,
         'requires_location': False, 'requires_child_scans': phase == 'decision',
         'requires_resolution': action == 'correct', 'testing_phase': phase,
@@ -168,14 +190,15 @@ def phase_definition(state, base):
         roles = ['admin', TEST_ROLES[kind]]
         definition.update(requires_reference=True, requires_handoff=True,
             requires_location=True, handoff_target_role='inspector',
-            handoff_location_id='qa_test_results')
+            handoff_location_id=qa_position['qa_stage'])
     elif action == 'review':
-        title = 'QA/QC-004 - Verify ' + _label(kind) + ' Results'
+        title = qa_position['display_qa_code'] + ' - Verify ' + _label(kind) + ' Results'
         checks = ['Review the current test attempt and its controlled report',
                   'Verify current passing dimensions and applicable weld / test acceptance',
                   'Record an explicit QA/QC PASS or FAIL']
         roles = ['admin', 'inspector']
-        definition.update(qa=True, requires_reference=True)
+        definition.update(qa=True, requires_reference=True, **qa_position,
+                          flow_stage_key=qa_position['qa_stage'])
     elif action == 'correct':
         title = _label(kind) + ': Mandatory Rework'
         checks = ['Complete and record the correction required by the failed QA review',
@@ -258,8 +281,8 @@ def can_control_flow_timer(s, plan, user):
     state = testing_state(s, plan)
     if state is None or not is_active(s, plan):
         return None
-    from flow import STEP_BY_NUMBER
-    return role_id(user) in phase_definition(state, STEP_BY_NUMBER[plan.current_step])['roles']
+    from flow import step_definition
+    return role_id(user) in phase_definition(state, step_definition(plan, plan.current_step))['roles']
 
 
 def validate_context(state, data):
@@ -324,7 +347,7 @@ def restart_after_final_qa(s, plan, failed_step, target, at):
         restart_cycle(s, plan, at)
 
 
-def validate_handoff(s, item, state, selected, user):
+def validate_handoff(s, item, plan, state, selected, user):
     """Both the role and actual custodian are checked, never inferred."""
     action = action_for(state)
     if action == 'start':
@@ -342,8 +365,9 @@ def validate_handoff(s, item, state, selected, user):
             raise HTTPException(409, 'Testing custody changed after this attempt started. Restore the recorded testing custodian before submitting its report.')
         if selected.receiver.role not in ('inspector', 'admin'):
             raise HTTPException(422, 'Send the test report and item to an employee in the QA/QC position')
-        if selected.location_id != 'qa_test_results':
-            raise HTTPException(422, 'The recorded test handoff must go to QA/QC-004')
+        qa_position = test_qa_position(plan, state.test_kind)
+        if selected.location_id != qa_position['qa_stage']:
+            raise HTTPException(422, 'The recorded test handoff must go to ' + qa_position['display_qa_code'])
     elif action == 'handoff':
         if selected.location_id != 'floor':
             raise HTTPException(422, 'Record the required handoff back to the Floor station')
@@ -451,13 +475,14 @@ def accepted_report_errors(s, item, plan):
     return ndt_prerequisite_errors(s, item, plan)
 
 
-def _review_position(s, item):
+def _review_position(s, item, plan, state):
     from transfers import ItemTransferState
     transfer = s.get(ItemTransferState, item.id)
     employee = s.get(Employee, item.handler)
-    if (transfer is None or transfer.location_id != 'qa_test_results' or
+    qa_position = test_qa_position(plan, state.test_kind)
+    if (transfer is None or transfer.location_id != qa_position['qa_stage'] or
             employee is None or not employee.active or employee.role not in ('inspector', 'admin')):
-        raise HTTPException(409, 'Record the item custody at QA/QC-004 before reviewing the test result')
+        raise HTTPException(409, 'Record the item custody at ' + qa_position['display_qa_code'] + ' before reviewing the test result')
 
 
 def _validate_report(state):
@@ -544,7 +569,7 @@ def advance_testing(s, item, plan, data, user):
     if errors:
         raise HTTPException(409, {'flow_blockers': errors})
     if selected is not None:
-        validate_handoff(s, item, state, selected, user)
+        validate_handoff(s, item, plan, state, selected, user)
     extra, closed = {}, []
     if action == 'decision':
         state.decision = data.testing_decision
@@ -563,7 +588,7 @@ def advance_testing(s, item, plan, data, user):
         plan.step_entered_at = now
     elif action == 'complete':
         transfer = s.get(ItemTransferState, item.id)
-        if transfer is None or not transfer.location_id or transfer.location_id == 'qa_test_results':
+        if transfer is None or not transfer.location_id or transfer.location_id in ('qa_test_results', 'qa_pressure_results'):
             raise HTTPException(409, 'The testing station must be recorded before sending this attempt to QA/QC')
         state.origin_snapshot = {'sender_badge': selected.sender.badge,
             'sender_name': selected.sender.name, 'location_id': transfer.location_id,
@@ -576,7 +601,7 @@ def advance_testing(s, item, plan, data, user):
         change_phase(state, plan, 'ndt_qa' if state.test_kind == 'ndt' else 'pressure_qa', now)
     elif action == 'review':
         _validate_report(state)
-        _review_position(s, item)
+        _review_position(s, item, plan, state)
         if not state.report_basis or state.report_basis != physical_report_basis(s, item, plan):
             raise HTTPException(409, 'The physical scope or source records changed after this test report. Record FAIL, complete the required correction, and submit a fresh test attempt before QA PASS.')
         if state.report_result != 'PASS':
@@ -670,7 +695,7 @@ def fail_testing(s, item, plan, data, user):
     if data.scanned_item_id != item.id:
         raise HTTPException(422, 'Scan or enter the exact item ID before recording a failed test return')
     _validate_report(state)
-    _review_position(s, item)
+    _review_position(s, item, plan, state)
     validate_return(state, data)
     selected = validate_transfer(s, item, sender_badge=data.sender_badge,
         receiver_badge=data.receiver_badge, location_id=data.location_id,

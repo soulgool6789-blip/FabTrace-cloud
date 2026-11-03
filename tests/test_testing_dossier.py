@@ -63,6 +63,33 @@ def test_new_successful_testing_phases_do_not_stale_their_approved_evidence(api)
         assert s.get(dossier.DossierReview,before['latest_review']['id']).snapshot == before['_saved_snapshot']
 
 
+def test_25_step_qa_labels_and_post_qa_logistics_preserve_signed_physical_proof(api):
+    item_id, _, before = signed_pressure(api)
+    rows = [(18, 'review', 'ndt_qa', 'QA/QC-004'),
+            (18, 'review', 'pressure_qa', 'QA/QC-005'),
+            (22, None, None, 'QA/QC-006'),
+            (23, None, None, None), (24, None, None, None), (25, None, None, None)]
+    ids = []
+    for sequence, (step, action, phase, code) in enumerate(rows, 1):
+        ids.append(save_event(api, item_id, step=step, testing_action=action, phase=phase,
+            protocol='CLM-TEST-v1' if action else None, sequence=sequence,
+            test_kind='ndt' if phase == 'ndt_qa' else 'pressure' if phase else None,
+            definition_version='CLM-25-v1',
+            step_definition={'number':step, 'display_qa_code':code,
+                             'title':code or {23:'Return to Floor',24:'Release to Ready to Ship',25:'Ship to Customer'}[step]}))
+        current = check(api, item_id, 'pressure')
+        assert current['status'] == 'accepted'
+        assert current['fingerprint'] == before['fingerprint']
+        assert current['latest_review'] == before['latest_review']
+    records = packet(api, item_id)['records']['flow_events']
+    assert [row['id'] for row in records] == ids
+    assert [row['data']['step_definition']['display_qa_code'] for row in records[:3]] == [
+        'QA/QC-004', 'QA/QC-005', 'QA/QC-006']
+    dossier = importlib.import_module('dossier')
+    with api.session_factory() as session:
+        assert session.get(dossier.DossierReview, before['latest_review']['id']).snapshot == before['_saved_snapshot']
+
+
 @pytest.mark.parametrize('change', ['qa_failure','correction','legacy_qa','unrecognized_protocol','material','work','scope'])
 def test_actual_testing_invalidation_and_legacy_bases_remain_effective(api,change):
     item_id, weld, before = signed_pressure(api)

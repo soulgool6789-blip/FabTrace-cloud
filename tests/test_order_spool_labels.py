@@ -185,7 +185,7 @@ def test_existing_parent_scope_is_only_filled_before_release_and_during_collecti
             'project_id': project, 'planned_welds': 0, 'zero_weld_reason': 'Synthetic bolted assembly scope'}))
         ok(api.post(f'/api/flow/items/{parent}/start', {
             'route': 'assembly', 'expected_children': 1,
-            'start_step': 19 if state == 'past_collection' else 17,
+            'start_step': 20 if state == 'past_collection' else 17,
             'baseline_reference': 'SYNTHETIC-BASELINE',
             'baseline_reason': 'Retained synthetic workflow baseline'}), 201)
     before = database_state(api)
@@ -294,4 +294,5 @@ def test_late_spool_registration_failure_rolls_back_new_parents_and_all_children
     monkeypatch.setattr(module, 'audit', fail_child_audit)
     assert api.post(f'{ROOT}/{project}/generate', generation_body(api, project, kind='Spool')).status_code == 409
     assert database_state(api) == before
+
 

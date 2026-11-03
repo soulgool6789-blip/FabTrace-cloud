@@ -76,7 +76,9 @@ def test_board_keeps_inventory_and_legacy_spools_once_with_exact_identity_and_no
         assert row['assembly_id'] == copy['assembly_id']
         assert row['assembly_number'] == saved['assemblies'][0]['gpn']
         assert row['purchase_order'] == saved['order']['purchase_order']
-    assert len(result['stage_catalog']) == len(result['stage_counts']) == 12
+    assert len(result['stage_catalog']) == len(result['stage_counts']) == 13
+    assert {'qa_pressure_results', 'qa_final'} <= result['stage_counts'].keys()
+    assert 'qa_004' not in result['stage_counts']  # Added only when retained station history needs it.
     assert sum(result['stage_counts'].values()) == result['total']
     assert result['stage_counts']['inventory'] == 3
     assert result['stage_counts']['qa_001'] == 0
@@ -99,4 +101,5 @@ def test_board_excludes_removed_ancestors_and_keeps_unparented_physical_inventor
     before = database_state(api)
     assert board(api)['total'] == board(api, project)['total'] == 0
     assert database_state(api) == before
+
 

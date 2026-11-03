@@ -356,7 +356,7 @@ def test_export_contains_every_business_record_and_column(api, populated_export,
     counts = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Sheet rows"}
     sources = {row["entry"].value: row["value"].value for row in manifest if row["section"].value == "Source table"}
     assert counts == {**{name: len(expected["rows"]) for name, expected in populated_export.items()},
-                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 24, "Audit readiness": 0,
+                      **{name: 0 for name in PROCESS_REPORTS}, "Flow steps": 25, "Audit readiness": 0,
                       "Project progress": 1, "Part progress": 1, "Job Packet readiness": 0, "Spool parts progress": 0}
     assert sources == {**{name: model.__tablename__ for name, model in models().items()},
                        **{name: "derived:tracking_process_events" for name in PROCESS_REPORTS},
@@ -388,7 +388,7 @@ def test_empty_tables_keep_their_column_headers(api):
     assert workbook.headers("Audit readiness") == list(exporter.QUALITY_REPORT_COLUMNS)
     assert not workbook.records("Audit readiness")
     assert workbook.headers("Flow steps") == list(exporter.FLOW_STEP_COLUMNS)
-    assert [row["number"].value for row in workbook.records("Flow steps")] == list(range(1, 25))
+    assert [row["number"].value for row in workbook.records("Flow steps")] == list(range(1, 26))
     for name, columns in (("Project progress", exporter.PROJECT_PROGRESS_COLUMNS),
                           ("Part progress", exporter.PART_PROGRESS_COLUMNS),
                           ("Job Packet readiness", exporter.PACKET_READINESS_COLUMNS),
@@ -741,14 +741,20 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     assert len(visits) == 3
     assert all(row["item_id"].value == component_id and row["project_id"].value == "TEST-PROJECT" for row in visits)
     assert [row["process_key"].value for row in visits] == ["clm_01", "clm_02", "clm_02"]
-    assert len(workbook.records("Flow steps")) == 24
+    assert len(workbook.records("Flow steps")) == 25
     qa_steps = [row for row in workbook.records("Flow steps") if row["qa"].value]
-    assert [row["qa_code"].value for row in qa_steps] == ["QA-001", "QA-002", "QA-003", "QA-004", "QA-005"]
+    assert [row["qa_code"].value for row in qa_steps] == ["QA-001", "QA-002", "QA-003", "QA-004", "QA-006"]
     assert qa_steps[0]["title"].value == "QA/QC-001 · Check Dimensions"
-    assert [row["display_qa_code"].value for row in qa_steps] == ["QA/QC-001", "QA/QC-002", "QA/QC-003", "QA/QC-004", "QA/QC-005"]
-    assert qa_steps[-1]["flow_stage_key"].value == "qa_004"
-    shipping = workbook.records("Flow steps")[22]
-    assert shipping["number"].value == 23 and shipping["requires_reference"].value is True
+    assert [row["display_qa_code"].value for row in qa_steps] == ["QA/QC-001", "QA/QC-002", "QA/QC-003", "QA/QC-004", "QA/QC-006"]
+    assert qa_steps[-1]["flow_stage_key"].value == "qa_final"
+    floor = workbook.records("Flow steps")[22]
+    assert floor["number"].value == 23 and floor["title"].value == "Return to Floor"
+    assert floor["requires_handoff"].value is True and floor["requires_location"].value is True
+    shipping = workbook.records("Flow steps")[23]
+    assert shipping["number"].value == 24 and shipping["requires_reference"].value is True
+    assert shipping["is_ready_to_ship"].value is True and shipping["is_shipment"].value is False
+    assert workbook.records("Flow steps")[24]["is_shipment"].value is True
+    assert workbook.records("Flow plans")[0]["catalog_version"].value == "CLM-25-v1"
 
 
 def test_long_text_and_json_overflow_can_be_reconstructed_without_loss(api):

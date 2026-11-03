@@ -62,8 +62,8 @@ def physical_spool_board(s, project_id='', subproject_id=''):
     """
     from sqlalchemy.orm import aliased
     from main import Item
-    from flow import FlowException, FlowPlan, STEP_BY_NUMBER, _step_errors
-    from flow_stages import STAGES, STAGE_ORDER
+    from flow import FlowException, FlowPlan, catalog_version, current_step_definition, _step_errors
+    from flow_stages import CURRENT_CATALOG, LEGACY_CATALOG, STAGE_ORDER, stages_for_versions
     from flow_stations import station_positions
     from order_spools import OrderSpool, SpoolQrIdentity
     from orders import OrderAssembly, OrderGpn, PurchaseOrder
@@ -121,7 +121,8 @@ def physical_spool_board(s, project_id='', subproject_id=''):
             'assembly_number': mapping.assembly_part_number if mapping else parent_number or None,
             'status': flow.status if flow else 'not_started',
             'current_step': flow.current_step if flow else None,
-            'current_title': STEP_BY_NUMBER[flow.current_step]['title'] if flow and flow.current_step else '',
+            'current_title': current_step_definition(s, flow)['title'] if flow and flow.current_step else '',
+            'catalog_version': catalog_version(flow),
             'open_exceptions': exceptions.get(item.id, 0),
             'released': bool(item.released), 'blocked': display['flow_stage']['blocked'],
             'blockers': _step_errors(s, item, flow) if flow else arrival.get('blockers', [])})
@@ -132,10 +133,17 @@ def physical_spool_board(s, project_id='', subproject_id=''):
 
     result.sort(key=lambda row: (STAGE_ORDER[row['flow_stage']['key']],
         number_key(row['spool_number'] or row['item_id']), sequences[row['item_id']], row['item_id']))
-    counts = {stage['key']: 0 for stage in STAGES}
+    versions = {row['catalog_version'] for row in result}
+    recorded_keys = {row['flow_stage']['key'] for row in result}
+    if 'qa_004' in recorded_keys:
+        versions.add(LEGACY_CATALOG)
+    if recorded_keys & {'qa_pressure_results', 'qa_final'}:
+        versions.add(CURRENT_CATALOG)
+    stage_catalog = stages_for_versions(versions)
+    counts = {stage['key']: 0 for stage in stage_catalog}
     for row in result:
         counts[row['flow_stage']['key']] += 1
-    return {'items': result, 'stage_catalog': STAGES, 'stage_counts': counts, 'total': len(result)}
+    return {'items': result, 'stage_catalog': stage_catalog, 'stage_counts': counts, 'total': len(result)}
 
 
 def requirement_presentations(s, requirement_ids):
@@ -183,3 +191,4 @@ def requirement_presentations(s, requirement_ids):
             'flow_stage_state': 'not_registered' if not copies else 'common' if common else 'mixed',
             'flow_stage': common}
     return result
+

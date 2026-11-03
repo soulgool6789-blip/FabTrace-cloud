@@ -48,7 +48,7 @@ Both kinds of decision set the item's released state. An administrative release 
 | --- | --- |
 | No numbered route | The release is recorded and any open manual process timing is closed. |
 | Spool route | The current position becomes step 16, the post-release spool handoff. |
-| Assembly route | The current position becomes step 23, the pre-shipment handoff. |
+| Assembly route | The current position becomes step 23: the mandatory shipment Return to Floor handoff on CLM-25-v1, or the original ready-to-ship handoff on a retained 24-step traveler. |
 | Component route | The route is marked administratively released and timing closes. It is not counted as recorded preparation completion. |
 
 The route change is an explicit administrative event. Earlier steps are not checked off or counted as completed. Any normal follow-on handoff or shipping action keeps its own applicable checks and records. Use the separate administrative custody correction when an administrator needs to correct a released or blocked item's assignment/location.
@@ -119,3 +119,4 @@ The Admin controls item view contains the administrative release/return/correcti
 If someone changes an item or account while your form is open, the application rejects the stale submission. Refresh, review the current record and submit a new decision. Failed or stale decisions do not partially change the record.
 
 The site-management shortcuts open **Projects & welds**, **Audit readiness**, **Shop locations**, **Activity log** and **Export Excel**. Existing Job Packets, process, parts and project controls remain available through the main navigation according to the administrator's permissions.
+

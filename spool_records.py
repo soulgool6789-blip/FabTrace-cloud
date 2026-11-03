@@ -25,8 +25,8 @@ from starlette.background import BackgroundTask
 from main import APP_VERSION, Audit, Employee, Inspection, Item, Rework, auth, db, utcnow
 from exports import (WorkbookWriter, SheetRecord, TEMP_MEMORY_BYTES, XLSX_MEDIA_TYPE,
                      SHEET_NS, _column_name, _date_serial, _stream_file, _utc, _xml_text)
-from flow import (FlowPlan, FlowEvent, FlowException, ComponentLink, STEPS, VERSION,
-                  flow_stage_for_item)
+from flow import (FlowPlan, FlowEvent, FlowException, ComponentLink, VERSION, ROUTE_BY_ID,
+                  catalog_version, route_definition, step_definition, flow_stage_for_item)
 from flow_testing import FlowTestingState, PROTOCOL as TESTING_PROTOCOL
 from production import SpoolProcessEvent, summarize_process_events
 from tracking import (SpoolPlan, Weld, WeldWork, WeldRepair, WeldRequirement,
@@ -44,6 +44,7 @@ from removals import item_not_removed, item_is_removed
 router = APIRouter(prefix='/api/spool-records', tags=['spool record exports'])
 SHEET_NAMES = ('Spool Record', '24-step Route', 'Weld Register', 'Material Traceability',
                'Inspection History', 'Work and Rework', 'Kelvion Requirements')
+CURRENT_SHEET_NAMES = (SHEET_NAMES[0], '25-step Route', *SHEET_NAMES[2:])
 MAX_SELECTED_SPOOLS = 100
 ROUTE_HEADERS = ('Step', 'Activity', 'Record scope', 'Visit / cycle', 'Performed by',
     'Employee badge', 'Entered (UTC)', 'Departed (UTC)', 'Elapsed HH:MM:SS', 'Status',
@@ -359,16 +360,40 @@ def _testing_not_required(r, identity, number):
         and number in (event.data.get('not_required_steps') or [])),None)
 
 
+def _parent_route(r):
+    plan = r.get('flow_plans', {}).get(r.get('parent'))
+    return route_definition(plan) if plan and plan.route == 'assembly' else ROUTE_BY_ID['assembly']
+
+
+def _route_sheet_name(r):
+    return f'{_parent_route(r)["last_step"]}-step Route'
+
+
+def _owner_step(r, identity, number):
+    plan = r.get('flow_plans', {}).get(identity)
+    definition = step_definition(plan, number)
+    # Retain a recorded out-of-catalog event rather than silently dropping
+    # it or giving it the meaning of a different numbered route.
+    return definition or {'number': number, 'title': f'Recorded step {number} (definition unavailable)'}
+
+
 def _route_rows(r):
     result = []
-    steps = {step['number']:step for step in STEPS}
+    numbers = set(range(1, _parent_route(r)['last_step'] + 1))
+    numbers.update(event.step for event in r['flow'] if type(event.step) is int and event.step > 0)
+    for timer in r['timers'].values():
+        for visit in timer['visits']:
+            match = re.fullmatch(r'clm_(\d+)', visit['process_key'])
+            if match:
+                numbers.add(int(match.group(1)))
     flow = defaultdict(list)
     for event in r['flow']:
         flow[(event.item_id,event.step)].append(event)
-    for number, step in steps.items():
+    for number in sorted(numbers):
         ids = r['components'] if number <= 8 else [r['item'].id] if number <= 16 else ([r['parent']] if r['parent'] else [])
         wrote = False
         for identity in ids:
+            step = _owner_step(r, identity, number)
             scope = _scope(identity,r['item'].id,r['parent'])
             identity_wrote = False
             visits = [v for v in r['timers'][identity]['visits'] if v['process_key'] == f'clm_{number:02d}']
@@ -408,6 +433,7 @@ def _route_rows(r):
                     f'Testing decision event {skipped.id}; no test, QA pass, station visit or duration is inferred.' if skipped else None])
                 wrote = True
         if not wrote:
+            step = _owner_step(r, None, number)
             scope = 'Linked component' if number<=8 else 'This spool' if number<=16 else 'Shared parent assembly'
             result.append([number,step['title'],scope,None,None,None,None,None,None,'Not recorded',None,None])
     return result
@@ -456,7 +482,7 @@ def _append_testing_route(layout,r):
             _utc(e.at),r['names'].get(e.actor,''),e.actor,e.reference,e.data.get('next_phase'),
             _testing_transition_notes(e.data,e.notes)]
         for e in events],title='Assembly testing decisions and phase history')
-    layout.note_row('Testing phases repeat numeric Steps 17–19. A start, report, correction or intermediate QA pass does not by itself complete all testing. NO marks Steps 18–19 not required; it does not create a test result or QA approval. Legacy Hydro/UT events are retained under their saved definitions.')
+    layout.note_row('Testing phases repeat numeric Steps 17–19. A start, report, correction or intermediate QA pass does not by itself complete all testing. NO marks only testing Steps 18–19 not required; it does not create a test result or QA approval or skip the current route’s shipment Floor return at 23. Current QA/QC-004 is NDT, QA/QC-005 is pressure testing and QA/QC-006 is final inspection. Historical events retain their saved checkpoint codes and definitions.')
     moves=[]
     for event in events:
         handoff=event.data.get('handoff') or {}
@@ -497,10 +523,12 @@ def _append_testing_inspections(layout,r):
             _test_label(event.data.get('test_kind')),event.data.get('testing_attempt'),event.data.get('test_result'),
             _utc(event.at),r['names'].get(event.actor,''),event.actor,event.reference,
             str(report['event_id']) if report.get('event_id') is not None else None,report.get('result'),
-            report.get('reference'),', '.join(map(str,event.data.get('closed_exception_ids') or [])),event.notes,report.get('basis_sha256')])
+            report.get('reference'),', '.join(map(str,event.data.get('closed_exception_ids') or [])),event.notes,report.get('basis_sha256'),
+            (event.data.get('step_definition') or {}).get('display_qa_code'),event.data.get('definition_version')])
     layout.table(('Test QA event ID','Source item ID','Record scope','Testing cycle','Test','Attempt','QA result',
         'Reviewed (UTC)','QA name','QA badge','QA reference','Linked test report event ID','Linked test result',
-        'Linked test report reference','Closed exception IDs','Review notes','Linked report basis SHA-256'),reviews,title='Assembly test QA decisions')
+        'Linked test report reference','Closed exception IDs','Review notes','Linked report basis SHA-256',
+        'Saved QA checkpoint','Saved catalog version'),reviews,title='Assembly test QA decisions')
     layout.table(('NDT acceptance event ID','Source item ID','Testing cycle','Attempt','Construction basis SHA-256',
         'Bound NDT report event ID','QA badge','Accepted (UTC)','QA reference'),[
         [str(e.id),e.item_id,e.data.get('testing_cycle'),e.data.get('testing_attempt'),
@@ -624,6 +652,9 @@ def report_layouts(s,r):
     names = r['names']
     plan = r['plan']
     scope = lambda key:_scope(key,item.id,r['parent'])
+    parent_plan = r['flow_plans'].get(r['parent'])
+    route_last = _parent_route(r)['last_step']
+    route_sheet = _route_sheet_name(r)
     book = []
     intro = Layout('Spool Record','CLM Fabrication Spool Record',
         'Production record export. Missing records remain blank or Not recorded. This export does not issue a Job Packet.',
@@ -635,7 +666,8 @@ def report_layouts(s,r):
         ('Customer',r['order'].customer if r['order'] else None),('GPN',identity.get('gpn')),
         ('Assembly number',identity.get('assembly_number')),('Permanent spool ID',item.id),
         ('Permanent assembly ID',r['parent']),('Data captured (UTC)',r['created_at']),
-        ('Flow definition',VERSION),('Planned welds',plan.planned_welds if plan else item.welds_required)]
+        ('Flow definition',catalog_version(parent_plan) if parent_plan else 'Parent traveler not started'),
+        ('Planned welds',plan.planned_welds if plan else item.welds_required)]
     for index,(label,value) in enumerate(values,6):
         row = [label,value,None]
         if index==6:
@@ -658,7 +690,7 @@ def report_layouts(s,r):
     intro.cursor = 19
     intro.table(('Data meaning','Recorded scope'),[
         ['Names and badges','Names are current directory names. Saved badges and event timestamps are retained; historical roles are not inferred.'],
-        ['Route scope','Steps 1–8: linked components. Steps 9–16: this spool. Steps 17–24: shared parent assembly. Shared work is not additional spool labor.'],
+        ['Route scope',f'Steps 1–8: linked components. Steps 9–16: this spool. Steps 17–{route_last}: shared parent assembly. Shared work is not additional spool labor. Each recorded traveler retains its own catalog.'],
         ['Timing','Elapsed station and process time includes calendar waiting time. Active/paused process clock time is listed separately. These are not employee labor hours.'],
         ['Missing events','Earlier baseline steps and work dates have not been reconstructed. Open visits are measured to the captured export timestamp.'],
         ['Weld work','Existing work events record completion/recording time only. Missing start times, independent recorder identities and per-operation durations stay blank.'],
@@ -668,10 +700,15 @@ def report_layouts(s,r):
         ['Original documents','The document index lists references and stored file hashes. Download the listed files or an issued Job Packet for the original documents.'],
         ['QA release',('Recorded release at '+_utc(item.released_at).isoformat()) if item.released and item.released_at else 'Not recorded'],
     ])
+    intro.table(('Source item ID','Record scope','Traveler route','Recorded catalog','Traveler status'),[
+        [key,scope(key),flow.route if flow else None,catalog_version(flow) if flow else None,
+            flow.status if flow else 'Not started']
+        for key in r['related'] for flow in [r['flow_plans'].get(key)]],title='Traveler catalog identities')
+    intro.note_row('Missing traveler records are not assigned a historical route. Their blank template positions use the current catalog; saved event definitions and process names remain authoritative for recorded work.')
     _append_testing_summary(intro,r)
     book.append(intro)
 
-    route = Layout('24-step Route','24-step production history',
+    route = Layout(route_sheet,f'{route_last}-step production history',
         'Each recorded visit is retained. Performed by identifies the saved route/timer actor; handoff badges remain in the event detail below.',
         (9,42,38,16,26,34,24,24,24,32,40,66))
     route.table(ROUTE_HEADERS,_route_rows(r))
@@ -693,8 +730,8 @@ def report_layouts(s,r):
         [key,scope(key),v['id'],v['process_name'],v['status'],_stamp(v['started_at']),_stamp(v['ended_at']),
          Elapsed(v['elapsed_seconds'],6,7,v['ended_at'] is None),Elapsed(v['active_seconds']),Elapsed(v['paused_seconds']),v['started_by'],v['ended_by']]
         for key in r['related'] for v in r['timers'][key]['visits']],title='All process timer visits')
-    route.table(('Event ID','Source item ID','Sequence','Action','Step','Recorded (UTC)','Current directory name','Recorded badge','Reference','Notes','Saved event detail'),[
-        [str(e.id),e.item_id,e.sequence,e.action,e.step,_utc(e.at),names.get(e.actor,''),e.actor,e.reference,e.notes,_json(e.data)] for e in r['flow']],title='Numbered flow event history')
+    route.table(('Event ID','Source item ID','Sequence','Action','Step','Recorded (UTC)','Current directory name','Recorded badge','Reference','Notes','Saved catalog version','Saved event detail'),[
+        [str(e.id),e.item_id,e.sequence,e.action,e.step,_utc(e.at),names.get(e.actor,''),e.actor,e.reference,e.notes,(e.data or {}).get('definition_version'),_json(e.data)] for e in r['flow']],title='Numbered flow event history')
     route.table(('Event ID','Source item ID','Sequence','Event','Process key','Process name','Recorded (UTC)','Current directory name','Recorded badge','Notes'),[
         [str(e.id),e.item_id,e.sequence,e.event,e.process_key,e.process_name,_utc(e.at),names.get(e.actor,''),e.actor,e.notes] for e in r['process']],title='Process timer event history')
     book.append(route)
@@ -841,7 +878,7 @@ def report_layouts(s,r):
         ['CLM user requirement','Root visual inspection before fill/cap','Explicit root visual result, QA identity and time',
             str(sum(1 for req in r['requirements'] if _is_root(req)))+' explicit root visual requirements','Weld Register + Inspection History','Not established' if not any(_is_root(req) for req in r['requirements']) else 'Review current requirement status'],
         ['QF-QAS-100 Rev B, p7','Applicable torque records and coating sequence','Required sequence, results and references',
-            'Recorded route history retained','24-step Route','Applicability and evidence require review'],
+            'Recorded route history retained',route_sheet,'Applicability and evidence require review'],
         ['CAT024 §§6.1–6.4, pp6–8','Packing slip, CoC, MTRs and calibration','Indexed original documents',
             f'{len(docs)} document revisions indexed','Document index below','Originals require review'],
         ['QF-QAS001 C01/C02/K04/K05','Measurements, NDT qualifications, maps and reports','Measured values and qualified personnel',

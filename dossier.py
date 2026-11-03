@@ -439,6 +439,9 @@ def _fabrication_event(event):
     data = event.get('data') or {}
     if data.get('testing_protocol') == 'CLM-TEST-v1' and event['action'] == 'advance':
         # The phased protocol records QA acceptance twice at numeric Step18.
+        # CLM-25 changes their displayed codes and adds shipment Floor step23;
+        # neither changes this saved-evidence classification. Logistics stays
+        # outside the physical basis for both catalog generations.
         # Successful reviews and custody/report actions do not fabricate the
         # item and must not stale the very test proof that they approved.
         # Recorded corrective work does change the physical evidence basis.

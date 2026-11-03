@@ -18,7 +18,7 @@ from tracking import (Project, Subproject, SpoolPlan, Weld, WeldRequirement,
     RequirementEvidence, RequirementReview, WeldWork, TrackingHold,
     _production_complete, _qa_accepted, _weld_blockers, _requirement_satisfied, _after,
     post_fabrication_heat_errors)
-from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, ROUTE_BY_ID, STEP_BY_NUMBER
+from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, route_definition
 
 router = APIRouter(prefix='/api/progress', tags=['project progress'])
 DEFINITIONS = {
@@ -48,7 +48,7 @@ def _stamp(value):
 def _recorded_steps(plan, events, testing=None):
     if not plan:
         return 0, 0, 0
-    route = ROUTE_BY_ID[plan.route]
+    route = route_definition(plan)
     states = {n: 'not_recorded' if n < plan.baseline_step else 'pending'
               for n in range(route['first_step'], route['last_step'] + 1)}
     for event in events:

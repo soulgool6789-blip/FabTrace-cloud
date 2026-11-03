@@ -1,4 +1,4 @@
-"""CLM's 24-step fabrication traveler, custody and quality boundaries.
+"""Versioned CLM fabrication travelers, custody and quality boundaries.
 
 All records here are isolated fixtures. The happy path uses the same physical
 component, spool and assembly identities throughout; checklist submission does
@@ -44,7 +44,7 @@ def create_item(api, item_id, kind="Part", planned=0, project=PROJECT):
 
 
 def enroll(api, item_id, route, *, start_step=None, expected_children=0,
-           legacy_testing=False, **values):
+           legacy_testing=False, legacy_catalog=False, **values):
     from receiving_helpers import ensure_scope_arrival
     ensure_scope_arrival(api, item_id)
     body = {"route": route, "expected_children": expected_children, **values}
@@ -52,7 +52,14 @@ def enroll(api, item_id, route, *, start_step=None, expected_children=0,
         body.setdefault("material_reference", "TEST-EXISTING-MATERIAL-REGISTER")
     if start_step is not None:
         body.update({"start_step": start_step, "baseline_reference": "TEST-CONTROLLED-BASELINE", "baseline_reason": "Test work was already in progress when the traveler was enrolled"})
+    retained_start = (legacy_catalog or legacy_testing) and route == 'assembly' and start_step in (18, 19)
+    if retained_start:
+        # The current API correctly disallows starting inside unrecorded
+        # testing. A retained fixture is created legally, then seeded below.
+        body['start_step'] = 17
     record = ok(api.post(f"{ROOT}/items/{item_id}/start", body), 201)
+    if legacy_catalog or legacy_testing:
+        record = retain_legacy_catalog(api, item_id, start_step=start_step if retained_start else None)
     if legacy_testing:
         # Only tests that explicitly exercise the retained one-pass Hydro/UT
         # route opt in. The default is a pristine Step17 and must make the new
@@ -85,6 +92,32 @@ def enroll(api, item_id, route, *, start_step=None, expected_children=0,
     return record
 
 
+def retain_legacy_catalog(api, item_id, *, start_step=None):
+    """Explicit test-only seed of a traveler saved before catalog binding."""
+    flow = importlib.import_module('flow')
+    production = importlib.import_module('production')
+    with api.session_factory() as session:
+        plan = session.get(flow.FlowPlan, item_id)
+        plan.catalog_version = None
+        if start_step is not None:
+            plan.current_step = plan.baseline_step = start_step
+        events = list(session.scalars(select(flow.FlowEvent).where(flow.FlowEvent.item_id == item_id)))
+        assert len(events) == 1 and events[0].action == 'start'
+        definition = flow.step_definition(plan, plan.current_step)
+        events[0].step = plan.current_step
+        events[0].data = {**events[0].data, 'definition_version': flow.LEGACY_VERSION,
+                         'step_definition': definition, 'baseline_step': plan.baseline_step}
+        for audit in session.scalars(select(api.application.Audit).where(
+                api.application.Audit.item_id == item_id, api.application.Audit.event == 'FLOW_EVENT')):
+            audit.details = {**audit.details, 'step': events[0].step, 'data': events[0].data}
+        for event in session.scalars(select(production.SpoolProcessEvent).where(
+                production.SpoolProcessEvent.item_id == item_id)):
+            event.process_key = f"clm_{definition['number']:02d}"
+            event.process_name = f"{definition['number']}. {definition['title']}"
+        session.commit()
+    return detail(api, item_id)
+
+
 def action_body(api, item_id, **values):
     record = detail(api, item_id)
     current = record["flow"]["current"]
@@ -98,11 +131,11 @@ def action_body(api, item_id, **values):
         body["reference"] = f"TEST-REPORT-STEP-{current['number']}"
     if current["requires_handoff"]:
         body.update({"sender_badge": record["item"]["handler"], "receiver_badge": BADGES["handler"],
-                     "location_id": "production_staging", "operational_status": "queued",
+                     "location_id": current.get('handoff_location_id') or "production_staging", "operational_status": "queued",
                      "expected_transfer_version": record["transfer"]["version"]})
     if current["number"] == 3:
         body.update({"location_id": "material_storage", "expected_transfer_version": record["transfer"]["version"]})
-    if current["number"] == 24:
+    if current.get('is_shipment'):
         body.update({"carrier": "Test carrier", "shipment_reference": "TEST-BOL-123", "destination": "Test customer delivery site"})
     if current["number"] == 17:
         body["scanned_child_ids"] = [row["item_id"] for row in record["spools"]]
@@ -160,19 +193,19 @@ def completed_spool(api, item_id):
 def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_points(api):
     definition = catalog(api)
     steps = definition["steps"]
-    assert [row["number"] for row in steps] == list(range(1, 25))
+    assert [row["number"] for row in steps] == list(range(1, 26))
     assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 18, 22}
-    assert definition['version'] == 'CLM-24-v6'
+    assert definition['version'] == 'CLM-25-v1'
     assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
         (2, 'QA-001', 'QA/QC-001 · Check Dimensions'),
         (11, 'QA-002', 'QA/QC-002 · Check Dimensions'),
         (15, 'QA-003', 'QA/QC-003 · Inspect Welds'),
         (18, 'QA-004', 'QA/QC-004 - Verify Test Results'),
-        (22, 'QA-005', 'QA/QC-005 - Final Inspection'),
+        (22, 'QA-006', 'QA/QC-006 - Final Inspection'),
     ]
     assert all(row['qa_code'] is None for row in steps if not row['qa'])
     assert [(row["id"], row["first_step"], row["last_step"]) for row in definition["routes"]] == [
-        ("component", 1, 8), ("spool", 9, 16), ("assembly", 17, 24),
+        ("component", 1, 8), ("spool", 9, 16), ("assembly", 17, 25),
     ]
     for row in steps:
         assert row["title"] and row["roles"] and row["checks"]
@@ -215,7 +248,7 @@ def test_step2_reviews_available_documents_with_heat_and_mtr_deferred(api):
         reference='TEST-AVAILABLE-ISOMETRIC', notes='Available dimensions and documents reviewed; heat and MTR deferred.')
     assert_current(progressed, 3)
     event = next(row for row in progressed['events'] if row['action'] == 'advance' and row['step'] == 2)
-    assert event['data']['definition_version'] == 'CLM-24-v6'
+    assert event['data']['definition_version'] == 'CLM-25-v1'
     assert event['data']['confirmations'] == ['s2_1', 's2_2']
     assert event['data']['step_definition']['checks'][1] == {'id': 's2_2', 'label': expected_label}
     assert 'Verify MTR and material documentation' not in str(event['data']['step_definition'])
@@ -230,23 +263,25 @@ def test_step2_reviews_available_documents_with_heat_and_mtr_deferred(api):
     ('CLM-24-v1', 'Check Dimensions'),
     ('CLM-24-v4', 'QA/QC-001 · Check Dimensions'),
 ])
-def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, monkeypatch, legacy_version, legacy_title):
+def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, legacy_version, legacy_title):
     flow = importlib.import_module('flow')
     item_id = create_item(api, 'FLOW-OLD-QA-TITLE')
-    legacy = {**flow.STEP_BY_NUMBER[2], 'title': legacy_title,
-        'checks': [dict(check) for check in flow.STEP_BY_NUMBER[2]['checks']]}
+    legacy = {**flow.LEGACY_STEP_BY_NUMBER[2], 'title': legacy_title,
+        'checks': [dict(check) for check in flow.LEGACY_STEP_BY_NUMBER[2]['checks']]}
     legacy['checks'][1]['label'] = 'Verify MTR and material documentation'
     if legacy_version == 'CLM-24-v1':
         legacy.pop('qa_code')
-    with monkeypatch.context() as old:
-        old.setattr(flow, 'VERSION', legacy_version)
-        old.setitem(flow.STEP_BY_NUMBER, 2, legacy)
-        previous = enroll(api, item_id, 'component', start_step=2)
+    enroll(api, item_id, 'component', start_step=2, legacy_catalog=True)
+    with api.session_factory() as session:
+        event = session.scalar(select(flow.FlowEvent).where(flow.FlowEvent.item_id == item_id))
+        event.data = {**event.data, 'definition_version': legacy_version, 'step_definition': legacy}
+        session.commit()
+    previous = detail(api, item_id)
     retained = previous['events']
     assert retained[0]['data']['definition_version'] == legacy_version
     assert retained[0]['data']['step_definition'] == legacy
     definition = catalog(api)
-    assert definition['version'] == 'CLM-24-v6'
+    assert definition['version'] == 'CLM-25-v1'
     current = detail(api, item_id)
     assert current['events'] == retained
     assert current['flow']['current']['title'] == 'QA/QC-001 · Check Dimensions'
@@ -256,7 +291,7 @@ def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, monkeyp
     newer = next(row for row in progressed['events'] if row['action'] == 'advance')
     assert newer['data']['definition_version'] == 'CLM-24-v6'
     assert newer['data']['step_definition']['qa_code'] == 'QA-001'
-    assert newer['data']['step_definition'] == definition['steps'][1]
+    assert newer['data']['step_definition'] == flow.LEGACY_STEP_BY_NUMBER[2]
     assert next(row for row in progressed['events'] if row['sequence'] == retained[0]['sequence']) == retained[0]
 
 
@@ -433,7 +468,8 @@ def test_step_cannot_advance_without_every_check_exact_scan_and_reference(api):
 @pytest.mark.parametrize("route,kind,step", [("spool", "Spool", 11), ("assembly", "Assembly", 18)])
 def test_only_quality_roles_can_approve_formal_qa(api, role, route, kind, step):
     item_id = create_item(api, "FLOW-QA-ROLE", kind=kind)
-    enrolled = enroll(api, item_id, route, start_step=step, expected_children=1 if route == "assembly" else 0)
+    enrolled = enroll(api, item_id, route, start_step=step, expected_children=1 if route == "assembly" else 0,
+                      legacy_catalog=route == 'assembly' and step == 18)
     response = api.post(f"{ROOT}/items/{item_id}/advance", action_body(api, item_id), role=role)
     assert response.status_code == 403, response.text
     assert detail(api, item_id)["events"] == enrolled["events"]
@@ -632,7 +668,8 @@ def test_spool_final_qa_requires_weld_acceptance_and_cannot_use_release_endpoint
 ])
 def test_quality_failure_opens_exception_and_routes_back_without_erasing_attempts(api, route, kind, step, return_step):
     item_id = create_item(api, f"FLOW-FAIL-{step}", kind=kind)
-    current = enroll(api, item_id, route, start_step=step, expected_children=1 if route == "assembly" else 0)
+    current = enroll(api, item_id, route, start_step=step, expected_children=1 if route == "assembly" else 0,
+                     legacy_catalog=route == 'assembly' and step == 18)
     response = api.post(f"{ROOT}/items/{item_id}/fail", {
         "expected_version": current["flow"]["version"], "reason": "Test nonconformance requires documented rework",
         "reference": "TEST-NCR-123", "return_step": return_step,

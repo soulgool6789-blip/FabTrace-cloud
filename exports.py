@@ -124,7 +124,7 @@ TABLE_SPECS = (
     _spec(WeldRepair, 'Weld repairs', 'id weld_id cycle reason opened_by opened_at'),
     _spec(TrackingHold, 'Holds', 'id item_id weld_id reason opened_by opened_at closed_by closed_at close_notes'),
     _spec(SpoolProcessEvent, 'Process events', 'id item_id sequence event process_key process_name actor at notes'),
-    _spec(FlowPlan, 'Flow plans', 'item_id route current_step status version expected_children baseline_step baseline_reference baseline_reason material_reference started_by started_at step_entered_at updated_at completed_at shipped_at carrier shipment_reference destination delivered_at receipt_reference recipient', 'item_id'),
+    _spec(FlowPlan, 'Flow plans', 'item_id catalog_version route current_step status version expected_children baseline_step baseline_reference baseline_reason material_reference started_by started_at step_entered_at updated_at completed_at shipped_at carrier shipment_reference destination delivered_at receipt_reference recipient', 'item_id'),
     _spec(FlowTestingState, 'Assembly testing states', 'item_id protocol cycle phase decision decision_by decision_at test_kind attempt test_started_by test_started_at report_result report_reference report_notes reported_by reported_at report_event_id report_basis ndt_basis ndt_report_event_id ndt_review_event_id qa_result qa_reference reviewed_by reviewed_at origin_snapshot pending_exception_ids pending_exception_kinds correction phase_entered_at created_at updated_at', 'item_id'),
     _spec(FlowEvent, 'Flow events', 'id item_id sequence action step actor at reference notes data'),
     _spec(FlowException, 'Flow exceptions', 'id item_id step return_step reason reference opened_by opened_at closed_by closed_at resolution'),
@@ -190,7 +190,8 @@ QUALITY_REPORT_COLUMNS = (
 )
 
 FLOW_STEP_COLUMNS = ('definition_version', 'number', 'title', 'qa_code', 'display_qa_code', 'flow_stage_key', 'route', 'section', 'roles', 'checks',
-                     'requires_scan', 'requires_handoff', 'requires_reference', 'qa', 'return_steps')
+                     'requires_scan', 'requires_handoff', 'requires_location', 'requires_reference', 'qa', 'return_steps',
+                     'catalog_version', 'is_ready_to_ship', 'is_shipment')
 
 PROCESS_CONTEXT_COLUMNS = ('project_id', 'subproject_id', 'item_id', 'description')
 PROCESS_TIME_COLUMNS = ('elapsed_seconds', 'active_seconds', 'paused_seconds',
@@ -250,7 +251,7 @@ RELATIONSHIPS = (
     'flow_plans.item_id / flow_events.item_id / flow_exceptions.item_id -> items.id. Flow event sequence is the per-item traveler revision; it differs from the separate process-timer sequence.',
     'flow_component_links.component_id -> individual component items.id; spool_id -> the parent spool items.id. Registered order_spools and tracking_spool_plans identify spool-to-assembly scope; a spool with both is counted once.',
     'Process reports use the current SpoolPlan project/subproject, or the assigned parent spool plan for a component. Unassigned component project/subproject cells remain blank; past project assignments are not frozen in timing events.',
-    'Flow steps contains the current numbered CLM process definitions. Recorded event data retains its own definition version and step/checklist snapshot.',
+    'Flow steps contains the current numbered CLM process definitions. flow_plans.catalog_version binds each traveler to its catalog; a retained NULL means CLM-24-v6. Recorded event data retains its own definition version and step/checklist snapshot, including phase-specific QA checkpoints.',
     'Flow plans stores shipment and receipt details. shipped_at confirms dispatch; delivered_at exists only after a separately recorded delivery receipt.',
     'quality_workspaces.project_id -> tracking_projects.id when project-scoped; blank means organizational audit preparation. Templates create draft requirements only.',
     'quality_requirements.workspace_id -> quality_workspaces.id. document_ids links exact quality_documents revisions; the named source still requires a signed source review.',
@@ -515,7 +516,7 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Export', 'Exporter name', exporter.name)
     add('Export', 'Exporter role', exporter.role)
     add('Export', 'Snapshot method', 'PostgreSQL REPEATABLE READ READ ONLY, separate connection' if database_kind == 'postgresql' else 'SQLite explicit read transaction, separate connection')
-    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events, numbered travelers, audit-readiness records and Job Packet metadata/snapshots. Calculated reports cover process time, audit readiness, project and part progress, and current Job Packet checks. Flow steps supplies the current 24-step definition lookup. No screen pagination limits.')
+    add('Export', 'Scope', f'All rows from the {len(TABLE_SPECS)} explicitly allowlisted business tables, including inactive employees, prior evidence/reviews, completed repairs, closed holds, production process events, numbered travelers, audit-readiness records and Job Packet metadata/snapshots. Calculated reports cover process time, audit readiness, project and part progress, and current Job Packet checks. Flow steps supplies the current 25-step definition lookup; retained travelers keep their catalog identity and saved event definitions. No screen pagination limits.')
     add('Export', 'Database writes', 'None. This export does not append audit records or alter application data.')
     add('Exclusions', 'Authentication', 'Employee PIN hashes, PINs, passwords, session tokens, JWT secrets, database credentials and environment variables are excluded. Employee roster includes badge, name, role, active and created_at only.')
     add('Exclusions', 'External documents', 'References and URLs are exported as stored. External report/MTR contents and linked files are not fetched or embedded.')
@@ -529,7 +530,8 @@ def _manifest_rows(created_at, exporter, writer, database_kind):
     add('Process timing', 'Coverage', 'Timing begins with the first recorded start, with no inferred earlier history. Idle gaps after Finish and before the next Start are not assigned to a process. Repeated visits are kept separately and summed in Process totals. Unstarted spools have no process report rows.')
     add('Process timing', 'Open visits', 'Open visits are calculated as of the report as_of timestamp, using the same read-only database snapshot as the raw events. Paused time remains part of elapsed time. Final release closes an open visit. Finished visits do not keep accumulating time.')
     add('Process timing', 'Analysis', 'Process visits has one row per recorded visit; Process totals has one row per spool/process. Seconds and decimal hours are numeric and may be summed or used in Excel PivotTables by project_id, subproject_id, item_id and process_name. Do not add report totals to raw business-row counts.')
-    add('Process flow', 'Route scopes', 'Components use steps 1-8; spools use 9-16; assemblies use 17-24. Parent/child IDs link the routes. Advancing a traveler records a checklist, handoff or review; underlying weld and quality gates remain authoritative.')
+    add('Process flow', 'Route scopes', 'Components use steps 1-8; spools use 9-16; new CLM-25-v1 assemblies use 17-25. Retained CLM-24-v6 / NULL-catalog assemblies keep 17-24. Parent/child IDs link the routes. Advancing a traveler records a checklist, handoff or review; underlying weld and quality gates remain authoritative.')
+    add('Process flow', 'Current testing and shipment', 'Current testing phases distinguish QA/QC-004 NDT and QA/QC-005 pressure review at numeric step18; saved phase definitions identify the exact test. Final inspection is QA/QC-006 at22. The scanned shipment Floor return is23, ready-to-ship is24 and actual shipment is25. Historical codes, step23 ready-to-ship and step24 shipment are not reclassified.')
     add('Process flow', 'History and baselines', 'Earlier steps before an explicitly documented baseline are not recorded completions. Failed inspections append exceptions and return to a recorded rework step; earlier attempts remain in Flow events and Process visits. Generic quality release cannot bypass the required traveler inspection.')
     add('Process flow', 'References and receipts', 'References identify external purchase orders, BOMs, reports, shipping documents and delivery receipts. Files are not embedded. A shipment confirmation does not infer delivery; receipt confirmation records its own time, recipient and reference.')
     add('Audit readiness', 'Evidence and verification', 'Quality tables preserve the five audit prompts, document revisions, submitted records, corrective actions and signed review history. The Audit readiness report recalculates current verification against those records at the snapshot time. Draft wording, a planned audit and an issued/approved blank template do not prove that an activity occurred.')

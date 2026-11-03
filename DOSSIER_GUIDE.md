@@ -37,7 +37,7 @@ Registering an item and assigning its structured project/weld plan are separate 
 
 The project bar counts each registered physical component, spool and assembly as its own record. It is not a weighted estimate of labor, tonnage or contract value. The **Finished** filter includes currently finished items that have subsequently shipped or been delivered; shipping milestones are also available as separate filters.
 
-For a numbered route, the part bar counts completed records in that item's route: components 1–8, spools 9–16, assemblies 17–24. An approved late starting baseline does not invent earlier records. A spool can therefore have a valid physical release while its recorded-route bar remains below 100%. Rework returns reopen affected steps. Without a numbered route, the bar uses completed individual welds against the declared weld count; a zero-weld plan uses actual QA release.
+For a numbered route, the part bar counts completed records in that item's own catalog: components 1–8, spools 9–16, new CLM-25-v1 assemblies 17–25, and retained 24-step assemblies 17–24. An approved late starting baseline does not invent earlier records. A spool can therefore have a valid physical release while its recorded-route bar remains below 100%. Rework returns reopen affected steps. Without a numbered route, the bar uses completed individual welds against the declared weld count; a zero-weld plan uses actual QA release.
 
 ### Required component quantities within each spool
 
@@ -179,3 +179,4 @@ The implementation was checked against the original supplied files. Applicable p
 | **01 66 00 Packaging, Storage and Handling v11** | §3.6 and applicable schedules: protection, lifting, securement, transport and preservation. |
 
 Use [DOSSIER_API.md](DOSSIER_API.md) for endpoint contracts and [DEVELOPMENT.md](DEVELOPMENT.md) for extension and deployment constraints.
+

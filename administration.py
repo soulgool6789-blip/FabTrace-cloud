@@ -352,7 +352,7 @@ def get_item(item_id: str, u: Employee = Depends(auth), s: Session = Depends(db)
 
 @router.post('/items/{item_id}/release')
 def release_override(item_id: str, data: DecisionIn, u: Employee = Depends(auth), s: Session = Depends(db)):
-    from flow import STEP_BY_NUMBER, _event
+    from flow import step_definition, _event
     from production import sync_flow_process
     item, actor = _locked_item(s, item_id, u)
     blockers, plan, prior_flow = _check_version(s, item, data.expected_version)
@@ -380,7 +380,7 @@ def release_override(item_id: str, data: DecisionIn, u: Employee = Depends(auth)
         _event(s, item, plan, actor.badge, 'admin_release', prior_flow['current_step'], now,
             reference=data.reference, notes=data.reason,
             data={**details, 'next_step': target, 'skipped_steps_not_completed': True})
-        sync_flow_process(s, item, actor.badge, STEP_BY_NUMBER[target] if target else None, now,
+        sync_flow_process(s, item, actor.badge, step_definition(plan, target) if target else None, now,
             'Administrative release override; missing work and QA remain unverified. ' + data.reason)
     else:
         sync_flow_process(s, item, actor.badge, None, now,

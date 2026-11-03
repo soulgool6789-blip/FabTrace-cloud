@@ -206,7 +206,7 @@ Checklist fingerprints follow relevant evidence. Pressure-test approval includes
 
 At coating steps 20/21, `phase='pre_coating'` requires current project source review plus current accepted pressure-test and applicable written customer hold-point release checks for the assembly and child spools. A justified, QA-reviewed N/A is permitted only where the approved scope supports it. This gate intentionally does not demand final release or a complete finished packet before coating.
 
-At Ready to Ship/shipping steps 23/24, `phase='shipment'` requires complete current QA-issued packets for the assembly and child spools. All applicable checks, including separate written customer hold-point releases and D04 pre-shipment authorization, must be current. CLM review of a selected customer approval document records review of the actual authorization; it is not a substitute customer authorization. Existing weld, material, inspection, hold, audit and process gates continue to apply.
+At the traveler's Ready to Ship/shipping positions—24/25 for CLM-25-v1, or 23/24 for retained 24-step routes—`phase='shipment'` requires complete current QA-issued packets for the assembly and child spools. The current route's actual Floor handoff at 23 precedes these shipment gates. All applicable checks, including separate written customer hold-point releases and D04 pre-shipment authorization, must be current. CLM review of a selected customer approval document records review of the actual authorization; it is not a substitute customer authorization. Existing weld, material, inspection, hold, audit and process gates continue to apply.
 
 ## Additive tables and exports
 
@@ -222,3 +222,4 @@ At Ready to Ship/shipping steps 23/24, `phase='shipment'` requires complete curr
 | `DossierEvent` | `dossier_events` | Append-only project edit history, unique project/version sequence |
 
 The six history tables from documents through events are append-only. Binary `dossier_files` is intentionally excluded from the business Excel allowlist; document metadata/hashes and packet snapshots remain exportable. The issued ZIP is the complete selected-file deliverable. There is no destructive migration, automatic customer acceptance, production seed record, background email, or implicit download acknowledgment.
+

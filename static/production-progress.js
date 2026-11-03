@@ -58,7 +58,8 @@
     return `<section class="pp-stage-section"><h3>${esc(title)}</h3><ol class="pp-stage-grid">${arr(stages).map(card).join('')}</ol></section>`;
   }
   function itemStages(n){
-    return arr(state.data?.stage_catalog).map(s=>{const selected=arr(n.steps).filter(x=>arr(s.steps).includes(x.number)),steps=selected.filter(x=>x.state!=='not_required'),not_required=selected.length-steps.length;const completed=steps.filter(x=>x.state==='completed').length,current=steps.filter(x=>x.state==='current').length,not_recorded=steps.filter(x=>x.state==='not_recorded').length;return {...s,total:steps.length,completed,current,not_recorded,not_required,percent:steps.length?completed/steps.length*100:null,state:!steps.length?(not_required?'not_required':'not_applicable'):completed===steps.length?'completed':current?'current':not_recorded===steps.length?'not_recorded':'pending'};});
+    const own=arr(n.steps).flatMap(step=>step.stage_states&&typeof step.stage_states==='object'?Object.entries(step.stage_states).map(([stage,state])=>({...step,stage,state})):[step]);
+    return arr(state.data?.stage_catalog).map(s=>{const selected=own.filter(x=>x.stage===s.key),steps=selected.filter(x=>x.state!=='not_required'),not_required=selected.length-steps.length;const completed=steps.filter(x=>x.state==='completed').length,current=steps.filter(x=>x.state==='current').length,not_recorded=steps.filter(x=>x.state==='not_recorded').length;return {...s,total:steps.length,completed,current,not_recorded,not_required,percent:steps.length?completed/steps.length*100:null,state:!steps.length?(not_required?'not_required':'not_applicable'):completed===steps.length?'completed':current?'current':not_recorded===steps.length?'not_recorded':'pending'};});
   }
   function searchMatch(values){const q=state.query.trim().toLowerCase();return !q||values.some(v=>text(v).toLowerCase().includes(q));}
   function ownMatch(n){return (state.kind==='all'||kind(n)===state.kind)&&(state.status==='all'||state.status==='hold'&&n.on_hold||state.status==='finished'&&n.fabrication_finished||state.status==='wip'&&!n.fabrication_finished);}
@@ -155,7 +156,7 @@
     else if(state.error)html+=`<div class="pp-state pp-error" role="alert"><strong>Production progress could not be verified.</strong><p>${esc(state.error)}</p>${button('refresh','Try again')}${button('all','All P.O.s')}</div>`;
     else if(state.data){
       const rows=filteredOrders();
-      if(['all','spool'].includes(state.kind))html+=(flowStatus()?.processBoard(processSpools(rows),{attribute:'data-pp-spool',renderTiming:stationClock})||'')+(flowStatus()?.legend()||'');
+      if(['all','spool'].includes(state.kind))html+=(flowStatus()?.processBoard(processSpools(rows),{attribute:'data-pp-spool',renderTiming:stationClock,catalog:state.data.stage_catalog})||'')+(flowStatus()?.legend(state.data.stage_catalog)||'');
       html+='<h2>P.O., assembly &amp; part details</h2>'+summaryView();
       if(isFiltered())html+='<p class="pp-filter-note">Search and status filters keep matching items with their parent context. P.O. progress totals still describe the full selected scope.</p>';
       html+=`<div class="pp-list-tools"><span>${rows.length} matching P.O.${rows.length===1?'':'s'}${state.data.as_of?' · Updated '+esc(new Date(state.data.as_of).toLocaleString()):''}</span><div class="actions">${isFiltered()?button('clear','Clear filters'):''}${button('expand','Expand all')}${button('collapse','Collapse all')}</div></div>`;

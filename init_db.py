@@ -141,6 +141,13 @@ def _migrate_assembly_numbers_v1(c):
         c.execute(text('ALTER TABLE order_gpns DROP CONSTRAINT uq_order_gpn_number'))
 
 
+def _migrate_flow_catalog_v1(c):
+    """Bind future travelers to a catalog; retained NULL rows keep their route."""
+    columns = {column['name'] for column in inspect(c).get_columns('flow_plans')}
+    if 'catalog_version' not in columns:
+        c.execute(text('ALTER TABLE flow_plans ADD COLUMN catalog_version VARCHAR(30)'))
+
+
 def initialize():
     """Add missing tables without rewriting legacy items or inventing welds.
 
@@ -164,6 +171,7 @@ def initialize():
             from flow import TOPOLOGY_LOCK
             c.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': TOPOLOGY_LOCK})
         Base.metadata.create_all(c)
+        _migrate_flow_catalog_v1(c)
         # The legacy SQLite rebuild uses the complete current model schema.
         _migrate_gpn_labels_v1(c)
         _migrate_assembly_numbers_v1(c)

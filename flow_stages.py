@@ -10,7 +10,10 @@ def _stage(key, label, steps, color, *, qa=False, separate=False):
             'color_label': color.title(), 'qa': qa, 'separate': separate}
 
 
-STAGES = (
+CURRENT_CATALOG = 'CLM-25-v1'
+LEGACY_CATALOG = 'CLM-24-v6'
+
+LEGACY_STAGES = (
     _stage('inventory', 'Inventory', (1,), 'black'),
     _stage('qa_001', 'QA/QC-001', (2, 3, 4), 'black', qa=True),
     _stage('preparation', 'Prep/Fabrication', (5, 6, 7, 9, 10), 'red'),
@@ -21,16 +24,42 @@ STAGES = (
     _stage('testing', 'Testing', (17,), 'orange'),
     _stage('qa_test_results', 'QA/QC-004', (18,), 'orange', qa=True),
     _stage('paint', 'Paint', (20, 21), 'pink'),
-    # This persisted station key has always meant final inspection. Renaming
-    # its display must not reinterpret old movements as test-result review.
+    # This persisted station key retains the previous final inspection.
     _stage('qa_004', 'QA/QC-005', (22,), 'pink', qa=True),
     _stage('ready_to_ship', 'Ready To Ship', (23, 24), 'green', separate=True),
 )
-STAGE_BY_KEY = {stage['key']: stage for stage in STAGES}
+STAGES = (
+    *LEGACY_STAGES[:4],
+    _stage('floor', 'Floor', (8, 12, 16, 19, 23), 'yellow'),
+    *LEGACY_STAGES[5:9],
+    _stage('qa_pressure_results', 'QA/QC-005', (18,), 'orange', qa=True),
+    LEGACY_STAGES[9],
+    _stage('qa_final', 'QA/QC-006', (22,), 'pink', qa=True),
+    _stage('ready_to_ship', 'Ready To Ship', (24, 25), 'green', separate=True),
+)
+STAGE_BY_KEY = {stage['key']: stage for stage in (*LEGACY_STAGES, *STAGES)}
+LEGACY_STAGE_BY_STEP = {number: stage['key'] for stage in LEGACY_STAGES for number in stage['steps']}
 STAGE_BY_STEP = {number: stage['key'] for stage in STAGES for number in stage['steps']}
-STAGE_ORDER = {stage['key']: index for index, stage in enumerate(STAGES)}
+STAGE_BY_STEP[18] = 'qa_test_results'  # The actual pressure phase supplies its distinct station.
+STAGE_ORDER = {stage['key']: index for index, stage in enumerate((*STAGES[:-2], LEGACY_STAGES[-2], *STAGES[-2:]))}
+LEGACY_QA_DISPLAY_CODES = {2: 'QA/QC-001', 11: 'QA/QC-002', 15: 'QA/QC-003',
+                           18: 'QA/QC-004', 22: 'QA/QC-005'}
 QA_DISPLAY_CODES = {2: 'QA/QC-001', 11: 'QA/QC-002', 15: 'QA/QC-003',
-                    18: 'QA/QC-004', 22: 'QA/QC-005'}
+                    18: 'QA/QC-004', 22: 'QA/QC-006'}
+
+
+def stages_for_catalog(version=CURRENT_CATALOG):
+    return STAGES if version == CURRENT_CATALOG else LEGACY_STAGES
+
+
+def stages_for_versions(versions):
+    versions = set(versions)
+    if not versions or versions == {CURRENT_CATALOG}:
+        return STAGES
+    if CURRENT_CATALOG not in versions:
+        return LEGACY_STAGES
+    # Mixed historical/current reports retain both semantic final-QA keys.
+    return (*STAGES[:-2], LEGACY_STAGES[-2], *STAGES[-2:])
 
 
 def stage_status(key, item_id, *, inherited=False, blocked=False):
@@ -38,4 +67,5 @@ def stage_status(key, item_id, *, inherited=False, blocked=False):
     stage = STAGE_BY_KEY.get(key, STAGE_BY_KEY['inventory'])
     return {field: stage[field] for field in ('key', 'label', 'color', 'color_label', 'qa')} | {
         'source_item_id': item_id, 'inherited': bool(inherited), 'blocked': bool(blocked)}
+
 

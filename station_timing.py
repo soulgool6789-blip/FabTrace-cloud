@@ -44,7 +44,12 @@ def station_visit_history(movements):
         if key != continuous_key:
             counts[key] = counts.get(key, 0) + 1
             continuous_key, continuous_entered_at = key, at
-        current = {'stage_key': key, 'label': STAGE_BY_KEY[key]['label'],
+        # Movement projection supplies a saved checkpoint label only when its
+        # recorded definition agrees with this semantic station key. Do not
+        # relabel old final QA as the newer pressure or final checkpoint.
+        saved_label = movement.get('stage_label')
+        label = saved_label if isinstance(saved_label, str) and saved_label.strip() else STAGE_BY_KEY[key]['label']
+        current = {'stage_key': key, 'label': label,
             'visit': counts[key], 'entered_at': at, 'departed_at': None,
             'entry_event_id': movement.get('event_id'), 'exit_event_id': None,
             'entered_by': movement.get('actor'), 'departed_by': None,

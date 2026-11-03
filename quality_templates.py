@@ -39,7 +39,7 @@ TEMPLATES = [
     prompt('3–6', 'QMS, SOPs, policies and employee training',
            'Demonstrate that current approved QMS, SOPs, 6S policy and fabrication process documents are controlled and employees are trained to applicable revisions.',
            'CLM will identify the approved document revisions, responsible roles and training records demonstrating implementation of its fabrication quality system.',
-           'Quality Manual / QMS; applicable SOPs; 6S policy; 24-step process flow; document register.',
+           'Quality Manual / QMS; applicable SOPs; 6S policy; current approved process flow; document register.',
            'Approved controlled revisions, point-of-use copies and actual employee training records for each applicable revision.',
            ['training'], 'Confirm approved revisions, identify affected employees and locate actual training evidence.', approved_document=True),
     prompt('7', 'Approved internal audit schedule',
@@ -152,3 +152,4 @@ EVIDENCE_TYPES = [
     {'value': 'effectiveness', 'label': 'Effectiveness verification', 'fields': [field('scope', 'Effectiveness checked', 'textarea'), field('result', 'Result', options=['pass', 'fail', 'recorded'])]},
     {'value': 'other', 'label': 'Other actual record', 'fields': [field('scope', 'Record scope', 'textarea'), field('result', 'Actual result', 'textarea')]},
 ]
+

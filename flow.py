@@ -1,4 +1,4 @@
-"""CLM's 24-step component, spool and assembly production traveler.
+"""Versioned CLM component, spool and assembly production travelers.
 
 Checklist confirmations record observations, not weld or quality acceptance.
 The traveler uses the existing weld/inspection gates and one process clock.
@@ -21,41 +21,71 @@ from permissions import flow_step_roles
 from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
     _production_complete, _requirement_satisfied, _reset_requirements,
     tracking_release_errors, post_fabrication_heat_errors)
-from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES
+from flow_stages import STAGES, stages_for_versions
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
-VERSION = 'CLM-24-v6'
+VERSION = 'CLM-25-v1'
+LEGACY_VERSION = 'CLM-24-v6'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
 ROUTES = (
     {'id': 'component', 'label': 'Material / component preparation', 'first_step': 1, 'last_step': 8},
     {'id': 'spool', 'label': 'Spool fabrication', 'first_step': 9, 'last_step': 16},
-    {'id': 'assembly', 'label': 'Final assembly through shipment', 'first_step': 17, 'last_step': 24},
+    {'id': 'assembly', 'label': 'Final assembly through shipment', 'first_step': 17, 'last_step': 25},
 )
 ROUTE_BY_ID = {row['id']: row for row in ROUTES}
-QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 18: 'QA-004', 22: 'QA-005'}
+LEGACY_ROUTES = tuple({**row, 'last_step': 24} if row['id'] == 'assembly' else dict(row)
+                      for row in ROUTES)
+LEGACY_ROUTE_BY_ID = {row['id']: row for row in LEGACY_ROUTES}
+LEGACY_QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 18: 'QA-004', 22: 'QA-005'}
+QA_CODES = {**LEGACY_QA_CODES, 22: 'QA-006'}
+# These persisted station meanings must not change when the public current
+# stage catalog gains a new floor visit and separate pressure/final QA.
+LEGACY_STAGE_BY_STEP = {
+    1: 'inventory', 2: 'qa_001', 3: 'qa_001', 4: 'qa_001',
+    5: 'preparation', 6: 'preparation', 7: 'preparation', 8: 'floor',
+    9: 'preparation', 10: 'preparation', 11: 'qa_002', 12: 'floor',
+    13: 'welding', 14: 'welding', 15: 'qa_003', 16: 'floor',
+    17: 'testing', 18: 'qa_test_results', 19: 'floor',
+    20: 'paint', 21: 'paint', 22: 'qa_004', 23: 'ready_to_ship', 24: 'ready_to_ship',
+}
+STAGE_BY_STEP = {**LEGACY_STAGE_BY_STEP, 22: 'qa_final', 23: 'floor', 25: 'ready_to_ship'}
 
 
-def _step(number, title, section, checks):
+def _step(number, title, section, checks, *, catalog_version=LEGACY_VERSION):
     route = 'component' if number <= 8 else 'spool' if number <= 16 else 'assembly'
+    current = catalog_version == VERSION
+    qa_codes = QA_CODES if current else LEGACY_QA_CODES
+    qa_code = qa_codes.get(number)
+    display_qa_code = qa_code.replace('QA-', 'QA/QC-') if qa_code else None
+    stage = (STAGE_BY_STEP if current else LEGACY_STAGE_BY_STEP)[number]
+    ready, ship = (24, 25) if current else (23, 24)
+    handoffs = (6, 8, 9, 12, 13, 16, 19, 20, ready)
+    if current:
+        handoffs += (23,)
     return {
-        'number': number, 'title': (QA_DISPLAY_CODES[number] + (' - ' if number in (18, 22) else ' · ') + title if number in QA_DISPLAY_CODES else title),
-        'qa_code': QA_CODES.get(number), 'display_qa_code': QA_DISPLAY_CODES.get(number),
-        'flow_stage_key': STAGE_BY_STEP[number], 'route': route, 'section': section,
+        'number': number, 'title': (display_qa_code + (' - ' if number in (18, 22) else ' · ') + title if display_qa_code else title),
+        'qa_code': qa_code, 'display_qa_code': display_qa_code,
+        'flow_stage_key': stage, 'qa_stage': stage if qa_code else None,
+        'catalog_version': catalog_version, 'route': route, 'section': section,
+        'is_shipment': number == ship, 'is_ready_to_ship': number == ready,
         'roles': list(flow_step_roles(number)),
         'checks': [{'id': f's{number}_{index}', 'label': label} for index, label in enumerate(checks, 1)],
-        'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 19, 20, 23, 24),
-        'requires_handoff': number in (6, 8, 9, 12, 13, 16, 19, 20, 23),
-        'requires_location': number in (3, 6, 8, 9, 12, 13, 16, 19, 20, 23),
-        'requires_reference': number in (1, 2, 5, 11, 15, 18, 22, 23),
-        'qa': number in QA_CODES,
+        'requires_scan': number in (1, 3, 5, 6, 8, 9, 12, 13, 16, 17, 18, 19, 20, ready, ship) or current and number == 23,
+        'requires_handoff': number in handoffs,
+        'requires_location': number == 3 or number in handoffs,
+        'requires_reference': number in (1, 2, 5, 11, 15, 18, 22, ready),
+        'qa': number in qa_codes,
         'return_steps': {2: [2], 11: [10], 15: [14], 18: [17, 18], 22: [17, 18, 19, 20, 21]}.get(number, []),
+        **({'handoff_location_id': 'floor' if number == 23 else 'ready_to_ship',
+            'handoff_target_role': 'handler'}
+           if current and number in (23, 24) else {}),
     }
 
 
-STEPS = (
+LEGACY_STEPS = (
     _step(1, 'Receive Shipment', 'Material receipt', ['Scan the material barcode / ID', 'Verify against purchase order and BOM', 'Inspect material condition']),
     _step(2, 'Check Dimensions', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Review available material documentation (heat/MTR verification due at QA/QC-003)']),
     _step(3, 'Capture Location', 'Material receipt', ['Scan material into inventory', 'Record its storage location']),
@@ -81,6 +111,16 @@ STEPS = (
     _step(23, 'Release to Ready to Ship', 'Shipment', ['Material coordinator verifies ready-to-ship status', 'Scan and move the assembly to the shipping area', 'Generate and verify shipping documents']),
     _step(24, 'Ship to Customer', 'Shipment', ['Scan the assembly at shipping', 'Record shipment and its destination', 'Complete production records / close the work order']),
 )
+LEGACY_STEP_BY_NUMBER = {row['number']: row for row in LEGACY_STEPS}
+STEPS = tuple(_step(row['number'], row['title'].split(' - ', 1)[-1]
+                    if row['number'] == 18 else row['title'].split(' · ', 1)[-1],
+                    row['section'], [check['label'] for check in row['checks']], catalog_version=VERSION)
+              for row in LEGACY_STEPS if row['number'] <= 21) + (
+    _step(22, 'Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks'], catalog_version=VERSION),
+    _step(23, 'Return to Floor', 'Shipment', ['Material coordinator receives the inspected assembly on the floor', 'Record the scanned handoff'], catalog_version=VERSION),
+    _step(24, 'Release to Ready to Ship', 'Shipment', ['Material coordinator verifies ready-to-ship status', 'Scan and move the assembly to the shipping area', 'Generate and verify shipping documents'], catalog_version=VERSION),
+    _step(25, 'Ship to Customer', 'Shipment', ['Scan the assembly at shipping', 'Record shipment and its destination', 'Complete production records / close the work order'], catalog_version=VERSION),
+)
 STEP_BY_NUMBER = {row['number']: row for row in STEPS}
 LEGACY_STEP_17 = _step(17, 'Release to Testing (Hydro/UT)', 'Testing',
     ['Verify the assembly ID and every required released child spool', 'Scan each child spool barcode',
@@ -90,6 +130,9 @@ LEGACY_STEP_17 = _step(17, 'Release to Testing (Hydro/UT)', 'Testing',
 class FlowPlan(Base):
     __tablename__ = 'flow_plans'
     item_id = Column(String(60), ForeignKey('items.id'), primary_key=True)
+    # NULL identifies retained pre-binding travelers. Never backfill their
+    # step numbers or reinterpret recorded final-QA/shipment history.
+    catalog_version = Column(String(30))
     route = Column(String(20), nullable=False)
     current_step = Column(Integer)
     status = Column(String(20), nullable=False, default='active')
@@ -155,6 +198,47 @@ PLAN_KEYS = tuple(FlowPlan.__table__.columns.keys())
 EVENT_KEYS = tuple(FlowEvent.__table__.columns.keys())
 EXCEPTION_KEYS = tuple(FlowException.__table__.columns.keys())
 
+
+def catalog_version(plan):
+    """An absent traveler uses today's catalog; a retained NULL stays legacy."""
+    value = VERSION if plan is None else getattr(plan, 'catalog_version', None) or LEGACY_VERSION
+    if value not in (VERSION, LEGACY_VERSION):
+        raise HTTPException(409, 'This traveler uses an unsupported process catalog; its recorded steps cannot be reinterpreted')
+    return value
+
+
+def route_definition(plan):
+    routes = ROUTE_BY_ID if catalog_version(plan) == VERSION else LEGACY_ROUTE_BY_ID
+    return routes[plan.route]
+
+
+def _steps_for(plan):
+    return STEP_BY_NUMBER if catalog_version(plan) == VERSION else LEGACY_STEP_BY_NUMBER
+
+
+def step_definition(plan, number):
+    return _steps_for(plan).get(number)
+
+
+def final_qa_step(plan):
+    return 15 if plan.route == 'spool' else 22 if plan.route == 'assembly' else None
+
+
+def ready_to_ship_step(plan):
+    return 24 if catalog_version(plan) == VERSION else 23
+
+
+def shipment_step(plan):
+    return 25 if catalog_version(plan) == VERSION else 24
+
+
+def post_qa_steps(plan):
+    if plan.route == 'spool':
+        return (16,)
+    if plan.route == 'assembly':
+        return tuple(range(final_qa_step(plan) + 1, shipment_step(plan) + 1))
+    return ()
+
 # Import after the historical models so metadata and lazy flow references stay
 # compatible with the existing main/tracking import order.
 from flow_testing import FlowTestingState
@@ -174,7 +258,7 @@ class Input(BaseModel):
 class StartIn(Input):
     route: Literal['component', 'spool', 'assembly']
     expected_children: int = Field(default=0, ge=0, le=10000, strict=True)
-    start_step: int | None = Field(default=None, ge=1, le=24, strict=True)
+    start_step: int | None = Field(default=None, ge=1, le=25, strict=True)
     baseline_reference: str = Field(default='', max_length=500)
     baseline_reason: str = Field(default='', max_length=3000)
     material_reference: str = Field(default='', max_length=500)
@@ -211,7 +295,7 @@ class AdvanceIn(VersionIn):
 class FailIn(VersionIn):
     reason: str = Field(min_length=4, max_length=3000)
     reference: str = Field(min_length=2, max_length=500)
-    return_step: int | None = Field(default=None, ge=1, le=24, strict=True)
+    return_step: int | None = Field(default=None, ge=1, le=25, strict=True)
     testing_phase: str = Field(default='', max_length=40)
     testing_attempt: int | None = Field(default=None, ge=1, strict=True)
     testing_action: Literal['review'] | None = None
@@ -300,12 +384,13 @@ def _event(s, item, plan, actor, action, step, at, reference='', notes='', data=
     plan.updated_at = at
     item.updated_at = at
     if step_definition is None:
-        step_definition = STEP_BY_NUMBER.get(step)
+        step_definition = _steps_for(plan).get(step)
         if step == 17:
             from flow_testing import testing_state, phase_definition
             testing = testing_state(s, plan)
-            step_definition = phase_definition(testing, step_definition) if testing else LEGACY_STEP_17
-    data = {**(data or {}), 'definition_version': VERSION,
+            step_definition = phase_definition(testing, step_definition) if testing else {
+                **LEGACY_STEP_17, 'catalog_version': catalog_version(plan)}
+    data = {**(data or {}), 'definition_version': catalog_version(plan),
         'step_definition': step_definition}
     row = FlowEvent(item_id=item.id, sequence=plan.version, action=action, step=step,
         actor=actor, at=at, reference=reference, notes=notes, data=data)
@@ -328,10 +413,10 @@ def current_step_definition(s, plan):
         return None
     from flow_testing import testing_state, phase_definition
     state = testing_state(s, plan)
-    base = STEP_BY_NUMBER[plan.current_step]
+    base = step_definition(plan, plan.current_step)
     if state is None and plan.current_step == 17:
-        return LEGACY_STEP_17
-    if state is not None and plan.current_step == 22:
+        return {**LEGACY_STEP_17, 'catalog_version': catalog_version(plan)}
+    if plan.current_step == 22 and (state is not None or catalog_version(plan) == VERSION):
         return {**base, 'return_steps': [17, 20, 21]}
     return phase_definition(state, base) if state and state.phase in (
         'decision', 'ndt', 'ndt_qa', 'ndt_rework', 'floor_before_pressure',
@@ -493,7 +578,7 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
         errors.append('Complete the pending testing phase and required QA results before coating or final release')
     if step >= 15:
         errors.extend(post_fabrication_heat_errors(s, item))
-    if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21, 23, 24):
+    if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21) or step in post_qa_steps(plan):
         errors.extend(_physical_hold_errors(s, item))
     if plan.route == 'spool':
         errors.extend(_component_errors(s, item, plan))
@@ -528,9 +613,9 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
         errors.extend(ndt_prerequisite_errors(s, item, plan))
     if step in (15, 22):
         errors.extend(tracking_release_errors(s, item))
-    if step in (16, 23, 24) and not item.released:
+    if step in post_qa_steps(plan) and not item.released:
         errors.append('Final quality release is required before this post-inspection step')
-    if step in (20, 21, 23, 24):
+    if step in (20, 21) or plan.route == 'assembly' and step in (ready_to_ship_step(plan), shipment_step(plan)):
         # Opt-in, project-scoped requirements use the same transaction and
         # topology lock as this traveler. Readiness is rechecked at the actual
         # coating/shipping step, including after a document or evidence change.
@@ -654,10 +739,11 @@ def guard_weld_operation(s, item, operation):
 
 
 def _step_states(s, plan):
-    route = ROUTE_BY_ID[plan.route]
+    route = route_definition(plan)
     from flow_testing import testing_state, project_step_states
     testing = testing_state(s, plan)
-    states = {number: {**(LEGACY_STEP_17 if number == 17 and testing is None else STEP_BY_NUMBER[number]),
+    states = {number: {**({**LEGACY_STEP_17, 'catalog_version': catalog_version(plan)}
+                         if number == 17 and testing is None else step_definition(plan, number)),
         'status': 'not_recorded' if number < plan.baseline_step else 'pending',
         'completed_at': None, 'last_actor': None, 'attempts': 0} for number in range(route['first_step'], route['last_step'] + 1)}
     for event in s.scalars(select(FlowEvent).where(FlowEvent.item_id == plan.item_id).order_by(FlowEvent.sequence)):
@@ -675,6 +761,11 @@ def _step_states(s, plan):
     for row in projected:
         if row['status'] == 'current' and (plan.status != 'active' or row['number'] != plan.current_step):
             row['status'] = 'pending'
+        elif row['status'] == 'current':
+            # Repeated testing phases share a number, but the live row must
+            # name the same active QA position as the action panel. Retained
+            # events and non-current completion summaries are not relabeled.
+            row.update(current_step_definition(s, plan))
     return projected
 
 
@@ -701,9 +792,9 @@ def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, statio
     if item.released or plan and ((plan.current_step or 0) >= 15
                                   or plan.route == 'spool' and plan.status == 'completed'):
         blocked = blocked or bool(post_fabrication_heat_errors(s, item))
-    if (own['key'] == 'ready_to_ship' or plan and plan.current_step in (23, 24)) and not item.released:
+    if (own['key'] == 'ready_to_ship' or plan and plan.current_step in post_qa_steps(plan)) and not item.released:
         blocked = True
-    if plan and route == 'assembly' and (own['key'] == 'ready_to_ship' or plan.current_step in (23, 24)
+    if plan and route == 'assembly' and (own['key'] == 'ready_to_ship' or plan.current_step in post_qa_steps(plan)
                                         or plan.status in ('shipped', 'delivered')):
         # A late defect on a prepared part does not necessarily rewrite the
         # ancestor's release flag. Use the real descendant gates before showing
@@ -731,6 +822,7 @@ def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cach
     return {
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
+        'catalog_version': catalog_version(plan),
         'current_title': current_step_definition(s, plan)['title'] if plan and plan.current_step else '',
         **(presentation if presentation is not None else item_presentation(
             s, item, plan=plan, stations=stations, stage_cache=stage_cache)),
@@ -799,9 +891,16 @@ def detail(s, item, user):
     stations, stage_cache = station_positions(s, family.values()), {}
     display = item_presentation(s, item, plan=plan, receiving=arrival,
                                 stations=stations, stage_cache=stage_cache)
+    stage_versions = {catalog_version(plan)}
+    recorded_stages = {display['flow_stage']['key'], *(row['key'] for row in stations.values())}
+    if 'qa_004' in recorded_stages:
+        stage_versions.add(LEGACY_VERSION)
+    if recorded_stages & {'qa_pressure_results', 'qa_final'}:
+        stage_versions.add(VERSION)
     from flow_testing import summary as testing_summary
     return {
         'project_id': project_id, 'subproject_id': subproject_id,
+        'stage_catalog': stages_for_versions(stage_versions),
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
         'receiving': arrival,
         'flow_stage': display['flow_stage'],
@@ -813,7 +912,9 @@ def detail(s, item, user):
         'release_control': release_summary(s, item),
         'transfer': transfer_snapshot(s, item, user),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
-        'flow': {**_dict(plan, PLAN_KEYS), 'steps': _step_states(s, plan),
+        'flow': {**_dict(plan, PLAN_KEYS), 'catalog_version': catalog_version(plan),
+            'route_definition': route_definition(plan), 'ready_to_ship_step': ready_to_ship_step(plan),
+            'shipment_step': shipment_step(plan), 'steps': _step_states(s, plan),
             'current': current_step_definition(s, plan), 'testing': testing_summary(s, plan),
             'blockers': _step_errors(s, item, plan)} if plan else None,
         'production_process': process,
@@ -904,6 +1005,8 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
     step = data.start_step or scope['first_step']
     if not scope['first_step'] <= step <= scope['last_step']:
         raise HTTPException(422, 'The starting step must belong to the selected route')
+    if data.route == 'assembly' and step in (18, 19):
+        raise HTTPException(422, 'Start this assembly at Step 17 to record its required YES or NO testing decision and the separate test approvals. A baseline cannot start inside an unrecorded testing phase.')
     if step > scope['first_step'] and (len(data.baseline_reference) < 2 or len(data.baseline_reason) < 4):
         raise HTTPException(422, 'Starting later requires a baseline reference and reason; earlier steps will remain not recorded')
     post_qa = data.route == 'spool' and step == 16 or data.route == 'assembly' and step >= 23
@@ -923,7 +1026,7 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
     from spool_receiving import require_receiving_pass
     require_receiving_pass(s, item)
     now = _utc(utcnow())
-    plan = FlowPlan(item_id=item.id, route=data.route, current_step=step, status='active', version=1,
+    plan = FlowPlan(item_id=item.id, catalog_version=VERSION, route=data.route, current_step=step, status='active', version=1,
         expected_children=data.expected_children, baseline_step=step, baseline_reference=data.baseline_reference,
         baseline_reason=data.baseline_reason, material_reference=data.material_reference,
         started_by=u.badge, started_at=now, step_entered_at=now, updated_at=now)
@@ -953,6 +1056,12 @@ def _verify_form(s, item, plan, data):
         selected = validate_transfer(s, item, sender_badge=data.sender_badge, receiver_badge=data.receiver_badge,
             location_id=data.location_id, operational_status=data.operational_status,
             expected_transfer_version=data.expected_transfer_version, allow_no_change=True)
+        if catalog_version(plan) == VERSION and step['number'] in (23, 24):
+            if selected.location_id != step['handoff_location_id']:
+                raise HTTPException(422, 'Record the required post-inspection handoff back to the Floor before ready-to-ship'
+                    if step['number'] == 23 else 'Record the required handoff to the Ready To Ship station before shipment')
+            if selected.receiver.role not in ('handler', 'supervisor', 'admin'):
+                raise HTTPException(422, 'The shipment handoff requires a material coordinator or shop foreman')
     elif step['number'] == 3:
         if data.sender_badge or data.receiver_badge or data.operational_status:
             raise HTTPException(422, 'This storage-location step does not record a badge handoff or operational status')
@@ -967,7 +1076,7 @@ def _verify_form(s, item, plan, data):
         expected_ids = _spool_ids(s, item.id)
         if len(data.scanned_child_ids) != len(set(data.scanned_child_ids)) or set(data.scanned_child_ids) != set(expected_ids):
             raise HTTPException(422, 'Scan or enter each linked child spool exactly once')
-    if step['number'] == 24 and any(len(value) < 2 for value in (data.carrier, data.shipment_reference, data.destination)):
+    if step.get('is_shipment') and any(len(value) < 2 for value in (data.carrier, data.shipment_reference, data.destination)):
         raise HTTPException(422, 'Record the carrier, shipment reference and destination before marking shipped')
     matching = [row for row in _exceptions(s, item.id, True) if row.step == step['number']]
     from flow_testing import testing_state
@@ -997,7 +1106,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
         raise HTTPException(409, 'This traveler has no current production step')
     step = current_step_definition(s, plan)
     permit(u, *step['roles'])
-    if item.released and step['number'] not in (16, 23, 24):
+    if item.released and step['number'] not in post_qa_steps(plan):
         raise HTTPException(409, 'Only post-QA handoff and shipping steps may change a released item')
     _lock_children(s, item, plan)
     from flow_testing import advance_testing, is_active
@@ -1031,7 +1140,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     if step['number'] in (7, 17, 21):
         _fresh_dimensions_after_work(item, now)
     completed_step = step['number']
-    scope = ROUTE_BY_ID[plan.route]
+    scope = route_definition(plan)
     if completed_step == scope['last_step']:
         plan.current_step = None
         plan.step_entered_at = None
@@ -1146,7 +1255,7 @@ def deliver(item_id: str, data: DeliverIn, u: Employee = Depends(auth), s: Sessi
     plan.delivered_at = now
     plan.receipt_reference = data.receipt_reference
     plan.recipient = data.recipient
-    _event(s, item, plan, u.badge, 'deliver', 24, now, data.receipt_reference, data.notes,
+    _event(s, item, plan, u.badge, 'deliver', shipment_step(plan), now, data.receipt_reference, data.notes,
         {'recipient': data.recipient, 'shipment_reference': plan.shipment_reference})
     _commit(s)
     return detail(s, item, u)

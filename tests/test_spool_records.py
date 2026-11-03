@@ -19,7 +19,7 @@ from test_order_setup import create_setup
 WHEN=dt.datetime(2024,1,2,10,0,0,tzinfo=dt.timezone.utc)
 
 
-def seed(api):
+def seed(api, *, parent_catalog=None):
     setup=create_setup(api,purchase_order='000-EXPORT-PO',assemblies=[{
         'gpn':'000007','assembly_number':'000123','assembly_quantity':1,
         'spools':[{'spool_number':'EXPORT-SP-01','quantity_per_assembly':2,'welds_per_spool':2}]}])
@@ -68,6 +68,9 @@ def seed(api):
         s.add(flow.FlowPlan(item_id=a,route='spool',current_step=11,status='active',version=4,expected_children=0,baseline_step=10,
             baseline_reference='SYNTHETIC-BASELINE',baseline_reason='Prior steps intentionally unrecorded',material_reference='BOM-SYNTHETIC',
             started_by=BADGES['admin'],started_at=WHEN,step_entered_at=hour(3),updated_at=hour(3)))
+        s.add(flow.FlowPlan(item_id=parent,route='assembly',catalog_version=parent_catalog,
+            current_step=17,status='active',version=1,expected_children=2,baseline_step=17,
+            started_by=BADGES['admin'],started_at=hour(4),step_entered_at=hour(4),updated_at=hour(4)))
         for sequence,action,step,t,data in [(1,'start',10,0,{}),(2,'advance',10,1,{'next_step':11}),
                                           (3,'fail',11,2,{'return_step':10}),(4,'advance',10,3,{'next_step':11})]:
             s.add(flow.FlowEvent(item_id=a,sequence=sequence,action=action,step=step,actor=BADGES['inspector'],at=hour(t),
@@ -189,6 +192,54 @@ def test_authenticated_single_and_multi_downloads_and_invalid_selection(api,publ
     assert snapshot(api)==before
 
 
+def test_new_shipment_floor_visit_and_step25_export_with_saved_definitions(api,public_qr_url):
+    data=seed(api,parent_catalog='CLM-25-v1')
+    flow=importlib.import_module('flow')
+    production=importlib.import_module('production')
+    with api.session_factory() as session:
+        plan=session.get(flow.FlowPlan,data['parent'])
+        session.add(production.SpoolProcessEvent(item_id=data['parent'],sequence=3,event='start',
+            process_key='clm_22',process_name='Saved QA/QC-006 final inspection',actor=BADGES['inspector'],
+            at=WHEN+dt.timedelta(hours=29)))
+        for index,step in enumerate((22,23,24,25),1):
+            definition={**flow.step_definition(plan,step)}
+            if step==23:
+                definition['title']='Return to Floor — saved shipment handoff'
+            actor=BADGES['inspector' if step==22 else 'handler']
+            detail={'definition_version':'CLM-25-v1','step_definition':definition}
+            if step==23:
+                detail['handoff']={'sender_badge':BADGES['inspector'],'receiver_badge':BADGES['handler'],
+                    'from':{'location_id':'qa_final','location':'QA/QC-006'},
+                    'to':{'location_id':'floor','location':'Floor'}}
+            at=WHEN+dt.timedelta(hours=29+index)
+            session.add(flow.FlowEvent(item_id=data['parent'],sequence=index,action='advance',step=step,
+                actor=actor,at=at,reference=f'SAVED-SHIPMENT-{step}',notes='Retained shipment route evidence',data=detail))
+            next_step=step+1 if step<25 else None
+            session.add(production.SpoolProcessEvent(item_id=data['parent'],sequence=3+index,
+                event='move' if next_step else 'finish',process_key=f'clm_{next_step or step:02d}',
+                process_name=flow.step_definition(plan,next_step)['title'] if next_step else definition['title'],
+                actor=actor,at=at))
+        plan.current_step=None
+        plan.status='shipped'
+        plan.shipped_at=WHEN+dt.timedelta(hours=33)
+        session.commit()
+    before=snapshot(api)
+    response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
+    assert response.status_code==200,response.text
+    book=Workbook(response.content)
+    assert len(book.sheets)==7 and '25-step Route' in book.sheets and '24-step Route' not in book.sheets
+    route=table_rows(book,'25-step Route','Step')
+    rows={row['Step']:row for row in route if row['Step']>=22}
+    assert rows[22]['Activity']=='QA/QC-006 - Final Inspection'
+    assert rows[23]['Activity']=='Return to Floor — saved shipment handoff'
+    assert rows[24]['Activity']=='Release to Ready to Ship'
+    assert rows[25]['Activity']=='Ship to Customer'
+    assert all(row['Status']=='Completed' and row['Elapsed HH:MM:SS']==pytest.approx(1/24)
+               for row in rows.values())
+    assert all(row['Record scope']=='Shared parent assembly: '+data['parent'] for row in rows.values())
+    assert snapshot(api)==before
+
+
 def test_weld_mapping_never_guesses_or_crosses_parent_scope(api,public_qr_url):
     data=seed(api)
     module=importlib.import_module('spool_records')
@@ -265,9 +316,11 @@ def seed_testing_history(api,data,*,decision='YES'):
     ids=[]
     exception_id=None
     with api.session_factory() as s:
-        s.add(flow.FlowPlan(item_id=parent,route='assembly',current_step=20,status='active',version=len(rows)+1,
-            expected_children=2,baseline_step=17,started_by=BADGES['admin'],started_at=hour(9),
-            step_entered_at=hour(9+len(rows)),updated_at=hour(9+len(rows))))
+        parent_plan=s.get(flow.FlowPlan,parent)
+        parent_plan.current_step=20
+        parent_plan.version=len(rows)+1
+        parent_plan.step_entered_at=hour(9+len(rows))
+        parent_plan.updated_at=hour(9+len(rows))
         s.add(production.SpoolProcessEvent(item_id=parent,sequence=3,event='start',process_key='clm_17',
             process_name='Determine testing requirements',actor=BADGES['admin'],at=hour(9),notes='Synthetic phase timer'))
         for n,(step,phase,action,kind,attempt,result,role,next_phase) in enumerate(rows,1):
@@ -275,7 +328,10 @@ def seed_testing_history(api,data,*,decision='YES'):
             detail={'testing_protocol':testing.PROTOCOL,'testing_cycle':1,'testing_phase':phase,
                 'testing_action':action,'test_kind':kind,'testing_attempt':attempt,'test_result':result,
                 'phase_only':action in ('decision','start','correct'),'next_phase':next_phase,
-                'step_definition':{'number':step,'title':f'Saved {kind or "testing"} {action}, attempt {attempt}'}}
+                'definition_version':flow.catalog_version(parent_plan),
+                'step_definition':{'number':step,'title':f'Saved {kind or "testing"} {action}, attempt {attempt}',
+                    'display_qa_code':('QA/QC-005' if parent_plan.catalog_version==flow.VERSION and kind=='pressure'
+                                       else 'QA/QC-004') if action=='review' else None}}
             if action=='decision':
                 detail['testing_decision']=decision
                 if decision=='NO':
@@ -310,11 +366,11 @@ def seed_testing_history(api,data,*,decision='YES'):
                 if action=='start':
                     sender,receiver,old,new=BADGES['handler'],tester,'floor','testing'
                 elif action=='complete':
-                    sender,receiver,old,new=tester,BADGES['inspector'],'testing','qa_test_results'
+                    sender,receiver,old,new=tester,BADGES['inspector'],'testing',testing.test_qa_position(parent_plan,kind)['qa_stage']
                 elif action=='handoff':
-                    sender,receiver,old,new=BADGES['inspector'],BADGES['handler'],'qa_test_results','floor'
+                    sender,receiver,old,new=BADGES['inspector'],BADGES['handler'],testing.test_qa_position(parent_plan,kind)['qa_stage'],'floor'
                 else:
-                    sender,receiver,old,new=BADGES['inspector'],tester,'qa_test_results','testing'
+                    sender,receiver,old,new=BADGES['inspector'],tester,testing.test_qa_position(parent_plan,kind)['qa_stage'],'testing'
                 detail['handoff']={'from':{'location_id':old,'location':old},'to':{'location_id':new,'location':new},
                     'sender':{'badge':sender,'name':'Saved '+sender},'receiver':{'badge':receiver,'name':'Saved '+receiver},
                     'sender_badge':sender,'receiver_badge':receiver,'handoff_recorded_by':BADGES[role]}
@@ -354,8 +410,9 @@ def _date_from_iso(value):
     return dt.datetime.fromisoformat(value)
 
 
-def test_phased_testing_export_retains_failed_attempt_sender_correction_and_distinct_qa(api,public_qr_url,tmp_path):
-    data=seed(api)
+@pytest.mark.parametrize('parent_catalog', [None, 'CLM-25-v1'])
+def test_phased_testing_export_retains_failed_attempt_sender_correction_and_distinct_qa(api,public_qr_url,tmp_path,parent_catalog):
+    data=seed(api,parent_catalog=parent_catalog)
     history=seed_testing_history(api,data)
     before=snapshot(api)
     response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
@@ -372,6 +429,9 @@ def test_phased_testing_export_retains_failed_attempt_sender_correction_and_dist
     assert [row['Linked test report event ID'] for row in reviews]==[row['Test report event ID'] for row in reports]
     assert [row['Linked report basis SHA-256'] for row in reviews]==[row['Report basis SHA-256'] for row in reports]
     assert all(row['QA badge']==BADGES['inspector'] for row in reviews)
+    assert [row['Saved QA checkpoint'] for row in reviews]==[
+        'QA/QC-004','QA/QC-004','QA/QC-005' if parent_catalog else 'QA/QC-004']
+    assert {row['Saved catalog version'] for row in reviews}=={parent_catalog or 'CLM-24-v6'}
     assert reviews[1]['Closed exception IDs']==str(history['exception_id'])
     assert reviews[2]['Closed exception IDs'] in ('',None)
     ndt=table_rows(book,'Inspection History','NDT acceptance event ID')
@@ -387,40 +447,54 @@ def test_phased_testing_export_retains_failed_attempt_sender_correction_and_dist
     assert corrections[0]['Recorded by badge']==BADGES['ndt']
     assert corrections[0]['Exception ID']==str(history['exception_id'])
     assert corrections[0]['Corrective work']=='Removed defect and completed required correction'
-    route=table_rows(book,'24-step Route','Step')
+    route_sheet='25-step Route' if parent_catalog else '24-step Route'
+    route=table_rows(book,route_sheet,'Step')
+    assert max(row['Step'] for row in route)==(25 if parent_catalog else 24)
+    assert next(row['Activity'] for row in route if row['Step']==23)==(
+        'Return to Floor' if parent_catalog else 'Release to Ready to Ship')
+    assert next(row['Activity'] for row in route if row['Step']==22).startswith(
+        'QA/QC-006' if parent_catalog else 'QA/QC-005')
     qa=[row for row in route if row['Step']==18]
     assert [row['Status'] for row in qa]==['QA FAIL','QA PASS','QA PASS']
     assert all(row['Record scope']=='Shared parent assembly: '+data['parent'] for row in qa)
     assert all(row['Elapsed HH:MM:SS']==pytest.approx(1/24) for row in qa)
     assert all(row['Status']!='Completed' for row in route if row['Step'] in (17,18,19))
-    events=table_rows(book,'24-step Route','Testing event ID')
+    events=table_rows(book,route_sheet,'Testing event ID')
     assert [row['Testing event ID'] for row in events]==list(map(str,history['event_ids']))
-    assert len(table_rows(book,'24-step Route','Testing handoff event ID'))==9
+    assert len(table_rows(book,route_sheet,'Testing handoff event ID'))==9
+    catalogs=table_rows(book,'Spool Record','Source item ID')
+    assert next(row['Recorded catalog'] for row in catalogs if row['Source item ID']==data['parent'])==(parent_catalog or 'CLM-24-v6')
+    assert next(row['Recorded catalog'] for row in catalogs if row['Source item ID']==data['a'])=='CLM-24-v6'
     (tmp_path/'synthetic-testing-spool-record.xlsx').write_bytes(response.content)
     assert snapshot(api)==before
 
 
-def test_explicit_no_is_not_required_without_inventing_test_times_or_passes(api,public_qr_url):
-    data=seed(api)
+@pytest.mark.parametrize('parent_catalog', [None, 'CLM-25-v1'])
+def test_explicit_no_is_not_required_without_inventing_test_times_or_passes(api,public_qr_url,parent_catalog):
+    data=seed(api,parent_catalog=parent_catalog)
     seed_testing_history(api,data,decision='NO')
     before=snapshot(api)
     response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
     assert response.status_code==200,response.text
     book=Workbook(response.content)
-    route=table_rows(book,'24-step Route','Step')
+    route_sheet='25-step Route' if parent_catalog else '24-step Route'
+    route=table_rows(book,route_sheet,'Step')
     skipped=[row for row in route if row['Step'] in (18,19)]
     assert [row['Status'] for row in skipped]==['Not required — recorded NO']*2
     assert all(row['Entered (UTC)'] is None and row['Departed (UTC)'] is None and row['Elapsed HH:MM:SS'] is None for row in skipped)
     assert all(row['Employee badge'] is None for row in skipped)
-    decision=table_rows(book,'24-step Route','Testing event ID')[0]
+    decision=table_rows(book,route_sheet,'Testing event ID')[0]
     assert decision['Decision / result']=='NO' and decision['Employee badge']==BADGES['handler']
     assert table_rows(book,'Inspection History','Test report event ID')==[]
     assert table_rows(book,'Inspection History','Test QA event ID')==[]
+    if parent_catalog:
+        floor=next(row for row in route if row['Step']==23)
+        assert floor['Activity']=='Return to Floor' and floor['Status']=='Not recorded'
     assert snapshot(api)==before
 
 
 def test_full_export_preserves_testing_cursor_and_exact_report_link(api,public_qr_url):
-    data=seed(api)
+    data=seed(api,parent_catalog='CLM-25-v1')
     history=seed_testing_history(api,data)
     before=snapshot(api)
     response=api.get('/api/exports/excel')
@@ -441,6 +515,9 @@ def test_full_export_preserves_testing_cursor_and_exact_report_link(api,public_q
     assert current['ndt_review_event_id'].value==str(history['review_ids'][('ndt',2)])
     assert current['qa_result'].value=='PASS'
     assert current['reported_at'].style in book.date_styles
+    plans={row['item_id'].value:row for row in book.records('Flow plans')}
+    assert plans[data['parent']]['catalog_version'].value=='CLM-25-v1'
+    assert plans[data['a']]['catalog_version'].value is None, 'Raw export must preserve retained NULL catalog metadata'
     assert snapshot(api)==before
 
 

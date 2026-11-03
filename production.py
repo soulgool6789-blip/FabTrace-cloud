@@ -283,7 +283,7 @@ def with_process_permissions(s, item_id, snapshot, user):
     if item_is_removed(s, item_id):
         return {**snapshot, 'removal': removal_summary(s, 'item', item_id), 'can_mutate': False,
                 'permissions': {'allowed_actions': [], 'allowed_processes': []}}
-    from flow import FlowPlan
+    from flow import FlowPlan, post_qa_steps
     item = read_get(s, Item, item_id)
     flow = read_get(s, FlowPlan, item_id)
     from spool_receiving import receiving_errors
@@ -308,7 +308,7 @@ def with_process_permissions(s, item_id, snapshot, user):
         if allowed is None:
             allowed = can_control_process(user, clock_key)
         if (flow.status == 'active' and allowed and
-                (not item.released or flow.current_step in (16, 23, 24))):
+                (not item.released or flow.current_step in post_qa_steps(flow))):
             if current is not None and snapshot['status'] == 'running':
                 actions.append('pause')
             elif not arrival_blockers and not heat_errors:
@@ -447,7 +447,7 @@ def get_process(item_id: str, u: Employee = Depends(auth), s: Session = Depends(
 
 @router.post('/spools/{item_id}/process', status_code=201)
 def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s: Session = Depends(db)):
-    from flow import lock_topology
+    from flow import lock_topology, post_qa_steps
     lock_topology(s)
     permit(u, *ROLES)
     item = lock_item(s, item_id)
@@ -455,7 +455,7 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
     if flow is not None:
         if data.action not in ('pause', 'resume') or flow.status != 'active':
             raise HTTPException(409, 'Use Process flow to advance this numbered traveler. Its timer only supports pause and resume here.')
-        if item.released and flow.current_step not in (16, 23, 24):
+        if item.released and flow.current_step not in post_qa_steps(flow):
             require_unreleased(item)
     else:
         require_unreleased(item)

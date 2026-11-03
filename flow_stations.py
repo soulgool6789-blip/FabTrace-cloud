@@ -16,7 +16,8 @@ from station_timing import station_visit_history
 LOCATION_STAGES = {
     'inventory': 'inventory', 'receiving': 'inventory', 'material_storage': 'inventory',
     'qa_001': 'qa_001', 'qa_002': 'qa_002', 'qa_003': 'qa_003', 'qa_004': 'qa_004',
-    'qa_test_results': 'qa_test_results',
+    'qa_test_results': 'qa_test_results', 'qa_pressure_results': 'qa_pressure_results',
+    'qa_final': 'qa_final',
     'kitting': 'preparation', 'fabrication_prep': 'preparation', 'fit_up': 'preparation',
     'floor': 'floor', 'production_staging': 'floor', 'welding': 'welding',
     'testing': 'testing', 'assembly': 'testing', 'blast_paint': 'paint',
@@ -79,6 +80,10 @@ def station_positions(s, items, *, flows=None, plans=None):
     # Label-only historical movements predate the new explicit test-review
     # station. Their old QA/QC-004 label identified final inspection.
     labels['qa/qc-004'] = 'qa_004'
+    # A bare historical QA/QC-005 meant final inspection. New pressure-review
+    # movements carry their own explicit location ID or saved phase definition.
+    labels['qa/qc-005'] = 'qa_004'
+    labels['qa/qc-006'] = 'qa_final'
     facts, completion_windows, linked_at = {}, {}, {}
 
     def completed_intervals(flow, rows):
@@ -126,12 +131,31 @@ def station_positions(s, items, *, flows=None, plans=None):
     def mapped(location_id, step, definition=None):
         if location_id != 'qa_qc':
             return LOCATION_STAGES.get(location_id)
+        definition = definition or {}
         # Step 18 used to identify an assembly; it did not establish a QA
         # station. Only an actual movement recorded against the revised QA
         # definition disambiguates the retired generic QA/QC destination.
-        if step == 18 and (definition or {}).get('display_qa_code') != 'QA/QC-004':
+        if step == 18:
+            if definition.get('display_qa_code') == 'QA/QC-004':
+                return 'qa_test_results'
+            if (definition.get('display_qa_code') == 'QA/QC-005'
+                    and definition.get('flow_stage_key') == 'qa_pressure_results'):
+                return 'qa_pressure_results'
             return None
+        if (step == 22 and definition.get('display_qa_code') == 'QA/QC-006'
+                and definition.get('flow_stage_key') == 'qa_final'):
+            return 'qa_final'
         return QA_STEPS.get(step)
+
+    def label_location(label, step, definition):
+        normalized = ' '.join(label.casefold().split())
+        key = mapped('qa_qc', step, definition)
+        # A recorded definition disambiguates label-only QA codes; otherwise
+        # retain their historical meanings rather than infer from today's plan.
+        if normalized in ('qa/qc-004', 'qa/qc-005', 'qa/qc-006'):
+            if normalized == str((definition or {}).get('display_qa_code', '')).casefold() and key:
+                return key
+        return labels.get(normalized)
 
     for identifier, item in items.items():
         stage = {**stage_status('inventory', identifier), 'position_source': 'inventory_default',
@@ -160,17 +184,18 @@ def station_positions(s, items, *, flows=None, plans=None):
             after = after if isinstance(after, dict) else {}
             location_id = after.get('location_id')
             label = after.get('location') or data.get('location')
+            step = data.get('flow_step', transfer_steps.get(data.get('transfer_version')))
+            definition = transfer_definitions.get(data.get('transfer_version'))
             if location_id is None and label:
-                location_id = labels.get(' '.join(label.casefold().split()))
+                location_id = label_location(label, step, definition)
             changed = (data.get('location_changed') is True
                        or after.get('location_id') != before.get('location_id')
                        or bool(label and label != before.get('location')))
             if not changed or not (location_id or label):
                 continue
-            step = data.get('flow_step', transfer_steps.get(data.get('transfer_version')))
             moves.append((row.at, row.id, location_id, label,
                           'location_capture' if row.event == 'LOCATION_CAPTURED' else 'transfer',
-                          mapped(location_id, step, transfer_definitions.get(data.get('transfer_version'))),
+                          mapped(location_id, step, definition),
                           row.actor, after.get('handler') or data.get('handler'), data.get('notes', '')))
         # A retained current-state row is evidence when older movement audit
         # history is unavailable. Item.location alone never establishes a move.

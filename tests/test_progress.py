@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import event, select
 
 from conftest import BADGES
+from receiving_helpers import ensure_scope_arrival
 from tracking_helpers import add_weld, complete_weld, ok
 from test_flow import (
     PROJECT, action_body, advance, assign_component, completed_spool, create_item,
@@ -79,11 +80,18 @@ def test_project_membership_uses_plan_then_parent_then_exact_legacy_id(api):
         "location": "Test rack", "handler": BADGES["handler"], "welds_required": 0,
     }), 201)
     enroll(api, component, "component", start_step=5)
-    enroll(api, spool_id, "spool", expected_children=1)
-    assign_component(api, component, spool_id)
     # Earlier versions stored a free-form display label. An explicit plan or
     # component assignment takes precedence if that old label remains stale.
+    # Seed a retained relationship before receiving evidence exists. Modern
+    # spool enrollment records arrival/material approval and therefore pins
+    # its PO identity; changing that identity would be a different test.
+    from flow import ComponentLink
+    from spool_receiving import SpoolArrivalInspection, SpoolMaterialInspection, SpoolMtrDocument
     with api.session_factory() as session:
+        session.add(ComponentLink(component_id=component, spool_id=spool_id,
+                                  assigned_by=BADGES['admin']))
+        for model in (SpoolArrivalInspection, SpoolMaterialInspection, SpoolMtrDocument):
+            assert session.scalar(select(model.id).where(model.spool_id == spool_id)) is None
         session.get(api.application.Item, spool_id).project = "PROGRESS-OTHER-PROJECT"
         session.get(api.application.Item, component).project = "PROGRESS-OTHER-PROJECT"
         session.commit()
@@ -168,6 +176,7 @@ def test_zero_weld_scope_needs_actual_release_and_reopen_returns_it_to_wip(api):
     item_id = create_item(api, "PROGRESS-NO-WELDS", kind="Spool")
     row = part(api, item_id)
     assert row["progress_percent"] == 0 and not row["fabrication_finished"]
+    ensure_scope_arrival(api, item_id)
     inspect_dimensions(api, item_id)
     ok(api.post(f"/api/items/{item_id}/release", {"reference": "PROGRESS-QA-RELEASE"}, role="inspector"))
     row = part(api, item_id)
@@ -221,6 +230,7 @@ def test_sort_and_scope_filters_are_stable_and_keep_full_project_counts(api):
     }))
     enroll(api, middle, "spool", start_step=14)
     advance(api, middle)
+    ensure_scope_arrival(api, full)
     inspect_dimensions(api, full)
     ok(api.post(f"/api/items/{full}/release", {"reference": "PROGRESS-SORT-QA"}, role="inspector"))
     assert [row["id"] for row in project(api, sort="progress_asc")["items"]] == [zero, middle, full]
@@ -266,3 +276,4 @@ def test_progress_polling_is_read_only_and_does_not_lock_or_backfill_history(api
     assert database_state(api) == before
     assert not any(statement.startswith(("INSERT", "UPDATE", "DELETE")) for statement in statements)
     assert not any("FOR UPDATE" in statement or "PG_ADVISORY_XACT_LOCK" in statement for statement in statements)
+

@@ -72,7 +72,7 @@ Reviewers admin/inspector only; reference and meaningful notes required. Actor/t
 - evidence: accepted / rejected. Acceptance checks typed details and references; no anonymous training or future performed dates.
 - action: closed / reopened. Closure checks the gates above.
 
-`blockers` is the authoritative explanation. Changes to a requirement or any linked document/evidence/action change its deterministic review fingerprint and make old verification stale, while preserving all review history. Unrelated requirement changes do not stale another requirement. Optional project gates block flow20/21 (pre_coating) and flow23/24 (shipment) unless every bound requirement is currently verified or approved NA. Requirements default to gate none.
+`blockers` is the authoritative explanation. Changes to a requirement or any linked document/evidence/action change its deterministic review fingerprint and make old verification stale, while preserving all review history. Unrelated requirement changes do not stale another requirement. Optional project gates block flow20/21 (pre_coating) and the traveler's ready-to-ship/shipment positions (shipment): flow24/25 for CLM-25-v1, or flow23/24 for retained 24-step routes, unless every bound requirement is currently verified or approved NA. Requirements default to gate none.
 
 Integration helpers: `production_gate_errors(s,item,gate,as_of=None,for_update=False)` -> list[str]; `workspace_detail(s,workspace,user,as_of=None)`; model classes QualityWorkspace, QualityRequirement, QualityDocument, QualityEvidence, QualityAction, QualityReview, QualityEvent. Immutable tables: quality_documents,quality_evidence,quality_reviews,quality_events. All writes lock flow topology then workspace row to match production order. Dates serialize deterministically.
 
@@ -81,3 +81,4 @@ Requirements with `requires_approved_document:true` require a linked current eff
 Document registration requires an actual or proposed effective_date; future effective dates remain blocked from readiness until effective. For real production gate mutations call production_gate_errors(..., for_update=True) while topology lock is already held; read-only flow detail uses the default false and takes no row locks.
 
 Optional gates represent signed project-level requirements. They do not automatically calculate per-spool test coverage, NDE sample selection or technical limits. External documents remain references; no file retrieval/upload/archive is performed.
+

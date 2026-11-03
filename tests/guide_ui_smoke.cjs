@@ -69,8 +69,11 @@ async function check(name,fn){await fn();checks.push(name);}
     const before=calls.length;await context.FabGuide.open({project:'P1',section:'flow'});
     assert.deepEqual(calls.slice(before).map(c=>c.url),['/api/progress/projects','/api/dossier/projects','/api/progress/projects/P1','/api/dossier/projects/P1']);
     assert.equal(context.url,'/?guide=1&project=P1&section=flow');assert.deepEqual(topics(),['flow']);
-    assert.match(html(),/CLM-24-v6/);assert.match(html(),/explicit <strong>YES or NO<\/strong>; neither is preselected/);
-    assert.match(html(),/NDT at 17 → NDT QA\/QC at 18 → Floor at 19 → pressure testing at 17 → pressure QA\/QC at 18 → Floor at 19 → Paint\/finishing at 20/);
+    assert.match(html(),/New travelers use <strong>CLM-25-v1<\/strong>/);assert.match(html(),/explicit <strong>YES or NO<\/strong>; neither is preselected/);
+    assert.match(html(),/NDT at 17 → <strong>QA\/QC-004 NDT<\/strong> at 18 → Floor at 19 → pressure testing at 17 → <strong>QA\/QC-005 pressure<\/strong> at 18 → Floor at 19 → Paint\/finishing at 20/);
+    assert.match(html(),/QA\/QC-006 - Final Inspection/);assert.match(html(),/23 — Return to Floor/);assert.match(html(),/24 — Release to Ready to Ship/);assert.match(html(),/25 — Ship to Customer/);
+    assert.match(html(),/shipment Floor step 23 remains required/);assert.match(html(),/Numeric step 18 counts once in overall progress/);
+    assert.match(html(),/retained <strong>CLM-24-v6<\/strong> routes keep final QA\/QC-005 at 22, ready-to-ship at 23 and shipment at 24/);
     assert.match(html(),/exact previous testing station and employee who sent the attempt into QA\/QC/);assert.match(html(),/Scope stays locked through later correction and restart cycles/);
     assert.match(html(),/Return to testing/);assert.match(html(),/QA\/QC controls the QA review/);assert.match(html(),/Historical travelers/);assert.doesNotMatch(html(),/CLM-24-v5/);
   });
@@ -100,7 +103,8 @@ async function check(name,fn){await fn();checks.push(name);}
     assert.match(scope,/existing physical records/);assert.match(scope,/Files, Excel &amp; other records → Edit component plan/);
     assert.match(scope,/separate from the uploaded reference BOM and its material-piece facts/);assert.match(scope,/before its first step 17 testing decision/);
     await context.FabGuide.open({project:'P1',section:'excel'});const excel=topic('excel');
-    for(const name of ['Spool Record','24-step Route','Weld Register','Material Traceability','Inspection History','Work and Rework','Kelvion Requirements'])assert.ok(excel.includes('<strong>'+name+'</strong>'),name);
+    for(const name of ['Spool Record','25-step Route','24-step Route','Weld Register','Material Traceability','Inspection History','Work and Rework','Kelvion Requirements'])assert.ok(excel.includes('<strong>'+name+'</strong>'),name);
+    assert.match(excel,/seven sheets/);assert.match(excel,/catalog table and saved QA codes keep mixed historical\/current scope explicit/);
     assert.match(excel,/multiple spools download separate workbooks in a ZIP/);assert.match(excel,/technician reports, separate QA results/);
     assert.match(excel,/Component BOM Excel &amp; template/);assert.match(excel,/editing Excel does not update FabTrace/);assert.match(excel,/can import reference BOM files/);
     assert.match(excel,/Shared parent-assembly evidence is identified as shared/);assert.match(excel,/does not approve work or issue a Job Packet/);
