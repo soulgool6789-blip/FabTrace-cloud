@@ -40,7 +40,7 @@ function detailAt(number,extra={},source=catalog){
   const step=source.steps[number-1],r=source.routes.find(row=>row.id===step.route),modern=source.version==='CLM-25-v1';
   const transfer={item_id:'ITM-001',version:4,handler:'SHOP1',handler_name:'Sender One',handler_active:true,location:'Shop',location_id:null,operational_status:'queued',status_label:'Queued',can_transfer:![16,23,24].includes(number)};
   const identity=step.route==='spool'?{spool_number:'643-777-PCW-03-01',google_part_number:'643-777-PCW-03-01',qr_alias:'643-777-PCW-03-01-[001]',display_code:'643-777-PCW-03-01-[001]'}:{};
-  return {stage_catalog:structuredClone(source.stage_catalog),flow_stage:{key:step.flow_stage_key,source_item_id:'ITM-001',inherited:false},transfer,item:{...identity,id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24,25].includes(number)},flow:{item_id:'ITM-001',catalog_version:source.version,route_definition:structuredClone(r),ready_to_ship_step:modern?24:23,shipment_step:modern?25:24,route:step.route,current_step:number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:source.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
+  return {stage_catalog:structuredClone(source.stage_catalog),flow_stage:{key:step.flow_stage_key,source_item_id:'ITM-001',inherited:false},transfer,item:{...identity,id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24,25].includes(number)},flow:{item_id:'ITM-001',catalog_version:source.version,route_definition:structuredClone(r),ready_to_ship_step:modern?24:23,shipment_step:modern?25:24,route:step.route,current_step:number,current_display_step:modern?({18:19,19:20}[number]||number+(number>=20?4:0)):number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:source.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
 }
 function testingAt(phase,action,extra={},source=catalog){
   const kind=phase.startsWith('pressure')||phase==='floor_before_paint'?'pressure':'ndt',qa=action==='review',work=action==='start'||action==='complete',number=qa?18:action==='handoff'?19:['complete','not_required'].includes(phase)?20:17;
@@ -48,6 +48,7 @@ function testingAt(phase,action,extra={},source=catalog){
   const roles=qa?['admin','inspector']:work||action==='correct'?['admin',kind==='ndt'?'ndt':'pressure_testing_technician']:['admin','supervisor','handler'];
   d.flow.testing={protocol:'CLM-TEST-v1',phase,decision:phase==='decision'?null:phase==='not_required'?'NO':'YES',test_kind:kind,attempt:2,cycle:1,action:action||null,active:Boolean(action),requires_decision:phase==='decision',requires_result:action==='complete'||qa,requires_child_scans:phase==='decision',review_exception_ids:[],test_started_by:action==='complete'||qa?tester:null,return_to:{sender_badge:tester,sender_name:kind==='ndt'?'NDT <Technician>':'Pressure technician',location_id:'testing',location_label:'Testing & inspection bay'},report:qa||action==='handoff'?{test_kind:kind,attempt:2,cycle:1,result:'PASS',reference:'REPORT-002',notes:'Actual test evidence',actor:tester,at:'2026-10-28T12:00:00Z',event_id:42}:null,qa:action==='handoff'?{result:'PASS',reference:'QA-002',actor:'QA1',at:'2026-10-28T12:04:00Z'}:null,rework_required:action==='correct',...extra};
   d.flow.current={...d.flow.current,title,roles,qa,display_qa_code:qa?qaCode:null,qa_stage:qa?qaLocation:null,requires_scan:true,requires_reference:['complete','review','correct'].includes(action),requires_handoff:work||action==='handoff',requires_location:work||action==='handoff',requires_child_scans:phase==='decision',requires_resolution:action==='correct',return_steps:[],handoff_target_role:action==='start'?kind==='ndt'?'ndt':'pressure_testing_technician':action==='complete'?'inspector':action==='handoff'?'handler':null,handoff_location_id:action==='start'?'testing':action==='complete'?qaLocation:action==='handoff'?'floor':null,checks:[{id:'testing_'+phase+'_'+action+'_1',label:'Verify the physical testing phase'}]};
+  if(source.version==='CLM-25-v1')d.flow.current_display_step=({decision:17,ndt:18,ndt_rework:18,ndt_qa:19,floor_before_pressure:20,pressure_test:21,pressure_rework:21,pressure_qa:22,floor_before_paint:23,complete:24,not_required:24})[phase];
   d.flow.steps=d.flow.steps.map(s=>s.number===number?{...d.flow.current,status:'current'}:s);
   if(phase==='not_required')d.flow.steps=d.flow.steps.map(s=>[18,19].includes(s.number)?{...s,status:'not_required'}:s);
   const handler=qa||action==='handoff'?'QA1':action==='complete'||action==='correct'?tester:'SHOP1';d.item.handler=handler;d.transfer={...d.transfer,handler,handler_name:handler,location:qa||action==='handoff'?qaCode:handler==='SHOP1'?'Floor':'Testing',location_id:qa||action==='handoff'?qaLocation:handler==='SHOP1'?'floor':'testing'};
@@ -80,8 +81,8 @@ const context={location:{origin:'https://fabtrace-cloud.onrender.com'},qrStatus:
     if(url==='/api/transfers/options')return structuredClone(handoffOptions);
     if(url==='/api/employees/directory')return [{badge:'SHOP1',name:'Sender One',role:'welder',active:true},{badge:'SHOP2',name:'Receiver Two',role:'handler',active:true},{badge:'OLD1',name:'Former worker',role:'handler',active:false},{badge:'NDT1',name:'NDT technician',role:'ndt',active:true},{badge:'NDT2',name:'Other NDT technician',role:'ndt',active:true},{badge:'PRESS1',name:'Pressure technician',role:'pressure_testing_technician',active:true},{badge:'QA1',name:'QA reviewer',role:'inspector',active:true}];
     if(url==='/api/flow/catalog')return structuredClone(modernCatalog);
-    if(url==='/api/flow/board')return {items:structuredClone(physicalCopies.length?physicalCopies:record.flow?.route==='spool'?[{...record.item,item_id:record.item.id,route:'spool',flow_stage:record.flow_stage,status:record.flow.status,current_step:record.flow.current_step,project_id:'P1',subproject_id:'SUB1'}]:[])};
-    if(url==='/api/flow/items')return {items:[{item_id:'ITM-001',spool_number:record.item.spool_number,google_part_number:record.item.google_part_number,qr_alias:record.item.qr_alias,display_code:record.item.display_code,flow_stage:record.flow_stage,description:'Test item',route:record.flow?.route||'component',status:record.flow?.status||'active',current_step:record.flow?.current_step||6,current_title:record.flow?.current?.title||'Prep',project_id:'P1',subproject_id:'SUB1',open_exceptions:record.exceptions?.filter(x=>!x.closed_at).length||0,blockers:[],production_process:baseProcess()},{item_id:'OTHER-002',description:'Other project item',route:'assembly',status:'delivered',current_step:null,current_title:'',project_id:'P2',subproject_id:null,open_exceptions:0,blockers:[],production_process:null}]};
+    if(url==='/api/flow/board')return {items:structuredClone(physicalCopies.length?physicalCopies:record.flow?.route==='spool'?[{...record.item,item_id:record.item.id,route:'spool',flow_stage:record.flow_stage,status:record.flow.status,current_step:record.flow.current_step,current_display_step:record.flow.current_display_step,catalog_version:record.flow.catalog_version,project_id:'P1',subproject_id:'SUB1'}]:[])};
+    if(url==='/api/flow/items')return {items:[{item_id:'ITM-001',spool_number:record.item.spool_number,google_part_number:record.item.google_part_number,qr_alias:record.item.qr_alias,display_code:record.item.display_code,flow_stage:record.flow_stage,description:'Test item',route:record.flow?.route||'component',status:record.flow?.status||'active',current_step:record.flow?.current_step||6,current_display_step:record.flow?.current_display_step,catalog_version:record.flow?.catalog_version,current_title:record.flow?.current?.title||'Prep',project_id:'P1',subproject_id:'SUB1',open_exceptions:record.exceptions?.filter(x=>!x.closed_at).length||0,blockers:[],production_process:baseProcess()},{item_id:'OTHER-002',description:'Other project item',route:'assembly',status:'delivered',current_step:null,current_title:'',project_id:'P2',subproject_id:null,open_exceptions:0,blockers:[],production_process:null}]};
     if(url.startsWith('/api/flow/items/'))return detail();throw Error('Unexpected endpoint '+url);
   },
 };context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow-status.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/spool-qr.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/handoff.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/flow.js'),'utf8'),context);
@@ -114,14 +115,16 @@ const chartCount=source=>(source.match(/\bdata-testing-chart="inline"/g)||[]).le
 const selectedMap=()=>html().split('View this traveler’s numbered route')[1]?.split('</details>')[0]||'';
 function assertInlineBranch(source){
   const branch=branchHtml(source);assert.ok(branch,'testing branches are contained in the chart');assert.equal(chartCount(source),1,'one testing branch group belongs to this chart');
-  assert.match(branch,/\bdata-testing-merge-step="20"/);assert.doesNotMatch(branch,/\bdata-flow-chart-step="20"|\bdata-testing-node="paint"/,'the branches rejoin the existing step20, without a duplicate Paint card');
+  const modern=/\bdata-testing-catalog="CLM-25-v1"/.test(branch),merge=modern?24:20;
+  assert.match(branch,new RegExp('\\bdata-testing-merge-step="'+merge+'"'));assert.doesNotMatch(branch,new RegExp('\\bdata-flow-chart-step="'+merge+'"|\\bdata-testing-node="paint"'),'the branches rejoin the existing Paint destination without a duplicate card');
   assert.match(phaseNode('decision',branch),/\bdata-flow-chart-step="17"/);
-  for(const [key,number] of [['ndt',17],['ndt_qa',18],['floor_before_pressure',19],['pressure_test',17],['pressure_qa',18],['floor_before_paint',19]]){
+  const phases=modern?[['ndt',18],['ndt_qa',19],['floor_before_pressure',20],['pressure_test',21],['pressure_qa',22],['floor_before_paint',23]]:[['ndt',17],['ndt_qa',18],['floor_before_pressure',19],['pressure_test',17],['pressure_qa',18],['floor_before_paint',19]];
+  for(const [key,number] of phases){
     const node=phaseNode(key,branch);assert.ok(node,key+' is a chart node');assert.match(node,new RegExp('data-flow-chart-step="'+number+'"'));assert.match(node,/\bff-branch-node\b/);
-    assert.match(node,new RegExp('class="ff-num(?: ff-link)?"[^>]*>'+number+'<'),'branch nodes display their real traveler step instead of a local1–6 sequence');
+    assert.match(node,new RegExp('class="ff-num(?: ff-link)?"[^>]*>'+number+'<'),'branch nodes use the displayed sequence for their saved catalog');
   }
-  assert.equal((source.match(/\bdata-flow-chart-step="20"/g)||[]).length,1,'the normal Paint destination appears once');
-  assert.ok(source.indexOf('data-testing-merge-step="20"')<source.indexOf('data-flow-chart-step="20"'),'testing paths rejoin before step20');
+  assert.equal((source.match(new RegExp('\\bdata-flow-chart-step="'+merge+'"','g'))||[]).length,1,'the normal Paint destination appears once');
+  assert.ok(source.indexOf('data-testing-merge-step="'+merge+'"')<source.indexOf('data-flow-chart-step="'+merge+'"'),'testing paths rejoin before the Paint release');
 }
 function assertInlineMap(source=mapHtml()){
   const assembly=elementHtml(source,/<section\b[^>]*\bdata-phase="assembly"[^>]*>/);
@@ -143,7 +146,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
 
 (async()=>{
   await context.FabFlow.open();assert.equal(context.page,'flowPage');
-  assert.match(html(),/25-step fabrication flow/);assert.deepEqual(numberedSteps(mapHtml()),Array.from({length:25},(_,i)=>i+1));assertInlineMap();assertNoDetachedBranch();
+  assert.match(html(),/29-step fabrication flow/);assert.deepEqual([...mapHtml().matchAll(/\bdata-flow-chart-step="(\d+)"/g)].map(match=>Number(match[1])),Array.from({length:29},(_,i)=>i+1),"the current map presents every step 1–29 once in order");assertInlineMap();assertNoDetachedBranch();
   assert.equal((html().match(/data-spool-process=/g)||[]).length,13);assert.match(html(),/Individual spools by process/);assert.match(html(),/data-flow-id="ITM-001">ITM-001<\/button>/);assert.doesNotMatch(html(),/fst-color-[^"]+"[^>]*>ITM-001<\/span>/);assert.match(html(),/QA\/QC-004/);
   for(const station of html().matchAll(/<(?:h3|span|strong)\b[^>]*data-station-stage="[^"]+"[^>]*>/g))assert.doesNotMatch(station[0],/fst-color-|fst-text/);
   assert.doesNotMatch(context.FabFlowStatus.strip(null,{key:'floor'}),/fst-color-|fst-text/);assert.doesNotMatch(context.FabFlowStatus.legend(),/class="fst-text/);
@@ -155,7 +158,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   assert.deepEqual([...processGroup('welding').matchAll(/data-process-spool="([^"]+)"/g)].map(m=>m[1]),['COPY-WELD']);
   assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,4);assert.doesNotMatch(processBoard(),/<details|data-flow-spool="ITM-001"/);
   assert.match(processGroup('inventory'),/data-spool-id="COPY-001" class="fst-text fst-color-black"[^>]*>643-777-PCW-03-01-\[001\]/);
-  assert.match(html(),/<details class="ff-fold"><summary>Traveler records/);assert.match(html(),/<details class="ff-fold"><summary>The 25-step fabrication flow/);assert.match(html(),/<option value="INVENTORY-PROJECT"/);
+  assert.match(html(),/<details class="ff-fold"><summary>Traveler records/);assert.match(html(),/<details class="ff-fold"><summary>The 29-step fabrication flow/);assert.match(html(),/<option value="INVENTORY-PROJECT"/);
   elements.get('flowProject').value='INVENTORY-PROJECT';elements.get('flowProject').onchange();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,3);
   elements.get('flowSearch').value='[2]';elements.get('flowSearch').oninput();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,1);assert.match(processBoard(),/data-flow-spool="COPY-2"/);
   await context.FabFlow.open({project:'',resetFilters:true});elements.get('flowStatus').value='not_started';elements.get('flowStatus').onchange();assert.equal((processBoard().match(/data-flow-spool=/g)||[]).length,3);
@@ -426,7 +429,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   await catalogContract('testing branches are inside the route and numbered map, with saved decisions and distinct QA checkpoints',async()=>{
     context.me={role:'admin',badge:'ADMIN'};record=testingAt('decision','decision',{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});
     assertInlineBranch(routeHtml());assertInlineMap(mapHtml(selectedMap()));assertNoDetachedBranch();assert.equal(chartCount(html()),2,'the route and saved map each contain their own inline branch');
-    assert.deepEqual(numberedSteps(routeHtml()),[17,18,19,20,21,22,23,24,25]);
+    assert.deepEqual(numberedSteps(routeHtml()),[17,18,19,20,21,22,23,24,25,26,27,28,29]);
     assert.match(branchHtml(),/data-testing-catalog="CLM-25-v1"/);assert.match(branchHtml(),/No testing decision has been recorded/);
     assert.match(branchHtml(),/data-testing-branch="YES"/);assert.match(branchHtml(),/data-testing-branch="NO"/);
     assert.match(branchHtml(),/data-testing-node="ndt_qa"[^>]*>[\s\S]*?<strong>QA\/QC-004<\/strong>/);assert.match(branchHtml(),/data-testing-node="pressure_qa"[^>]*>[\s\S]*?<strong>QA\/QC-005<\/strong>/);
@@ -435,10 +438,10 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
     chooseTesting('testing_decision','YES');assert.match(branchHtml(),/No testing decision has been recorded/,'an unsaved radio choice does not claim a recorded route');assert.doesNotMatch(branchHtml(),/ff-branch-chosen|class="[^"]*completed/);
   });
   await catalogContract('only the actual active phase is highlighted, including exact rework custody',async()=>{
-    const phases=[['ndt','start','ndt'],['ndt_qa','review','ndt_qa'],['floor_before_pressure','handoff','floor_before_pressure'],['pressure_test','complete','pressure_test'],['pressure_qa','review','pressure_qa'],['floor_before_paint','handoff','floor_before_paint'],['ndt_rework','correct','ndt'],['pressure_rework','correct','pressure_test']];
-    for(const [phase,action,node] of phases){
+    const phases=[['ndt','start','ndt',18],['ndt_qa','review','ndt_qa',19],['floor_before_pressure','handoff','floor_before_pressure',20],['pressure_test','complete','pressure_test',21],['pressure_qa','review','pressure_qa',22],['floor_before_paint','handoff','floor_before_paint',23],['ndt_rework','correct','ndt',18],['pressure_rework','correct','pressure_test',21]];
+    for(const [phase,action,node,displayStep] of phases){
       record=testingAt(phase,action,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});
-      assert.equal((branchHtml().match(/aria-current="step"/g)||[]).length,1,phase);assert.match(phaseNode(node),/aria-current="step"/);
+      assert.equal((branchHtml().match(/aria-current="step"/g)||[]).length,1,phase);assert.match(phaseNode(node),/aria-current="step"/);assert.match(html(),new RegExp('Current step '+displayStep+' · Assembly route'));assert.match(phaseNode(node),new RegExp('data-flow-chart-step="'+displayStep+'"'));
       for(const key of phases.map(row=>row[2]))assert.doesNotMatch(phaseNode(key),/class="[^"]*\bcompleted\b/,'advancing to a phase does not invent a test approval');
       assertInlineBranch(routeHtml());assertInlineMap(mapHtml(selectedMap()));assertNoDetachedBranch();
       if(phase.endsWith('_rework')){assert.match(branchHtml(),/Required rework/);assert.match(branchHtml(),/Testing &amp; inspection bay/);assert.match(branchHtml(),phase==='ndt_rework'?/NDT &lt;Technician&gt; \(NDT1\)/:/Pressure technician \(PRESS1\)/);assert.match(branchHtml(),/fresh test and QA\/QC review/);}
@@ -446,44 +449,63 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
     record=detailAt(23,{},modernCatalog);record.flow.testing={...testingAt('pressure_qa','review',{},modernCatalog).flow.testing,active:false,action:null};await context.FabFlow.open({item:'ITM-001'});
     assert.doesNotMatch(branchHtml(),/aria-current="step"/);assert.doesNotMatch(html(),/name="test_result"|name="testing_decision"/);
     record=testingAt('not_required',null,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});
-    assert.match(branchHtml(),/Recorded choice: NO/);assertTestingNotRequired();assert.doesNotMatch(branchHtml(),/aria-current="step"/);assert.match(stepTag(20),/aria-current="step"/,'the existing step20 is the current Paint destination');
-    assert.doesNotMatch(stepTag(23),/\bnot_required\b/,'NO cannot bypass the later shipment Floor handoff');assertInlineBranch(routeHtml());assertInlineMap(mapHtml(selectedMap()));assertNoDetachedBranch();
+    assert.match(branchHtml(),/Recorded choice: NO/);assertTestingNotRequired();assert.doesNotMatch(branchHtml(),/aria-current="step"/);assert.match(stepTag(24),/aria-current="step"/,'the displayed step24 is the current Paint destination');
+    assert.doesNotMatch(stepTag(27),/\bnot_required\b/,'NO cannot bypass the later shipment Floor handoff');assertInlineBranch(routeHtml());assertInlineMap(mapHtml(selectedMap()));assertNoDetachedBranch();
   });
   await catalogContract('legacy testing labels and route boundaries remain distinct from the current catalog',async()=>{
     record=testingAt('pressure_qa','review');await context.FabFlow.open({item:'ITM-001'});
     assert.match(branchHtml(),/data-testing-catalog="CLM-24-v6"/);assert.match(branchHtml(),/data-testing-node="pressure_qa"[^>]*>[\s\S]*?<strong>QA\/QC-004<\/strong>/);assert.doesNotMatch(branchHtml(),/QA\/QC-005|QA\/QC-006/);
     assert.deepEqual(numberedSteps(selectedMap()),[17,18,19,20,21,22,23,24]);assert.match(selectedMap(),/QA\/QC-005 - Final Inspection/);assert.match(selectedMap(),/Release to Ready to Ship/);assert.doesNotMatch(selectedMap(),/QA\/QC-006|class="ff-num">25</);assertInlineBranch(routeHtml());assertInlineMap(mapHtml(selectedMap()));assertNoDetachedBranch();
     record=detailAt(22,{},modernCatalog);record.flow.baseline_step=22;record.flow.steps=record.flow.steps.map(step=>step.number<22?{...step,status:'not_recorded'}:step);await context.FabFlow.open({item:'ITM-001'});
-    assert.deepEqual(numberedSteps(selectedMap()),[17,18,19,20,21,22,23,24,25]);assert.match(selectedMap(),/QA\/QC-006 - Final Inspection/);assert.match(selectedMap(),/class="ff-num">25</);assert.match(html(),/Assembly route · steps 17–25/);
+    assert.deepEqual(numberedSteps(selectedMap()),[17,18,19,20,21,22,23,24,25,26,27,28,29]);assert.match(selectedMap(),/QA\/QC-006 - Final Inspection/);assert.match(selectedMap(),/class="ff-num">29</);assert.match(html(),/Assembly route · steps 17–29/);assert.match(html(),/Current step 26 · Assembly route/);
     assertInlineBranch(routeHtml());assertInlineMap(mapHtml(selectedMap()));assertNoDetachedBranch();assert.match(phaseNode('decision'),/\bnot_recorded\b/);assert.doesNotMatch(branchHtml(),/aria-current="step"|ff-branch-chosen|class="[^"]*\bcompleted\b/,'a later current-catalog baseline does not invent a testing decision or approvals');
     record=detailAt(22);await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Assembly route · steps 17–24/);assert.match(html(),/QA\/QC-005 - Final Inspection/);assert.doesNotMatch(selectedMap(),/QA\/QC-006/);assert.equal(chartCount(html()),0,'a retained unphased traveler keeps its saved linear test route');assert.deepEqual(numberedSteps(selectedMap()),[17,18,19,20,21,22,23,24]);
   });
-  await catalogContract('new step 23 records a real fixed Floor handoff without shipment fields',async()=>{
-    record=detailAt(23,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assert.equal(elements.get('flowHandoffLocation').value,'floor');assert.doesNotMatch(html(),/name="carrier"|name="shipment_reference"|name="destination"/);
+  await catalogContract('board filters distinguish current testing phases and retain separate legacy numbering',async()=>{
+    const phases=[['NDT-WORK',17,18,'NDT'],['NDT-REVIEW',18,19,'QA/QC-004'],['NDT-FLOOR',19,20,'Return to Floor'],['PRESSURE-WORK',17,21,'Pressure Testing'],['PRESSURE-REVIEW',18,22,'QA/QC-005'],['PRESSURE-FLOOR',19,23,'Return to Floor'],['CURRENT-PAINT',20,24,'Release to Sandblast and Paint']];
+    const rows=phases.map(([item_id,current_step,current_display_step,current_title])=>({item_id,catalog_version:'CLM-25-v1',route:'assembly',status:'active',current_step,current_display_step,current_title,project_id:'P1',subproject_id:'SUB1',open_exceptions:0,blockers:[],production_process:null})),before=posts().length;
+    rows.push({...rows[0],item_id:'LEGACY-FLOOR',catalog_version:'CLM-24-v6',current_step:19,current_display_step:19,current_title:'Legacy Floor'}, {...rows[0],item_id:'LEGACY-SHIPMENT',catalog_version:'CLM-24-v6',current_step:24,current_display_step:24,current_title:'Legacy shipment'}, {...rows[0],item_id:'CURRENT-SPOOL-FLOOR',route:'spool',current_step:16,current_display_step:16,current_title:'Return to Floor'}, {...rows[0],item_id:'LEGACY-SPOOL-FLOOR',route:'spool',catalog_version:'CLM-24-v6',current_step:16,current_display_step:16,current_title:'Return to Floor'});
+    readHook=url=>url==='/api/flow/items'?{items:structuredClone(rows)}:undefined;
+    try{
+      await context.FabFlow.open({project:'',resetFilters:true});assert.match(html(),/11 matching records/);assert.match(html(),/<strong>24 · Legacy shipment<\/strong>/);assert.match(html(),/<strong>19 · Legacy Floor<\/strong>/);
+      assert.match(elementHtml(mapHtml(),/<li\b[^>]*\bdata-flow-chart-step="24"[^>]*>/),/1 record at this step/,'the current Paint count excludes the retained shipment');
+      assert.match(elementHtml(mapHtml(),/<li\b[^>]*\bdata-flow-chart-step="16"[^>]*>/),/2 records at this step/,'the unchanged spool steps count both catalogs');
+      for(const [itemId,_storedStep,displayStep,title] of phases){
+        await click('filter-step',String(displayStep));assert.match(html(),new RegExp('Showing step '+displayStep+' · '));assert.match(html(),/1 matching records/);
+        const table=elementHtml(html(),/<table\b[^>]*\bclass="ff-table"[^>]*>/);
+        assert.match(table,new RegExp('data-flow-id="'+itemId+'"'));assert.ok(table.includes('<strong>'+displayStep+' · '+title+'</strong>'),'the row shows its displayed current phase');assert.doesNotMatch(table,/data-flow-id="LEGACY-(?:FLOOR|SHIPMENT)"/,'retained steps must not be mistaken for current catalog steps with the same number');
+        for(const [otherId] of phases)if(otherId!==itemId)assert.doesNotMatch(table,new RegExp('data-flow-id="'+otherId+'"'),'a shared stored step must not combine different displayed testing phases');
+      }
+      await click('filter-step','16');assert.match(html(),/2 matching records/);assert.match(html(),/data-flow-id="CURRENT-SPOOL-FLOOR"/);assert.match(html(),/data-flow-id="LEGACY-SPOOL-FLOOR"/);
+      assert.equal(posts().length,before,'display filters never submit traveler changes');
+    }finally{readHook=null;}
+  });
+  await catalogContract('displayed step 27 keeps the stored step 23 fixed Floor handoff and payload',async()=>{
+    record=detailAt(23,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Current step 27 · Assembly route/);assert.equal(elements.get('flowHandoffLocation').value,'floor');assert.doesNotMatch(html(),/name="carrier"|name="shipment_reference"|name="destination"/);
     const values={...currentChecks(),scanned_item_id:'ITM-001',sender_badge:'SHOP1',receiver_badge:'SHOP2',location_id:'floor',operational_status:'queued'},before=posts().length;
     await submitStep({...values,location_id:'welding'});assert.equal(posts().length,before);assert.match(elements.get('flowStepError').textContent,/destination required by this step/);
     await submitStep({...values,testing_decision:'NO',test_result:'PASS',carrier:'Ignored carrier'});assert.equal(posts().length,before+1);
     assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,confirmations:['s23_1'],notes:'',scanned_item_id:'ITM-001',sender_badge:'SHOP1',receiver_badge:'SHOP2',location_id:'floor',operational_status:'queued',expected_transfer_version:4});
     record=detailAt(23);await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Release to Ready to Ship/);assert.equal(elements.get('flowHandoffLocation').value,'current','the retained old step 23 is not constrained to the newly inserted Floor step');
   });
-  await catalogContract('new step 24 uses the required Ready to Ship handoff and reference',async()=>{
-    record=detailAt(24,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assert.equal(elements.get('flowHandoffLocation').value,'ready_to_ship');assert.doesNotMatch(html(),/name="carrier"|name="shipment_reference"|name="destination"/);
+  await catalogContract('displayed step 28 keeps the stored step 24 Ready to Ship handoff and reference',async()=>{
+    record=detailAt(24,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Current step 28 · Assembly route/);assert.equal(elements.get('flowHandoffLocation').value,'ready_to_ship');assert.doesNotMatch(html(),/name="carrier"|name="shipment_reference"|name="destination"/);
     const values={...currentChecks(),scanned_item_id:'ITM-001',sender_badge:'SHOP1',receiver_badge:'SHOP2',location_id:'ready_to_ship',operational_status:'queued',reference:'RELEASE-024'},before=posts().length;
     await submitStep({...values,location_id:'floor'});assert.equal(posts().length,before);assert.match(elements.get('flowStepError').textContent,/destination required by this step/);
     await submitStep({...values,reference:''});assert.equal(posts().length,before);assert.match(elements.get('flowStepError').textContent,/required record or inspection reference/);
     await submitStep(values);assert.equal(posts().length,before+1);assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,confirmations:['s24_1'],notes:'',scanned_item_id:'ITM-001',sender_badge:'SHOP1',receiver_badge:'SHOP2',location_id:'ready_to_ship',operational_status:'queued',expected_transfer_version:4,reference:'RELEASE-024'});
   });
-  await catalogContract('new step 25 and retained step 24 each record shipment against their own traveler',async()=>{
+  await catalogContract('displayed step 29 and retained step 24 keep their saved shipment payloads',async()=>{
     for(const [number,source] of [[25,modernCatalog],[24,catalog]]){
       record=detailAt(number,{},source);if(number===24){delete record.flow.shipment_step;delete record.flow.catalog_version;delete record.flow.current.is_shipment;}
-      await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Record shipment/);assert.match(html(),/name="carrier"/);assert.doesNotMatch(html(),/id="flowHandoffReceiver"/);
+      await context.FabFlow.open({item:'ITM-001'});assert.match(html(),new RegExp('Current step '+(source===modernCatalog?29:24)+' · Assembly route'));assert.match(html(),/Record shipment/);assert.match(html(),/name="carrier"/);assert.doesNotMatch(html(),/id="flowHandoffReceiver"/);
       const before=posts().length;await submitStep({...currentChecks(),scanned_item_id:'ITM-001'});assert.equal(posts().length,before);assert.match(elements.get('flowStepError').textContent,/carrier, shipping reference, and destination/);
       await submitStep({...currentChecks(),scanned_item_id:'ITM-001',carrier:'Exact carrier',shipment_reference:'BOL-'+number,destination:'Customer yard'});
       assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,confirmations:['s'+number+'_1'],notes:'',scanned_item_id:'ITM-001',carrier:'Exact carrier',shipment_reference:'BOL-'+number,destination:'Customer yard'});
     }
   });
   await catalogContract('new pressure reports go to QA/QC-005 without changing saved testing action fields',async()=>{
-    record=testingAt('pressure_test','complete',{},modernCatalog);context.me={role:'pressure_testing_technician',badge:'PRESS1'};await context.FabFlow.open({item:'ITM-001'});assert.equal(elements.get('flowHandoffLocation').value,'qa_pressure_results');chooseTesting('test_result','PASS');
+    record=testingAt('pressure_test','complete',{},modernCatalog);context.me={role:'pressure_testing_technician',badge:'PRESS1'};await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Current step 21 · Assembly route/);assert.equal(record.flow.current_step,17);assert.equal(elements.get('flowHandoffLocation').value,'qa_pressure_results');chooseTesting('test_result','PASS');
     const values={...currentChecks(),test_result:'PASS',scanned_item_id:'ITM-001',reference:'PRESSURE-NEW-REPORT',sender_badge:'PRESS1',receiver_badge:'QA1',location_id:'qa_pressure_results',operational_status:'queued'},before=posts().length;
     await submitStep({...values,location_id:'qa_test_results'});assert.equal(posts().length,before);assert.match(elements.get('flowStepError').textContent,/destination required by this step/);
     await submitStep(values);const body=JSON.parse(posts().at(-1).body);assert.equal(body.location_id,'qa_pressure_results');assert.equal(body.testing_phase,'pressure_test');assert.equal(body.testing_action,'complete');assert.equal(body.testing_attempt,2);assert.equal(body.test_result,'PASS');assert.equal(body.catalog_version,undefined);
@@ -514,7 +536,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   await catalogContract('new assembly starts require the decision or a documented later baseline, never an unrecorded test phase',async()=>{
     context.me={role:'admin',badge:'ADMIN'};record=detailAt(17,{},modernCatalog);record.flow=null;record.suggested_route='assembly';await context.FabFlow.open({item:'ITM-001'});assertInlineMap();assertNoDetachedBranch();assert.equal(chartCount(html()),1,'an unstarted record shows the testing decision only inside its full fabrication map');await click('start');
     const options=elements.get('flowDialogFields').innerHTML.match(/<select[^>]+name="start_step"[^>]*>([\s\S]*?)<\/select>/)?.[1]||'';
-    assert.match(options,/value="17"/);assert.match(options,/value="20"/);assert.match(options,/value="25"/);assert.doesNotMatch(options,/value="18"|value="19"/);
+    assert.match(options,/value="17"/);assert.match(options,/value="20"[^>]*>24 · Release to Sandblast and Paint/);assert.match(options,/value="25"[^>]*>29 · Ship to Customer/);assert.doesNotMatch(options,/value="18"|value="19"/);
     const before=posts().length;for(const step of [18,19]){await submitDialog({route:'assembly',expected_children:'1',start_step:String(step)});assert.equal(posts().length,before);assert.match(elements.get('flowDialogError').textContent,/Start at Step 17/);}
     await submitDialog({route:'assembly',expected_children:'1',start_step:'20'});assert.equal(posts().length,before);assert.match(elements.get('flowDialogError').textContent,/existing-work reference/);
     await submitDialog({route:'assembly',expected_children:'1',start_step:'20',baseline_reference:'APPROVED-EXISTING-20',baseline_reason:'Documented fabrication and tests predate this traveler',notes:'Existing work'});
@@ -528,8 +550,9 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
   assert.match(index,/params\.has\('flow'\)[\s\S]*FabFlow\.open/);assert.match(index,/id="itemFlowBtn"/);assert.match(index,/id="navFlow"/);assert.match(index,/FabFlow\.cancelPending/);
   assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));
-  console.log('PASS: neutral station labels, colored physical spool numbers, escaped unknown-station notices, retained blocked Ready To Ship, new 25-step map and saved traveler maps, entity-specific routes, filters, QR/manual IDs, location/handoff payloads, catalog checks and roles, QA failure/reinspection, hierarchy links, child verification, shipment/delivery, documented baselines, clocks, duplicate writes, conflicts, focused record reads, cancellation, bounded loading, navigation, required YES/NO testing, separate technician and QA results, fixed failure custody, mandatory rework/retest phases, Floor handoffs, pressure testing permissions, Not required bypasses, original testing custodian, inactive testing history, controlled restarts, cycle/attempt history and stale testing decisions.');
+  console.log('PASS: neutral station labels, colored physical spool numbers, escaped unknown-station notices, retained blocked Ready To Ship, current 29-step map and retained traveler maps, entity-specific routes, filters, QR/manual IDs, location/handoff payloads, catalog checks and roles, QA failure/reinspection, hierarchy links, child verification, shipment/delivery, documented baselines, clocks, duplicate writes, conflicts, focused record reads, cancellation, bounded loading, navigation, required YES/NO testing, separate technician and QA results, fixed failure custody, mandatory rework/retest phases, Floor handoffs, pressure testing permissions, Not required bypasses, original testing custodian, inactive testing history, controlled restarts, cycle/attempt history and stale testing decisions.');
   console.log('PASS: '+catalogContracts.length+' current/retained traveler contracts: '+catalogContracts.join('; ')+'.');
 })().catch(error=>{console.error(error);process.exitCode=1});
+
 
 

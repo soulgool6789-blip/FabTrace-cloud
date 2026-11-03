@@ -207,6 +207,27 @@ def catalog_version(plan):
     return value
 
 
+def chart_step_number(number, version, testing_phase=None):
+    """Display the expanded chart without changing saved traveler identities."""
+    if version != 'CLM-25-v1' or type(number) is not int:
+        return number
+    phases = {
+        'decision': (17, 17),
+        'ndt': (17, 18), 'ndt_rework': (17, 18),
+        'ndt_qa': (18, 19),
+        'floor_before_pressure': (19, 20),
+        'pressure_test': (17, 21), 'pressure_rework': (17, 21),
+        'pressure_qa': (18, 22),
+        'floor_before_paint': (19, 23),
+    }
+    phase = phases.get(testing_phase)
+    if phase is not None and number == phase[0]:
+        return phase[1]
+    if number in (18, 19):
+        return number + 1
+    return number + 4 if 20 <= number <= 25 else number
+
+
 def route_definition(plan):
     routes = ROUTE_BY_ID if catalog_version(plan) == VERSION else LEGACY_ROUTE_BY_ID
     return routes[plan.route]
@@ -819,11 +840,14 @@ def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cach
     from spool_presentation import item_presentation
     plan = plan if plan is not None else read_get(s, FlowPlan, item.id)
     project_id, subproject_id = _project(s, item)
+    version = catalog_version(plan)
+    current = current_step_definition(s, plan) if plan and plan.current_step else None
     return {
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
-        'catalog_version': catalog_version(plan),
-        'current_title': current_step_definition(s, plan)['title'] if plan and plan.current_step else '',
+        'catalog_version': version,
+        'current_display_step': chart_step_number(plan.current_step, version, current.get('testing_phase')) if current else None,
+        'current_title': current['title'] if current else '',
         **(presentation if presentation is not None else item_presentation(
             s, item, plan=plan, stations=stations, stage_cache=stage_cache)),
         'step_entered_at': _utc(plan.step_entered_at).isoformat() if plan and plan.step_entered_at else None,
@@ -898,6 +922,7 @@ def detail(s, item, user):
     if recorded_stages & {'qa_pressure_results', 'qa_final'}:
         stage_versions.add(VERSION)
     from flow_testing import summary as testing_summary
+    current = current_step_definition(s, plan)
     return {
         'project_id': project_id, 'subproject_id': subproject_id,
         'stage_catalog': stages_for_versions(stage_versions),
@@ -913,9 +938,10 @@ def detail(s, item, user):
         'transfer': transfer_snapshot(s, item, user),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
         'flow': {**_dict(plan, PLAN_KEYS), 'catalog_version': catalog_version(plan),
+            'current_display_step': chart_step_number(plan.current_step, catalog_version(plan), current.get('testing_phase')) if current else None,
             'route_definition': route_definition(plan), 'ready_to_ship_step': ready_to_ship_step(plan),
             'shipment_step': shipment_step(plan), 'steps': _step_states(s, plan),
-            'current': current_step_definition(s, plan), 'testing': testing_summary(s, plan),
+            'current': current, 'testing': testing_summary(s, plan),
             'blockers': _step_errors(s, item, plan)} if plan else None,
         'production_process': process,
         'components': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in component_ids],
@@ -1393,5 +1419,6 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
         {'before': before, 'after': after})
     _commit(s)
     return detail(s, item, u)
+
 
 
