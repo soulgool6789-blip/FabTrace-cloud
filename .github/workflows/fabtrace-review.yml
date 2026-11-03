@@ -7,16 +7,24 @@ permissions:
 jobs:
   source-review:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Create exact source snapshot for isolated validation
-        run: git archive --format=zip --output=fabtrace-source.zip HEAD
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Package missing local validation dependency
+        run: |
+          mkdir -p review-dependencies
+          python -m pip download --no-deps 'pwdlib==0.3.0' -d review-dependencies
+          git archive --format=zip --output=fabtrace-source.zip HEAD
       - uses: actions/upload-artifact@v4
         with:
           name: fabtrace-review-source
-          path: fabtrace-source.zip
+          path: |
+            fabtrace-source.zip
+            review-dependencies/
           retention-days: 2
           if-no-files-found: error
