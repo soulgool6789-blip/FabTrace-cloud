@@ -22,6 +22,10 @@ The two testing positions can use ordinary badge handoffs, submit evidence assig
 
 Printed **employee badges** show the current employee name, current position, and permanent badge ID, fetched when the print preview opens. The QR keeps its existing identity link and does not authenticate the employee. Item and spool QR labels continue to omit employee-assignment captions. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) and [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for assignment and retained-position details.
 
+## Bulk employee badge sheets
+
+Release `2026.11.03-employee-badge-sheets.1` adds **Print employee badge sheets** in **Employees** and **Admin controls → Employee accounts**. Administrators can print all active employees together or select individual reprints. The three-column Letter sheets include cut lines, current names, current positions, permanent badge IDs and existing QR links, spanning as many pages as needed without a 100-badge batch cap. Printing waits until every QR is loaded. Inactive and removed employees are excluded; changed or unavailable accounts must be refreshed before retrying. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for print settings.
+
 ## Employee names on printed badges
 
 Release `2026.11.02-employee-badge-name.1` prints the employee’s current name prominently above their badge ID. Open **Employees → Print employee QR badge**. Printing reads the current active employee record before preparing the badge. The employee badge QR keeps its existing identity link; item/spool labels continue to omit employee-assignment captions.

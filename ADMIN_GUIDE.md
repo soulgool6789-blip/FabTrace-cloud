@@ -73,6 +73,15 @@ This action is available for released and blocked items. It creates an **Adminis
 
 The correction changes custody/location/work status. A selected operational status such as **Paused** does not independently pause the process timer or record an inspection.
 
+## Print employee badges in bulk
+
+1. Sign in as an **Administrator** and open **Employees → Print employee badge sheets**, or select **Print employee badge sheets** under **Admin controls → Employee accounts**.
+2. All active employees are selected initially. Use **Select all active** for the complete roster, or **Clear selection** and check individuals for reprints. Search by name, position or badge ID; selections outside the search remain selected.
+3. Choose **Print N badges**. The print window refreshes the selected employee records and prepares a three-column sheet with cut lines, continuing across as many pages as needed. The complete roster is supported without a 100-badge batch limit.
+4. Wait until every employee QR is ready, then choose **Print / Save as PDF**. Use **Letter** paper, **100% / Actual size**, and turn off browser headers and footers.
+
+Each badge shows the current name, current position, permanent badge ID and existing employee QR link. Names and badge IDs wrap rather than being clipped. Inactive and removed employees are excluded. A selected employee who is no longer available, incomplete identity details or a failed QR image blocks the job; refresh employees and retry. Allow pop-ups if the print window is blocked. The existing individual-badge print buttons remain available.
+
 ## Manage employee accounts
 
 Open **Admin controls → Employee accounts**. Search by name, badge or role, then choose **Account controls**.
