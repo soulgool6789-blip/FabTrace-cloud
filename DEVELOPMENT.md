@@ -2,7 +2,15 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
-## Current application revision: simpler P.O. workspace
+## Current application revision: focused fabrication order setup
+
+Release `2026.11.03-shop-setup.1` restores the earlier focused entry sequence: **P.O. number → GPN & assemblies → Spools & welds → Save P.O.** Assembly identity/quantity and spool entry are separate screens. The final spool screen shows calculated totals and saves through the existing atomic API. There is no separate review-only stage. Add/edit forms retain their opening version, unsaved entries, explicit correction reasons and server editability restrictions.
+
+The saved P.O. uses a flat assembly register with separate GPN and Assembly Number fields. Selecting an exact assembly definition opens its spool requirements, documents and physical copies. Selection is preserved by saved ID through navigation; it is never inferred from a business label or table position. Independent GPN management, document tools, QR labels, production records/progress, spool-record Excel, Job Packets, removal/restore and the spool color key remain available. Optional files are saved separately after the order exists.
+
+This is a presentation update to the existing records and APIs. It does not migrate or recreate production data, reverse the separate GPN/Assembly model, grant receiving/QA acceptance, or start a traveler. Shop-flow guidance follows the current recorded receiving, fabrication, testing, paint/final-QA and shipping route. The exact physical item's existing Process flow and material records remain authoritative for its current instructions and blockers.
+
+## Previous application revision: simpler P.O. workspace
 
 Release `2026.11.03-po-workspace.1` simplifies setup into **P.O. number → Assemblies & spools → Review & save**. Each assembly card contains its separate GPN, Assembly Number, quantity and spool rows. The review is read-only; the existing versioned API saves the new order atomically. Add/edit operations on an existing order retain their exact record scope, correction reasons and stale-version guards. Drawings and BOMs remain separate optional saves after the order is saved.
 

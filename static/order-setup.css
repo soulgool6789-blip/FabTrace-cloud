@@ -141,48 +141,60 @@
   #orderSetupPage .os-copy-flow li{padding:9px}
 }
 
-/* Saved GPN records contain their exact linked assembly definitions. */
-#orderSetupPage .os-gpn-group{margin:24px 0;padding:20px;border:1px solid var(--os-line);border-radius:14px;background:#f4f8fb;min-width:0}
-#orderSetupPage .os-gpn-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:14px}
-#orderSetupPage .os-gpn-heading>div{min-width:0}
-#orderSetupPage .os-gpn-heading h2{margin:4px 0 0;font-size:23px;color:#173e59}
-#orderSetupPage .os-gpn-heading p{margin:5px 0 0}
-#orderSetupPage .os-gpn-heading .actions{align-items:flex-start;justify-content:flex-end;flex-wrap:wrap}
-#orderSetupPage .os-assembly-list>.os-saved-assembly:last-child{margin-bottom:0}
-#orderSetupPage .os-assembly-summary-note{display:block;margin-top:6px;font-size:12px;color:var(--os-muted);line-height:1.5}
+/* Flat assembly register and the selected assembly's shop records. */
+#orderSetupPage .os-two-steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+#orderSetupPage .os-shop-tools{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px}
+#orderSetupPage .os-shop-tools button{min-height:44px}
+#orderSetupPage .os-register{margin:24px 0 16px}
+#orderSetupPage .os-register h2{font-size:21px;margin-bottom:10px}
+#orderSetupPage .os-assembly-register th:first-child,#orderSetupPage .os-assembly-register td:first-child{width:24%;text-align:left}
+#orderSetupPage .os-assembly-register th:nth-child(2),#orderSetupPage .os-assembly-register td:nth-child(2){width:26%;text-align:left}
+#orderSetupPage .os-assembly-register th:nth-child(3),#orderSetupPage .os-assembly-register td:nth-child(3){width:13%}
+#orderSetupPage .os-assembly-register th:nth-child(4),#orderSetupPage .os-assembly-register td:nth-child(4){width:13%}
+#orderSetupPage .os-assembly-register th:last-child,#orderSetupPage .os-assembly-register td:last-child{width:24%;text-align:right}
+#orderSetupPage .os-assembly-register button{min-height:42px;white-space:normal;line-height:1.4;font-size:13px}
+#orderSetupPage .os-assembly-register .os-row-selected{background:#eef7fc}
+#orderSetupPage .os-assembly-register button[aria-pressed="true"]{background:#e0eff8;border-color:#77afcd;color:#164d70}
+#orderSetupPage .os-select-prompt{padding:18px 20px;border:1px dashed #b8ccd9;border-radius:8px;color:var(--os-muted);background:#fbfcfd;font-size:14px}
+#orderSetupPage .os-select-prompt p{margin:0}
+#orderSetupPage .os-selected-panel{margin:22px 0;padding:24px;border:1px solid #c7d9e5;border-radius:12px;background:white;min-width:0}
+#orderSetupPage .os-selected-panel:focus-visible{outline:3px solid #9ed5ed;outline-offset:3px}
 #orderSetupPage .os-assembly-toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
 #orderSetupPage .os-assembly-toolbar>div{min-width:0}
+#orderSetupPage .os-assembly-toolbar h2{margin:5px 0 0;font-size:22px}
 #orderSetupPage .os-assembly-toolbar .actions{flex-wrap:wrap;justify-content:flex-end}
-#orderSetupPage .os-empty-group{padding:20px;border:1px dashed #bdcfdd;border-radius:8px;background:white;color:var(--os-muted);font-size:14px}
-#orderSetupPage .os-unassigned-assembly+.os-unassigned-assembly{margin-top:22px}
-#orderSetupPage .os-more-actions{min-width:70px;font-size:13px}
-#orderSetupPage .os-more-actions>summary{cursor:pointer;min-height:42px;padding:11px 13px;border:1px solid #c8d6e1;border-radius:8px;background:white;color:#43677f}
-#orderSetupPage .os-more-actions>div{margin-top:8px}
+#orderSetupPage .os-quantity-explanation{margin-top:12px}
+#orderSetupPage .os-gpn-register th:first-child,#orderSetupPage .os-gpn-register td:first-child{width:42%;text-align:left}
+#orderSetupPage .os-gpn-register th:nth-child(2),#orderSetupPage .os-gpn-register td:nth-child(2){width:14%}
+#orderSetupPage .os-gpn-register .actions{justify-content:flex-end;gap:7px}
+#orderSetupPage .os-gpn-register button{min-height:40px;font-size:12px;white-space:normal}
 #orderSetupPage .os-copy-flow>summary{cursor:pointer;color:#2a6486;font-size:12px;line-height:1.5;min-height:40px;padding:10px 0}
-#orderSetupPage .os-copy-flow>summary:focus-visible,#orderSetupPage .os-secondary>summary:focus-visible,#orderSetupPage .os-more-actions>summary:focus-visible{outline:3px solid #9ed5ed;outline-offset:3px;border-radius:4px}
+#orderSetupPage .os-copy-flow>summary:focus-visible,#orderSetupPage .os-secondary>summary:focus-visible{outline:3px solid #9ed5ed;outline-offset:3px;border-radius:4px}
 #orderSetupPage .os-copy-flow[open]>summary{margin-bottom:7px}
 #orderSetupPage .os-lock-note{padding:10px 12px;border-left:3px solid #c3d2de;background:#f4f7f9}
-
-/* Combined setup form, final review and optional resource shortcuts. */
-#orderSetupPage .os-combined-assembly{border-top:3px solid #8db9d3}
-#orderSetupPage .os-spool-entry{margin-top:24px;padding-top:20px;border-top:1px solid var(--os-line)}
-#orderSetupPage .os-spool-intro h4{font-size:16px;line-height:1.4;margin:0;color:#294e67}
 #orderSetupPage .os-spool-intro p{font-size:13px;color:var(--os-muted);max-width:760px}
-#orderSetupPage .os-review-heading{margin-bottom:24px}
-#orderSetupPage .os-review-heading p{font-size:14px;color:var(--os-muted)}
-#orderSetupPage .os-review-identity{display:grid;grid-template-columns:1fr 1fr minmax(90px,.4fr);gap:20px}
-#orderSetupPage .os-review-identity>div{min-width:0}
-#orderSetupPage .os-review-identity strong{display:block;margin-top:6px;font-size:19px;line-height:1.4;overflow-wrap:anywhere}
-#orderSetupPage .os-resources{margin:28px 0;padding:22px;border:1px solid var(--os-line);border-radius:14px;background:white}
-#orderSetupPage .os-section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:15px;margin-bottom:16px}
-#orderSetupPage .os-section-heading h2{font-size:20px;margin:0}
-#orderSetupPage .os-resource-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
-#orderSetupPage .os-resource-grid>div{min-width:0;border:1px solid #dbe6ee;border-radius:10px;padding:14px;background:#f8fbfd}
-#orderSetupPage .os-resource-grid button{width:100%;min-height:44px;font-size:14px;white-space:normal;text-align:left;line-height:1.4;background:white;border-color:#c7d9e6;color:#245d80}
-#orderSetupPage .os-resource-grid p{font-size:12px;color:var(--os-muted);margin:9px 0 0;line-height:1.5}
+#orderSetupPage .os-order-management{margin-top:20px;padding-top:18px;border-top:1px solid var(--os-line)}
+#orderSetupPage .os-order-management .actions{margin-top:12px}
 #orderSetupPage .os-colors .fst-legend{margin-top:16px}
-@media(max-width:800px){#orderSetupPage .os-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#orderSetupPage .os-gpn-heading,#orderSetupPage .os-assembly-toolbar{flex-direction:column;gap:12px}#orderSetupPage .os-gpn-heading .actions,#orderSetupPage .os-assembly-toolbar .actions{justify-content:flex-start}}
-@media(max-width:540px){#orderSetupPage .os-gpn-group{padding:13px;margin:18px 0}#orderSetupPage .os-gpn-heading h2{font-size:21px}#orderSetupPage .os-assembly-summary-note{font-size:11px}#orderSetupPage .os-resources{padding:15px}#orderSetupPage .os-resource-grid{grid-template-columns:1fr;gap:10px}#orderSetupPage .os-resource-grid>div{padding:12px}#orderSetupPage .os-review-identity{grid-template-columns:1fr 1fr;gap:15px}#orderSetupPage .os-review-identity strong{font-size:16px}#orderSetupPage .os-spool-entry{margin-top:20px;padding-top:17px}}
+@media(max-width:800px){#orderSetupPage .os-assembly-toolbar{flex-direction:column;gap:12px}#orderSetupPage .os-assembly-toolbar .actions{justify-content:flex-start}}
+@media(max-width:600px){
+  #orderSetupPage .os-selected-panel{padding:16px}
+  #orderSetupPage .os-assembly-register,#orderSetupPage .os-assembly-register tbody{display:block;width:100%;min-width:0}
+  #orderSetupPage .os-assembly-register thead{display:none}
+  #orderSetupPage .os-assembly-register tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:1px solid var(--os-line);padding:8px}
+  #orderSetupPage .os-assembly-register tr:last-child{border-bottom:0}
+  #orderSetupPage .os-assembly-register td,#orderSetupPage .os-assembly-register td:first-child,#orderSetupPage .os-assembly-register td:nth-child(2),#orderSetupPage .os-assembly-register td:nth-child(3),#orderSetupPage .os-assembly-register td:nth-child(4),#orderSetupPage .os-assembly-register td:last-child{display:block;width:auto;text-align:left;border-top:0;padding:8px;min-width:0}
+  #orderSetupPage .os-assembly-register td[data-label]::before{content:attr(data-label);display:block;font-size:10px;font-weight:400;color:var(--os-muted);margin-bottom:5px}
+  #orderSetupPage .os-assembly-register td:last-child{grid-column:1/-1}
+  #orderSetupPage .os-assembly-register button{width:100%}
+  #orderSetupPage .os-gpn-register,#orderSetupPage .os-gpn-register tbody{display:block;width:100%}
+  #orderSetupPage .os-gpn-register thead{display:none}
+  #orderSetupPage .os-gpn-register tr{display:grid;grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid var(--os-line)}
+  #orderSetupPage .os-gpn-register td,#orderSetupPage .os-gpn-register td:first-child,#orderSetupPage .os-gpn-register td:nth-child(2){display:block;width:auto;text-align:left;border-top:0;min-width:0}
+  #orderSetupPage .os-gpn-register td:nth-child(2)::after{content:' assemblies';font-size:11px;color:var(--os-muted)}
+  #orderSetupPage .os-gpn-register td:last-child{grid-column:1/-1;padding-top:0}
+  #orderSetupPage .os-gpn-register .actions{justify-content:flex-start}
+}
 
 /* Saved removals stay distinct from discarding an unsaved form row. */
 #orderSetupPage .os-copy-heading-row{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px;width:100%;min-width:0}
