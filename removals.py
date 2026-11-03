@@ -15,24 +15,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from read_projection import read_cached, read_get, projection_get, PROJECTION_MISSING
+from read_projection import (read_cached, read_get, projection_enabled,
+                             projection_get, PROJECTION_MISSING)
 
 from main import Audit, Base, Employee, Item, audit, auth, db, permit, utcnow
 from tracking import Project, SpoolPlan, new_id
 from flow import ComponentLink, FlowPlan
-from orders import OrderAssembly, OrderGpn, PurchaseOrder
+from orders import (AssemblyGpnLink, GooglePartNumber, OrderAssembly, OrderGpn,
+                    PurchaseOrder, business_gpn)
 
 router = APIRouter(prefix='/api/removals', tags=['removed records'])
-Kind = Literal['order', 'gpn', 'item']
+Kind = Literal['order', 'gpn_record', 'gpn', 'spool_line', 'item']
 Action = Literal['remove', 'restore']
-KINDS = ('order', 'gpn', 'item')
+KINDS = ('order', 'gpn_record', 'gpn', 'spool_line', 'item')
 
 
 class RecordRemoval(Base):
     __tablename__ = 'record_removals'
     __table_args__ = (
-        CheckConstraint("kind IN ('order','gpn','item')", name='ck_record_removal_kind'),
-        CheckConstraint("root_kind IN ('order','gpn','item')", name='ck_record_removal_root_kind'),
+        CheckConstraint("kind IN ('order','gpn_record','gpn','spool_line','item')", name='ck_record_removal_kind'),
+        CheckConstraint("root_kind IN ('order','gpn_record','gpn','spool_line','item')", name='ck_record_removal_root_kind'),
         CheckConstraint('version >= 1', name='ck_record_removal_version'),
     )
     kind = Column(String(12), primary_key=True)
@@ -87,11 +89,32 @@ def _state(s, kind, record_id):
 
 def removal_summary(s, kind, record_id):
     state = _state(s, kind, record_id)
+    return _summary(state)
+
+
+def _summary(state):
     if state is None:
         return None
     return {'removed': state.removed, 'version': state.version, 'reason': state.reason,
             'at': _stamp(state.changed_at), 'actor': state.changed_by,
             'root_kind': state.root_kind, 'root_id': state.root_id, 'batch_id': state.batch_id}
+
+
+def removal_summaries(s, kind, identifiers):
+    """One bounded batch for a displayed register, including explicit misses."""
+    identities = list(dict.fromkeys(identifiers))
+    if projection_enabled(s):
+        from projection_batches import _removals
+        _removals(s, kind, identities)
+        return {identity: removal_summary(s, kind, identity) for identity in identities}
+    result = dict.fromkeys(identities)
+    for start in range(0, len(identities), 400):
+        for state in s.scalars(select(RecordRemoval).where(
+                RecordRemoval.kind == kind,
+                RecordRemoval.record_id.in_(identities[start:start + 400]))
+                .execution_options(populate_existing=True)):
+            result[state.record_id] = _summary(state)
+    return result
 
 
 # Keep these predicates correlated with the caller's actual identity column.
@@ -110,7 +133,20 @@ def project_not_removed(column):
 
 
 def gpn_not_removed(column=OrderGpn.id):
-    return _not_removed('gpn', column)
+    parent_removed = select(AssemblyGpnLink.assembly_definition_id).join(
+        RecordRemoval, (RecordRemoval.kind == 'gpn_record') &
+        (RecordRemoval.record_id == AssemblyGpnLink.gpn_record_id) &
+        RecordRemoval.removed.is_(True)).where(
+            AssemblyGpnLink.assembly_definition_id == column).exists()
+    return _not_removed('gpn', column) & ~parent_removed
+
+
+def gpn_record_not_removed(column=GooglePartNumber.id):
+    return _not_removed('gpn_record', column)
+
+
+def spool_line_not_removed(column):
+    return _not_removed('spool_line', column)
 
 
 def item_is_removed(s, item_id):
@@ -125,6 +161,19 @@ def project_is_removed(s, project_id):
 
 def gpn_is_removed(s, gpn_id):
     state = _state(s, 'gpn', gpn_id)
+    if state and state.removed:
+        return True
+    link = read_get(s, AssemblyGpnLink, gpn_id)
+    return bool(link and gpn_record_is_removed(s, link.gpn_record_id))
+
+
+def gpn_record_is_removed(s, record_id):
+    state = _state(s, 'gpn_record', record_id)
+    return bool(state and state.removed)
+
+
+def spool_line_is_removed(s, record_id):
+    state = _state(s, 'spool_line', record_id)
     return bool(state and state.removed)
 
 
@@ -178,11 +227,23 @@ def require_active_project(s, project_id):
 
 
 def require_active_gpn(s, gpn_id):
-    if gpn_is_removed(s, gpn_id):
-        raise HTTPException(409, 'This GPN / Assembly has been removed. An administrator must restore it from Removed records before making changes.')
+    state = _state(s, 'gpn', gpn_id)
+    if state and state.removed:
+        raise HTTPException(409, 'This assembly record has been removed. An administrator must restore it from Removed records before making changes.')
+    link = read_get(s, AssemblyGpnLink, gpn_id)
+    if link:
+        require_active_gpn_record(s, link.gpn_record_id)
     group = read_get(s, OrderGpn, gpn_id)
     if group:
         require_active_project(s, group.project_id)
+
+
+def require_active_gpn_record(s, record_id):
+    if gpn_record_is_removed(s, record_id):
+        raise HTTPException(409, 'This GPN record has been removed. An administrator must restore it from Removed records before editing it or adding assemblies.')
+    record = read_get(s, GooglePartNumber, record_id)
+    if record:
+        require_active_project(s, record.project_id)
 
 
 @read_cached(lambda s, item_id: item_id)
@@ -202,8 +263,14 @@ def require_active_item(s, item_id):
     require_active_project(s, _project_id(s, item_id))
 
 
+def _record_model(kind):
+    from order_setup import OrderSpoolRequirement
+    return {'order': PurchaseOrder, 'gpn_record': GooglePartNumber,
+            'gpn': OrderGpn, 'spool_line': OrderSpoolRequirement, 'item': Item}[kind]
+
+
 def _record(s, kind, record_id):
-    model = {'order': PurchaseOrder, 'gpn': OrderGpn, 'item': Item}[kind]
+    model = _record_model(kind)
     row = read_get(s, model, record_id)
     if row is None:
         raise HTTPException(404, 'Record not found')
@@ -214,12 +281,21 @@ def _identity(s, kind, record_id):
     row = _record(s, kind, record_id)
     if kind == 'order':
         title, confirmation = 'P.O. ' + row.purchase_order, row.purchase_order
+    elif kind == 'gpn_record':
+        order = _record(s, 'order', row.project_id)
+        title, confirmation = 'GPN ' + row.gpn + ' · P.O. ' + order.purchase_order, row.gpn
     elif kind == 'gpn':
         if row.assembly_number:
-            title = 'Assembly Number ' + row.assembly_number + ' · GPN ' + row.gpn
-            confirmation = row.assembly_number + ' / ' + row.gpn
+            title = 'Assembly Number ' + row.assembly_number + ' · GPN ' + business_gpn(row)
+            confirmation = row.assembly_number + ' / ' + business_gpn(row)
         else:
-            title, confirmation = 'GPN / Assembly ' + row.gpn, row.gpn
+            title, confirmation = 'GPN / Assembly ' + business_gpn(row), business_gpn(row)
+    elif kind == 'spool_line':
+        group = _record(s, 'gpn', row.gpn_id)
+        order = _record(s, 'order', group.project_id)
+        title = ('Spool entry ' + row.spool_number + ' · Assembly ' +
+                 (group.assembly_number or business_gpn(group)) + ' · P.O. ' + order.purchase_order)
+        confirmation = row.spool_number
     else:
         title = row.kind + ' ' + row.id
         if row.google_part_number:
@@ -248,16 +324,26 @@ def _scope(s, kind, record_id):
     from order_setup import OrderAssemblyRequirement
 
     _record(s, kind, record_id)
-    orders, groups, items = set(), set(), set()
+    orders, gpn_records, groups, items = set(), set(), set(), set()
     if kind == 'order':
         orders.add(record_id)
+        gpn_records.update(s.scalars(select(GooglePartNumber.id).where(
+            GooglePartNumber.project_id == record_id)))
         groups.update(s.scalars(select(OrderGpn.id).where(OrderGpn.project_id == record_id)))
         # Plan/parent/mapping precedence avoids sweeping a different project's
         # item merely because an old free-text Item.project value is stale.
         items.update(item.id for item in s.scalars(select(Item)).all()
                      if _project_id(s, item.id) == record_id)
+    elif kind == 'gpn_record':
+        gpn_records.add(record_id)
+        groups.update(s.scalars(select(AssemblyGpnLink.assembly_definition_id).where(
+            AssemblyGpnLink.gpn_record_id == record_id)))
     elif kind == 'gpn':
         groups.add(record_id)
+    elif kind == 'spool_line':
+        # This removes only planned demand. Registered physical scope is
+        # immutable here and is checked separately before either direction.
+        return [('spool_line', record_id)]
     else:
         items.add(record_id)
     if groups:
@@ -271,7 +357,9 @@ def _scope(s, kind, record_id):
         active_siblings = {value for value in siblings if not item_is_removed(s, value)}
         if active_siblings.issubset(items) and read_get(s, OrderAssemblyRequirement, mapping.gpn_id) is None:
             groups.add(mapping.gpn_id)
-    return sorted([('order', value) for value in orders] + [('gpn', value) for value in groups] + [('item', value) for value in items])
+    return sorted([('order', value) for value in orders] +
+                  [('gpn_record', value) for value in gpn_records] +
+                  [('gpn', value) for value in groups] + [('item', value) for value in items])
 
 
 def _restore_scope(s, state):
@@ -284,40 +372,78 @@ def _restore_scope(s, state):
 
 
 def _counts(keys):
-    return {'orders': sum(kind == 'order' for kind, _ in keys),
-            'gpns': sum(kind == 'gpn' for kind, _ in keys),
-            'items': sum(kind == 'item' for kind, _ in keys)}
+    result = {'orders': sum(kind == 'order' for kind, _ in keys),
+              'gpns': sum(kind == 'gpn' for kind, _ in keys),
+              'items': sum(kind == 'item' for kind, _ in keys)}
+    for kind, key in (('gpn_record', 'gpn_records'), ('spool_line', 'spool_lines')):
+        count = sum(one == kind for one, _ in keys)
+        if count:
+            result[key] = count
+    return result
+
+
+def _record_project_id(s, kind, record_id):
+    if kind == 'order':
+        return record_id
+    if kind in ('gpn', 'gpn_record'):
+        return _record(s, kind, record_id).project_id
+    if kind == 'spool_line':
+        return _record(s, 'gpn', _record(s, kind, record_id).gpn_id).project_id
+    return _project_id(s, record_id)
 
 
 def _project_ids(s, keys):
     result = set()
     for kind, record_id in keys:
-        if kind == 'order':
-            result.add(record_id)
-        elif kind == 'gpn':
-            result.add(_record(s, kind, record_id).project_id)
-        else:
-            value = _project_id(s, record_id)
-            if value and read_get(s, PurchaseOrder, value):
-                result.add(value)
+        value = _record_project_id(s, kind, record_id)
+        if value and read_get(s, PurchaseOrder, value):
+            result.add(value)
     return result
 
 
-def _blockers(s, kind, record_id, action, state, scope):
+def _blockers(s, kind, record_id, action, state, scope, *, generated_copy_facts=None):
     from production import SpoolProcessEvent
     from parts import PartAllocation
     from order_spools import registered_spool, effective_children
     blockers, scope_set = [], set(scope)
+    generated_copy_facts = generated_copy_facts or {}
+    if kind == 'spool_line':
+        from order_setup import OrderSpoolRequirement
+        line = _record(s, kind, record_id)
+        if gpn_is_removed(s, line.gpn_id):
+            blockers.append('Restore the parent assembly and GPN record before changing this spool entry.')
+        if s.scalar(select(OrderAssembly.item_id).where(
+                OrderAssembly.gpn_id == line.gpn_id).limit(1)):
+            blockers.append('Physical assembly records already exist for this assembly, including retained removed copies. Its required spool scope must be preserved. Remove a physical copy or the containing assembly instead.')
+        siblings = s.scalars(select(OrderSpoolRequirement).where(
+            OrderSpoolRequirement.gpn_id == line.gpn_id,
+            OrderSpoolRequirement.id != line.id,
+            OrderSpoolRequirement.active.is_(True),
+            spool_line_not_removed(OrderSpoolRequirement.id))).all()
+        if action == 'remove':
+            if not line.active:
+                blockers.append('This spool entry is already outside the active assembly plan.')
+            if not siblings:
+                blockers.append('This is the last active spool entry. Remove the containing assembly to remove its whole planned scope.')
+        else:
+            if len(siblings) >= 200:
+                blockers.append('Restoring this spool entry would exceed the 200 active spool-entry limit per assembly. Remove another entry before restoring it.')
+            if sum(row.quantity_per_assembly for row in siblings) + line.quantity_per_assembly > 10000:
+                blockers.append('Restoring this spool entry would exceed the 10000-spool limit per assembly. Adjust the active quantities before restoring it.')
     if action == 'remove':
         if state and state.removed:
             return ['This record is already removed. Refresh Removed records to restore its original removal group.']
         for item_kind, item_id in scope:
             if item_kind == 'order':
                 continue
-            if item_kind == 'gpn':
-                project_id = _record(s, item_kind, item_id).project_id
+            if item_kind in ('gpn', 'gpn_record', 'spool_line'):
+                project_id = _record_project_id(s, item_kind, item_id)
                 if ('order', project_id) not in scope_set and project_is_removed(s, project_id):
-                    blockers.append('Restore the parent P.O. before removing this GPN / Assembly separately.')
+                    blockers.append('Restore the parent P.O. before removing this entry separately.')
+                if item_kind == 'gpn':
+                    parent = read_get(s, AssemblyGpnLink, item_id)
+                    if parent and ('gpn_record', parent.gpn_record_id) not in scope_set and gpn_record_is_removed(s, parent.gpn_record_id):
+                        blockers.append('Restore the parent GPN record before removing this assembly separately.')
                 continue
             for parent in sorted(_parents(s, item_id)):
                 if ('item', parent) not in scope_set:
@@ -330,6 +456,12 @@ def _blockers(s, kind, record_id, action, state, scope):
                         # can be removed/replaced without inventing an unlink
                         # or altering the saved demand. Keep its fixed parent
                         # for history and enforce capacity on restoration.
+                        continue
+                    if (registration and parent == registration.assembly_id
+                            and generated_copy_facts.get(item_id, {}).get('eligible')):
+                        # Setup creates planned weld placeholders before work.
+                        # A narrowly verified untouched copy may be archived
+                        # without changing its parent's required quantity.
                         continue
                     if registration:
                         blockers.append(f'{item_id} has planned work in assembly {parent}. Remove the containing assembly/P.O. together to preserve its physical spool identities and work.')
@@ -353,9 +485,13 @@ def _blockers(s, kind, record_id, action, state, scope):
         for item_kind, item_id in scope:
             if item_kind == 'order':
                 continue
-            project_id = _record(s, item_kind, item_id).project_id if item_kind == 'gpn' else _project_id(s, item_id)
+            project_id = _record_project_id(s, item_kind, item_id)
             if project_id and ('order', project_id) not in scope_set and project_is_removed(s, project_id):
                 blockers.append('Restore the parent P.O. before restoring this removal group.')
+            if item_kind == 'gpn':
+                parent = read_get(s, AssemblyGpnLink, item_id)
+                if parent and ('gpn_record', parent.gpn_record_id) not in scope_set and gpn_record_is_removed(s, parent.gpn_record_id):
+                    blockers.append('Restore the parent GPN record before restoring this assembly.')
             if item_kind == 'item':
                 for parent in _parents(s, item_id):
                     if ('item', parent) not in scope_set and item_is_removed(s, parent):
@@ -420,14 +556,48 @@ def _preview(s, kind, record_id, action):
     full_scope = _scope(s, kind, record_id) if action == 'remove' else _restore_scope(s, state)
     scope = [key for key in full_scope if action == 'restore' or not (
         (current := _state(s, *key)) and current.removed)]
-    blockers = _blockers(s, kind, record_id, action, state, scope)
+    generated_copy_facts = {}
+    if action == 'remove':
+        from removal_planning import generated_copy_removal_facts
+        scope_set = set(scope)
+        for target_kind, value in scope:
+            if target_kind != 'item':
+                continue
+            registration = read_get(s, OrderSpool, value)
+            if (registration and ('item', registration.assembly_id) not in scope_set
+                    and read_get(s, SpoolPlan, value) is not None):
+                generated_copy_facts[value] = generated_copy_removal_facts(s, value)
+    blockers = _blockers(s, kind, record_id, action, state, scope,
+                         generated_copy_facts=generated_copy_facts)
     item_ids = [value for target_kind, value in full_scope if target_kind == 'item']
     project_ids = _project_ids(s, full_scope)
     basis = {'action': action, 'kind': kind, 'record_id': record_id,
              'state': _values(state), 'scope': [], 'projects': [], 'blockers': blockers}
+    if generated_copy_facts:
+        basis['generated_copy_facts'] = generated_copy_facts
     for target_kind, value in full_scope:
         detail = {'kind': target_kind, 'record': _values(_record(s, target_kind, value)),
                   'removal': _values(_state(s, target_kind, value))}
+        if target_kind == 'gpn':
+            detail['gpn_link'] = _values(read_get(s, AssemblyGpnLink, value))
+        if target_kind == 'spool_line':
+            from order_setup import (OrderAssemblyRequirement,
+                                     OrderSpoolRequirement, OrderSpoolWeldRequirement)
+            from spool_documents import SpoolDocumentSet, SpoolDocument
+            line = _record(s, target_kind, value)
+            sets = s.scalars(select(SpoolDocumentSet).where(
+                SpoolDocumentSet.requirement_id == value).order_by(SpoolDocumentSet.id)).all()
+            detail.update(parent=_values(read_get(s, OrderGpn, line.gpn_id)),
+                gpn_link=_values(read_get(s, AssemblyGpnLink, line.gpn_id)),
+                quantity_plan=_values(read_get(s, OrderAssemblyRequirement, line.gpn_id)),
+                weld_requirement=_values(read_get(s, OrderSpoolWeldRequirement, value)),
+                siblings=[_values(row) for row in s.scalars(select(OrderSpoolRequirement)
+                    .where(OrderSpoolRequirement.gpn_id == line.gpn_id)
+                    .order_by(OrderSpoolRequirement.id))],
+                document_sets=[_values(row) for row in sets],
+                documents=[_values(row) for row in s.scalars(select(SpoolDocument)
+                    .where(SpoolDocument.set_id.in_([row.id for row in sets]))
+                    .order_by(SpoolDocument.id))] if sets else [])
         if target_kind == 'item':
             detail.update(plan=_values(read_get(s, SpoolPlan, value)), flow=_values(read_get(s, FlowPlan, value)),
                 parts=_values(read_get(s, SpoolPartsPlan, value)), transfer=_values(read_get(s, ItemTransferState, value)),
@@ -487,7 +657,7 @@ def _change(s, user, kind, record_id, action, data):
         raise HTTPException(409, {'message': 'This removal change is blocked. No changes were saved.', 'blockers': current['blockers']})
     keys = [(row['kind'], row['record_id']) for row in current['affected']]
     for target_kind, value in keys:
-        model = {'order': PurchaseOrder, 'gpn': OrderGpn, 'item': Item}[target_kind]
+        model = _record_model(target_kind)
         column = model.project_id if target_kind == 'order' else model.id
         s.scalar(select(model).where(column == value).with_for_update().execution_options(populate_existing=True))
     now = utcnow()
@@ -504,13 +674,16 @@ def _change(s, user, kind, record_id, action, data):
         row.batch_id = batch
         row.root_kind, row.root_id = kind, record_id
         row.reason, row.changed_by, row.changed_at = data.reason, actor.badge, now
+        if target_kind == 'spool_line':
+            line = _record(s, target_kind, value)
+            line.active = action == 'restore'
+            line.updated_at = now
         audit(s, value if target_kind == 'item' else None, actor.badge,
             'RECORD_REMOVED' if action == 'remove' else 'RECORD_RESTORED',
             {'kind': target_kind, 'record_id': value, 'root_kind': kind, 'root_id': record_id,
              'batch_id': batch, 'version': row.version, 'reason': data.reason,
              'before': before, 'after': {'removed': row.removed, 'version': row.version},
-             'project_id': value if target_kind == 'order' else _record(s, target_kind, value).project_id
-                if target_kind == 'gpn' else _project_id(s, value)})
+             'project_id': _record_project_id(s, target_kind, value)})
     for project_id in sorted(_project_ids(s, keys)):
         order = read_get(s, PurchaseOrder, project_id)
         if order:
@@ -536,3 +709,4 @@ def remove(kind: Kind, record_id: str, data: ChangeIn,
 def restore(kind: Kind, record_id: str, data: ChangeIn,
             user: Employee = Depends(auth), s: Session = Depends(db)):
     return _change(s, user, kind, record_id, 'restore', data)
+

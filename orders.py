@@ -221,7 +221,7 @@ def business_gpn(group):
     return group.gpn_label or group.gpn
 
 
-def sync_gpn_record(s, group):
+def sync_gpn_record(s, group, *, allow_removed=False):
     """Persist an explicit parent after an authorized assembly write only."""
     label = business_gpn(group)
     record = s.scalar(select(GooglePartNumber).where(
@@ -233,6 +233,9 @@ def sync_gpn_record(s, group):
             created_by=group.created_by, created_at=group.created_at or utcnow())
         s.add(record)
         _flush(s)
+    elif not allow_removed:
+        from removals import require_active_gpn_record
+        require_active_gpn_record(s, record.id)
     link = s.get(AssemblyGpnLink, group.id)
     if link is None:
         s.add(AssemblyGpnLink(assembly_definition_id=group.id, gpn_record_id=record.id))
@@ -254,13 +257,14 @@ def backfill_gpn_records(s):
     count = 0
     for group in groups:
         if group.id not in known:
-            sync_gpn_record(s, group)
+            sync_gpn_record(s, group, allow_removed=True)
             count += 1
     return count
 
 
-def gpn_record_rows(s, project_id, assembly_rows):
+def gpn_record_rows(s, project_id, assembly_rows, *, include_removed=False):
     """Read-only canonical GPNs and their separate assembly definitions."""
+    from removals import gpn_record_not_removed, removal_summaries
     identifiers = [row.get('gpn_id', row.get('id')) for row in assembly_rows]
     links = dict(s.execute(select(AssemblyGpnLink.assembly_definition_id,
         AssemblyGpnLink.gpn_record_id).where(
@@ -272,17 +276,25 @@ def gpn_record_rows(s, project_id, assembly_rows):
         row['gpn_record_id'] = links.get(identity)
         if row['gpn_record_id']:
             by_record[row['gpn_record_id']].append(row)
-    records = s.scalars(select(GooglePartNumber).where(
-        GooglePartNumber.project_id == project_id).order_by(GooglePartNumber.gpn, GooglePartNumber.id)).all()
+    query = select(GooglePartNumber).where(GooglePartNumber.project_id == project_id)
+    if not include_removed:
+        query = query.where(gpn_record_not_removed(GooglePartNumber.id))
+    records = s.scalars(query.order_by(GooglePartNumber.gpn, GooglePartNumber.id)).all()
+    states = removal_summaries(s, 'gpn_record', [record.id for record in records])
     return [{**_row(record, ('id', 'project_id', 'gpn', 'description', 'created_by', 'created_at', 'updated_at')),
+             'removal': states[record.id],
              'assembly_definition_ids': [row['assembly_definition_id'] for row in by_record[record.id]],
              'assembly_count': len(by_record[record.id])} for record in records]
 
 
 def create_gpn_record_value(s, order, data, user):
-    if s.scalar(select(GooglePartNumber.id).where(
+    existing = s.scalar(select(GooglePartNumber.id).where(
             GooglePartNumber.project_id == order.project_id,
-            GooglePartNumber.normalized_gpn == _key(data.gpn))):
+            GooglePartNumber.normalized_gpn == _key(data.gpn)))
+    if existing:
+        from removals import gpn_record_is_removed
+        if gpn_record_is_removed(s, existing):
+            raise HTTPException(409, 'That GPN is in Removed records. Restore its existing record to retain its identity and linked history.')
         raise HTTPException(409, 'This GPN already has its own record in this P.O. Add another assembly under that GPN.')
     record = GooglePartNumber(id=new_id('GPN'), project_id=order.project_id,
         gpn=data.gpn, normalized_gpn=_key(data.gpn), description=data.description,
@@ -295,13 +307,17 @@ def create_gpn_record_value(s, order, data, user):
 
 
 def edit_gpn_record_value(s, order, record_id, data, user):
+    from removals import require_active_gpn_record, gpn_record_is_removed
     record = s.get(GooglePartNumber, record_id)
     if record is None or record.project_id != order.project_id:
         raise HTTPException(404, 'GPN record not found in this P.O.')
+    require_active_gpn_record(s, record.id)
     duplicate = s.scalar(select(GooglePartNumber.id).where(
         GooglePartNumber.project_id == order.project_id,
         GooglePartNumber.normalized_gpn == _key(data.gpn), GooglePartNumber.id != record.id))
     if duplicate:
+        if gpn_record_is_removed(s, duplicate):
+            raise HTTPException(409, 'That GPN is in Removed records. Restore its existing record to retain its identity and linked history.')
         raise HTTPException(409, 'That GPN already has a separate record. Choose its existing record; records are not silently merged.')
     groups = s.scalars(select(OrderGpn).join(AssemblyGpnLink,
         AssemblyGpnLink.assembly_definition_id == OrderGpn.id).where(
@@ -616,7 +632,7 @@ def _assembly_detail(s, mapping, group, progress_rows, *, presentation=False, pr
 
 
 def order_summary(s, order):
-    from removals import gpn_not_removed, item_not_removed, removal_summary
+    from removals import gpn_not_removed, gpn_record_not_removed, item_not_removed, removal_summary
     project = s.get(Project, order.project_id)
     groups = s.scalars(select(OrderGpn).where(OrderGpn.project_id == order.project_id, gpn_not_removed(OrderGpn.id))).all()
     ids = [group.id for group in groups]
@@ -627,7 +643,8 @@ def order_summary(s, order):
     required = sum(row.required_spools for row in mappings)
     setup_needed = len(groups) - len({row.gpn_id for row in mappings})
     canonical_count = s.scalar(select(func.count()).select_from(GooglePartNumber)
-        .where(GooglePartNumber.project_id == order.project_id))
+        .where(GooglePartNumber.project_id == order.project_id,
+               gpn_record_not_removed(GooglePartNumber.id)))
     return {**_row(order, ORDER_FIELDS), 'project_name': project.name,
             'removal': removal_summary(s, 'order', order.project_id),
             'gpn_count': canonical_count or len({_key(business_gpn(group)) for group in groups}),
@@ -715,7 +732,7 @@ def order_detail(s, project_id, user=None):
                           'planning_needed': plan is None})
     events = s.scalars(select(Audit).where(Audit.event.like('ORDER_%'), Audit.details['project_id'].as_string() == project_id)
                        .order_by(Audit.id.desc()).limit(100)).all()
-    canonical_gpns = gpn_record_rows(s, project_id, gpns)
+    canonical_gpns = gpn_record_rows(s, project_id, gpns, include_removed=removed)
     parent_ids = {group['id']: group['gpn_record_id'] for group in gpns}
     for assembly in assemblies:
         assembly['assembly_definition_id'] = assembly['gpn_id']

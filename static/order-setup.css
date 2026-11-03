@@ -150,3 +150,20 @@
 .os-gpn-record .actions{flex-direction:column;align-items:stretch;flex-shrink:0}
 .os-assemblies-heading{font-size:1.3rem;margin:24px 0 12px}
 @media(max-width:600px){.os-gpn-heading,.os-gpn-record{flex-direction:column}.os-gpn-record .actions{flex-direction:row;flex-wrap:wrap}.os-gpn-section{padding:14px}}
+
+/* Saved removals stay distinct from discarding an unsaved form row. */
+#orderSetupPage .os-copy-heading-row{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px;width:100%;min-width:0}
+#orderSetupPage .os-copy-heading-row .os-copy-number{flex:1 1 150px}
+#orderSetupPage .os-remove-copy{font-size:12px;padding:8px 10px;min-height:38px}
+#orderSetupPage .os-copy-removal-note{font-size:11px;line-height:1.5;color:var(--os-muted);margin:8px 0 0}
+#orderSetupPage .os-spool-actions{gap:8px;align-items:center;margin-top:10px}
+#orderSetupPage .os-spool-actions button{font-size:12px;min-height:40px}
+#orderSetupPage .os-editor-removal,#orderSetupPage .os-removal-help{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 0;margin:20px 0;border-top:1px solid var(--os-line)}
+#orderSetupPage .os-editor-removal p,#orderSetupPage .os-removal-help p{font-size:13px;color:var(--os-muted);max-width:680px;margin:6px 0 0}
+#orderSetupPage .os-editor-removal>button,#orderSetupPage .os-removal-help>button{flex-shrink:0;min-height:44px}
+#orderSetupPage .os-spool-labels,#orderSetupPage .os-spool-row{grid-template-columns:minmax(130px,1.7fr) minmax(95px,1fr) minmax(100px,1fr) minmax(75px,.7fr) minmax(94px,.8fr)}
+#orderSetupPage .os-saved-line-removal{display:grid;gap:7px;min-width:0}
+#orderSetupPage .os-saved-line-removal button{font-size:12px;min-height:42px;padding:7px 9px;white-space:normal;line-height:1.4}
+#orderSetupPage .os-saved-line-removal small{font-size:11px;color:var(--os-muted);overflow-wrap:anywhere;line-height:1.4}
+@media(max-width:800px) and (min-width:541px){#orderSetupPage .os-spool-labels,#orderSetupPage .os-spool-row{grid-template-columns:minmax(100px,1.2fr) minmax(70px,1fr) minmax(80px,1fr) minmax(60px,.7fr) minmax(82px,.8fr);gap:8px}}
+@media(max-width:540px){#orderSetupPage .os-editor-removal,#orderSetupPage .os-removal-help{flex-direction:column;align-items:stretch;gap:12px}#orderSetupPage .os-spool-row{grid-template-columns:minmax(100px,1.1fr) minmax(95px,1fr)}#orderSetupPage .os-saved-line-removal button{width:100%}}

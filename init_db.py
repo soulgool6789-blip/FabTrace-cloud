@@ -167,6 +167,8 @@ def initialize():
         # The legacy SQLite rebuild uses the complete current model schema.
         _migrate_gpn_labels_v1(c)
         _migrate_assembly_numbers_v1(c)
+        from removal_migrations import migrate_removal_kinds
+        migrate_removal_kinds(c)
         if c.dialect.name == 'postgresql':
             c.execute(text('''CREATE OR REPLACE FUNCTION fabtrace_no_audit_mutation()
                 RETURNS trigger AS $$ BEGIN

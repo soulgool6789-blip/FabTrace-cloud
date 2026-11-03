@@ -2,6 +2,15 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
+## Current application revision: removal from PO editing
+
+Release `2026.11.03-edit-removal.1` exposes reversible removal directly in PO setup and the saved GPN, assembly and spool editing screens. Administrator actions reuse the current-scope preview, reason, exact confirmation, stale-preview checks and Removed records restoration. Draft-row removal stays local until the setup is saved; removing a saved record is a separate confirmed action.
+
+- Canonical GPN records use the explicit `gpn_record` removal kind. Their removal includes active linked assembly definitions and physical descendants. Existing `gpn` removal states continue identifying the retained assembly definition; physical IDs and previous independently removed batches keep their original meaning.
+- Saved spool entries use `spool_line`. Before any physical assembly has been registered, removal deactivates the exact requirement while retaining its identity, weld count, BOM/drawing files and source revisions. Restoration reactivates that same requirement. The last active spool line is retained unless the whole assembly definition is removed. Ordinary quantity edits cannot silently reactivate an explicitly removed line.
+- After physical assembly registration, saved spool demand is retained. An untouched copy generated during setup may be removed with its initial empty weld records: eligibility checks the generator provenance, unchanged planning records, pending requirements and absence of child/parent production or QA activity. Other copies and containing assemblies retain the existing work/link/timer rules. Removing a physical copy keeps its original evidence and the planned quantity available for a replacement; restoration enforces that capacity. No removal or restoration records production completion or QA acceptance.
+- Initialization widens the two `record_removals` kind constraints for the new record types, preserving all existing removal states, indexes and triggers. PostgreSQL uses the existing locked initialization transaction; SQLite rebuilds only that table atomically with preservation checks.
+
 ## Current application revision: spool records, material import and separate GPN records
 
 Release `2026.11.03-spool-records.1` adds four connected changes:

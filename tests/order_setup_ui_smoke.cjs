@@ -88,6 +88,45 @@ async function addFirst(){await context.FabOrderSetup.open({po:'P1'});await clic
   await click('edit-gpn','MASTER-ONE');set('osGpnRecordNumber','000-GPN-REVISED');n=writes().length;await nodes.get('osGpnRecordForm').onsubmit({preventDefault(){}});assert.equal(writes().length,n);set('osGpnRecordReason','Verified supplier correction');await nodes.get('osGpnRecordForm').onsubmit({preventDefault(){}});assert.equal(writes().at(-1).url,'/api/order-setup/P1/gpn-records/MASTER-ONE');assert.equal(writes().at(-1).method,'PATCH');assert.equal(records.P1.assemblies[0].gpn_label,'000-GPN-REVISED');assert.equal(records.P1.assemblies[0].gpn,'000-GPN-A');check('Independent GPN edit requires a reason and retains the assembly original identity');
   await click('add-gpn-assembly','MASTER-NEW');a=rowKeys()[0];assert.equal(nodes.get('osGpn-'+a).value,'000-GPN-B');await click('cancel');await click('identity','G1');a=rowKeys()[0];assert.match(html(),/Parent GPN record/);assert.match(html(),/<select id="osGpn-/);assert.equal(nodes.get('osGpn-'+a).value,'000-GPN-REVISED');set('osAssemblyNumber-'+a,'ASSEMBLY-ONLY');set('osGpn-'+a,'000-GPN-B');set('osReason','Select the correct GPN parent');await submit();assert.deepEqual(JSON.parse(writes().at(-1).body),{expected_version:6,assembly_number:'ASSEMBLY-ONLY',gpn_label:'000-GPN-B',reason:'Select the correct GPN parent'});assert.equal(records.P1.gpn_records[0].gpn,'000-GPN-REVISED');check('Per-GPN Add assembly prefills its parent; Edit assembly selects a parent without changing the GPN record');
   context.me={role:'inspector'};await context.FabOrderSetup.open({po:'P1'});assert.doesNotMatch(html(),/data-os-action="add-gpn"|data-os-action="edit-gpn"|data-os-action="add-gpn-assembly"/);await click('add-gpn');assert.equal(nodes.has('osGpnRecordForm'),false);context.me={role:'admin'};check('Read-only positions can see GPNs but cannot open record mutation controls');
+  context.me={role:'admin'};records.P1=detail();
+  records.P1.gpn_records=[{id:'MASTER-REMOVE',gpn:'000-GPN-A',description:'Saved product',assembly_count:2,assembly_definition_ids:['G1','G-SIBLING']}];
+  records.P1.assemblies[0].gpn_record_id='MASTER-REMOVE';records.P1.assemblies[0].assembly_number='000-ASM-A';
+  records.P1.assemblies[0].spools.push({id:'L-REMOVE',spool_number:'000-SHARED <SPOOL>',quantity_per_assembly:1,welds_per_spool:2,total_quantity:3});
+  records.P1.assemblies[0].spools[0].physical_spools=[{item_id:'COPY-KEEP',qr_alias:'000-SPOOL-A-[001]',flow_stage:{key:'inventory'}},{item_id:'COPY-REMOVE',qr_alias:'000-SPOOL-A-[002]',flow_stage:{key:'inventory'}}];
+  const siblingRemoval=makeRow('000-GPN-A',1,[{spool_number:'000-SHARED <SPOOL>',quantity_per_assembly:1,welds_per_spool:2}],'G-SIBLING','000-ASM-B');siblingRemoval.spools[0].id='L-SIBLING';siblingRemoval.gpn_record_id='MASTER-REMOVE';records.P1.assemblies.push(siblingRemoval);totals(records.P1);
+  await context.FabOrderSetup.open({po:'P1'});
+  for(const [action,id] of [['remove-gpn-record','MASTER-REMOVE'],['remove-gpn','G1'],['remove-spool-line','L-REMOVE'],['remove-copy','COPY-REMOVE']]){
+    assert.ok(html().includes('data-os-action="'+action+'" data-os-id="'+id+'"'));
+    const beforeRemovalWrites=writes().length;await click(action,id);
+    assert.equal(routes.at(-1).kind,{'remove-gpn-record':'gpn_record','remove-gpn':'gpn','remove-spool-line':'spool_line','remove-copy':'item'}[action]);
+    assert.equal(routes.at(-1).id,id);assert.equal(typeof routes.at(-1).onDone,'function');assert.equal(writes().length,beforeRemovalWrites);
+  }
+  assert.match(html(),/Removing a copy keeps the planned quantity available for a replacement/);
+  assert.match(html(),/Removed records \/ restore/);
+  let removalRoutes=routes.length;for(const action of ['remove-order','remove-gpn-record','remove-gpn','remove-spool-line','remove-copy'])await click(action,'FOREIGN-OR-MISSING');assert.equal(routes.length,removalRoutes);
+  check('Saved GPNs, assembly records, spool entries and exact copies open their distinct audited removal scopes without a direct write or sibling-number inference');
+  await click('edit','G1');a=rowKeys()[0];set('osAssemblyQty-'+a,7);await click('next');
+  const savedSpoolKeys=spoolKeys(),savedRemoveKey=savedSpoolKeys[1];set('osSpoolNumber-'+savedRemoveKey,'UNSAVED-RENAMED-SPOOL');set('osReason','Unsaved correction retained when removal is cancelled');
+  assert.match(html(),/Saved: 000-SHARED &lt;SPOOL&gt;/);assert.match(html(),/Remove saved spool/);assert.match(html(),/closes this editor without saving its other changes/);
+  n=writes().length;await click('remove-spool-line','L-REMOVE');assert.equal(routes.at(-1).kind,'spool_line');assert.equal(routes.at(-1).id,'L-REMOVE');
+  assert.equal(nodes.get('osSpoolNumber-'+savedRemoveKey).value,'UNSAVED-RENAMED-SPOOL');assert.equal(nodes.get('osReason').value,'Unsaved correction retained when removal is cancelled');assert.equal(writes().length,n);
+  await click('remove-spool',savedRemoveKey);assert.equal(spoolKeys().length,2);assert.ok(nodes.has('osSpoolNumber-'+savedRemoveKey));
+  await click('add-spool',a);const draftRemoveKey=spoolKeys().find(k=>!savedSpoolKeys.includes(k));removalRoutes=routes.length;await click('remove-spool',draftRemoveKey);assert.equal(spoolKeys().length,2);assert.equal(routes.length,removalRoutes);
+  assert.match(html(),/data-os-action="remove-gpn" data-os-id="G1"/);
+  await click('remove-gpn','G1');assert.equal(routes.at(-1).kind,'gpn');assert.equal(nodes.get('osSpoolNumber-'+savedRemoveKey).value,'UNSAVED-RENAMED-SPOOL');
+  await click('cancel');await click('identity','G1');a=rowKeys()[0];set('osAssemblyNumber-'+a,'UNSAVED-ASSEMBLY');await click('remove-gpn','G1');assert.equal(nodes.get('osAssemblyNumber-'+a).value,'UNSAVED-ASSEMBLY');
+  await click('cancel');await click('edit-gpn','MASTER-REMOVE');set('osGpnRecordNumber','UNSAVED-GPN');await click('remove-gpn-record','MASTER-REMOVE');assert.equal(routes.at(-1).kind,'gpn_record');assert.equal(nodes.get('osGpnRecordNumber').value,'UNSAVED-GPN');assert.equal(records.P1.gpn_records[0].gpn,'000-GPN-A');assert.equal(writes().length,n);
+  await click('close-gpn');await click('add-gpn');assert.doesNotMatch(html(),/data-os-action="remove-gpn-record"/);await click('close-gpn');
+  check('Removal is available inside saved editors, targets original saved IDs after draft renames, preserves cancelled edits, and keeps unsaved row discard separate');
+  await click('remove-spool-line','L-REMOVE');const lateRemoval=routes.at(-1);await context.FabOrderSetup.open({po:'P2'});const laterHtml=html(),laterCalls=calls.length;await lateRemoval.onDone();assert.equal(html(),laterHtml);assert.equal(calls.length,laterCalls);assert.match(context.url,/po=P2/);
+  await context.FabOrderSetup.open({po:'P1'});await click('edit','G1');await click('next');await click('remove-spool-line','L-REMOVE');const confirmedRemoval=routes.at(-1);
+  records.P1.assemblies[0].spools=records.P1.assemblies[0].spools.filter(row=>row.id!=='L-REMOVE');records.P1.order.version++;totals(records.P1);await confirmedRemoval.onDone();
+  assert.equal(nodes.has('orderSetupForm'),false);assert.doesNotMatch(html(),/data-os-action="remove-spool-line" data-os-id="L-REMOVE"/);assert.match(html(),/data-os-action="remove-spool-line" data-os-id="L-SIBLING"/);assert.match(html(),/Record removed\. Open Removed records to restore it/);assert.equal(records.P1.assemblies[0].assembly_quantity,3);
+  check('Confirmed removal refreshes the current P.O. and closes its editor while a late completion cannot replace a different P.O.');
+  records.P1.permissions.can_remove=false;await context.FabOrderSetup.open({po:'P1'});assert.doesNotMatch(html(),/data-os-action="remove-|data-os-action="removed"/);removalRoutes=routes.length;for(const [action,id] of [['remove-gpn-record','MASTER-REMOVE'],['remove-gpn','G1'],['remove-spool-line','L0'],['remove-copy','COPY-REMOVE'],['removed','']])await click(action,id);assert.equal(routes.length,removalRoutes);
+  records.P1.permissions.can_remove=true;context.me={role:'supervisor'};await context.FabOrderSetup.open({po:'P1'});assert.doesNotMatch(html(),/data-os-action="remove-|data-os-action="removed"/);await click('edit','G1');await click('next');assert.doesNotMatch(html(),/data-os-action="remove-spool-line"|data-os-action="remove-gpn"/);await click('remove-spool-line','L0');await click('removed');assert.equal(routes.length,removalRoutes);
+  context.me={role:'handler'};await context.FabOrderSetup.open({po:'P1'});assert.doesNotMatch(html(),/data-os-action="remove-|data-os-action="removed"/);for(const [action,id] of [['remove-gpn-record','MASTER-REMOVE'],['remove-gpn','G1'],['remove-spool-line','L0'],['remove-copy','COPY-REMOVE'],['removed','']])await click(action,id);assert.equal(routes.length,removalRoutes);context.me={role:'admin'};
+  check('Every saved removal requires both administrator role and current server permission, including forged editor actions');
   console.log(JSON.stringify({status:'passed',contracts:checks.length,checks},null,2));
 })().catch(error=>{console.error(error.stack||error);process.exitCode=1;});
 

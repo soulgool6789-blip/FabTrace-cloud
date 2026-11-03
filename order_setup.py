@@ -347,6 +347,14 @@ def _basis(s, group):
 
 def _save_requirements(s, group, data, user):
     from spool_documents import guard_document_requirement_identity
+    from removals import spool_line_is_removed
+    existing = {line.normalized_number: line for line in s.scalars(
+        select(OrderSpoolRequirement).where(OrderSpoolRequirement.gpn_id == group.id))}
+    for values in data.spools:
+        line = existing.get(_key(values.spool_number))
+        if line is not None and spool_line_is_removed(s, line.id):
+            raise HTTPException(409, f'Spool entry {line.spool_number} has been removed. '
+                'Restore it from Removed records before adding it to this assembly again.')
     guard_document_requirement_identity(s, group,
         spool_numbers=[line.spool_number for line in data.spools])
     plan = s.get(OrderAssemblyRequirement, group.id)
@@ -357,8 +365,6 @@ def _save_requirements(s, group, data, user):
     else:
         plan.assembly_quantity = data.assembly_quantity
         plan.updated_at = utcnow()
-    existing = {line.normalized_number: line for line in s.scalars(
-        select(OrderSpoolRequirement).where(OrderSpoolRequirement.gpn_id == group.id))}
     active = set()
     for values in data.spools:
         normalized = _key(values.spool_number)

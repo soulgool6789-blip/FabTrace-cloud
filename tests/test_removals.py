@@ -53,17 +53,17 @@ def test_remove_and_restore_empty_po_with_draft_gpns_retains_original_identity(a
     prior_version = version(api, project_id)
     record = preview(api, 'order', project_id)
     assert record['title'] == 'P.O. PO-100' and record['confirmation'] == 'PO-100'
-    assert record['counts'] == {'orders': 1, 'gpns': 2, 'items': 0}
+    assert record['counts'] == {'orders': 1, 'gpns': 2, 'items': 0, 'gpn_records': 2}
     assert record['expected_version'] == 0 and len(record['preview_token']) == 64
     removed = ok(api.post(f'{ROOT}/order/{project_id}/remove', body(record)))
-    assert removed['removed'] and removed['affected_count'] == 3
+    assert removed['removed'] and removed['affected_count'] == 5
     listed = ok(api.get(ROOT))['records']
     assert len(listed) == 1 and listed[0]['record_id'] == project_id
     assert listed[0]['counts'] == record['counts'] and listed[0]['actor'] == BADGES['admin']
     assert stable_business_state(api) == before
     assert version(api, project_id) == prior_version + 1
     restored = change(api, 'order', project_id, 'restore')
-    assert not restored['removed'] and restored['affected_count'] == 3
+    assert not restored['removed'] and restored['affected_count'] == 5
     assert ok(api.get(ROOT))['records'] == []
     assert {g['id'] for g in current(api, project_id)['gpns']} == {first, second}
     assert version(api, project_id) == prior_version + 2
@@ -186,7 +186,7 @@ def test_restoring_po_does_not_revive_an_earlier_independently_removed_branch(ap
     add_assembly(api, project_id, second, item_id='SECOND-ASSEMBLY')
     change(api, 'gpn', first)
     record = preview(api, 'order', project_id)
-    assert record['counts'] == {'orders': 1, 'gpns': 1, 'items': 1}
+    assert record['counts'] == {'orders': 1, 'gpns': 1, 'items': 1, 'gpn_records': 2}
     change(api, 'order', project_id)
     blocked = preview(api, 'gpn', first, 'restore')
     assert not blocked['can_proceed'] and any('parent P.O.' in row for row in blocked['blockers'])
@@ -305,7 +305,9 @@ def test_allocated_part_requires_guarded_unassignment_before_individual_removal(
 
 @pytest.mark.parametrize('paused', [False, True])
 def test_open_manual_timers_block_removal_until_finished(api, paused):
+    from receiving_helpers import accept_arrival
     item_id = create_item(api, 'REMOVE-TIMER', kind='Spool')
+    accept_arrival(api, item_id)
     started = process_change(api, item_id, 'start', 0, role='admin', process_key='material_prep')
     if paused:
         started = process_change(api, item_id, 'pause', started['version'], role='admin', notes='Synthetic waiting interval')
@@ -363,3 +365,4 @@ def test_read_previews_and_removed_register_do_not_write(api):
     assert database_state(api) == before
     assert api.get(f'{ROOT}/invalid/{project_id}').status_code == 422
     assert api.get(f'{ROOT}/order/NO-SUCH-PO').status_code == 404
+
