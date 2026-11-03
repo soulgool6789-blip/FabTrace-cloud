@@ -227,7 +227,7 @@ def test_late_baseline_remains_unrecorded_and_qa_finish_is_distinct_from_handoff
     assert next(s for s in node(api, spool)['stages'] if s['key'] == 'inventory')['state'] == 'scope_unknown'
     enroll(api, spool, 'spool', start_step=14)
     before = node(api, spool, project)
-    assert before['progress'] == {'completed': 0, 'total': 8, 'not_recorded': 5, 'percent': 0}
+    assert before['progress'] == {'completed': 0, 'total': 8, 'not_recorded': 5, 'not_required': 0, 'percent': 0}
     assert [step['state'] for step in before['steps']] == ['not_recorded'] * 5 + ['current', 'pending', 'pending']
     assert not before['fabrication_finished'] and not before['on_hold']
     advance(api, spool)
@@ -435,4 +435,5 @@ def test_read_is_pure_calls_physical_projection_once_and_preserves_historical_pr
     assert database_state(api) == before
     after = ok(api.get(f'/api/progress/projects/{first}'))
     assert after['items'] == old['items'] and after['counts'] == old['counts']
+
 

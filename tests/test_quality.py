@@ -506,8 +506,12 @@ def test_linked_item_and_weld_must_match_the_selected_project_and_each_other(api
 
 def test_physical_work_changes_invalidate_a_review_linked_to_that_weld(api):
     from test_flow import create_item
+    from receiving_helpers import accept_arrival
     item_id = create_item(api, "QUALITY-PHYSICAL", kind="Spool", planned=1, project="QUALITY-PROJECT")
     weld = add_weld(api, item_id)
+    # Establish the actual incoming material evidence before signing the
+    # production snapshot, so only the later weld work invalidates it.
+    accept_arrival(api,item_id)
     workspace_id = workspace(api, project_id="QUALITY-PROJECT")["workspace"]["id"]
     requirement_id = create_requirement(api, workspace_id, required_evidence_types=["production"])
     confirm_source(api, workspace_id, requirement_id)
@@ -559,10 +563,11 @@ def test_optional_gates_require_project_scope_and_reviewer_permission(api):
 
 
 def assembly_at_step(api, step):
+    """Retained legacy traveler used to isolate opt-in quality/packet gates."""
     from test_flow import advance, completed_spool, create_item, detail, enroll, inspect_dimensions, link_spool
     assembly = create_item(api, "QUALITY-ASSEMBLY", kind="Assembly")
     child = completed_spool(api, "QUALITY-ASSEMBLY-SPOOL")
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     while detail(api, assembly)["flow"]["current_step"] < step:
         current_step = detail(api, assembly)["flow"]["current_step"]
@@ -657,4 +662,5 @@ def test_evidence_documents_reviews_and_event_history_have_no_edit_or_delete_rou
         rows = session.scalars(select(quality.QualityEvent).where(quality.QualityEvent.workspace_id == workspace_id)).all()
         assert rows
         assert all(row.actor in BADGES.values() and row.at is not None for row in rows)
+
 

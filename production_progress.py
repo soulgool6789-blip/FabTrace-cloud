@@ -13,30 +13,32 @@ from sqlalchemy.orm import Session
 
 from main import Employee, Item, Rework, auth, db, utcnow
 from tracking import SpoolPlan, TrackingHold
-from flow import FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER, flow_stage_for_item
+from flow import (FlowPlan, FlowEvent, FlowException, ROUTE_BY_ID, STEP_BY_NUMBER,
+                  LEGACY_STEP_17, flow_stage_for_item)
 from orders import PurchaseOrder, OrderGpn, OrderAssembly, business_gpn, read_snapshot, gpn_record_rows
 from progress import project_rows, _stamp
 from removals import item_not_removed, project_not_removed, gpn_not_removed
 from order_setup import requirements_by_gpn
 from flow_stages import STAGES, STAGE_BY_STEP
 from flow_stations import station_positions
+from flow_testing import FlowTestingState, project_step_states
 
 
 router = APIRouter(prefix='/api/progress', tags=['P.O. production progress'])
 DEFINITIONS = {
     'recorded_progress': 'Current recorded fabrication steps through step 22, weighted by each unique physical item. Shipping steps 23–24 and delivery are separate.',
-    'expected_steps': 'Parts and spools each have eight applicable fabrication steps; assemblies have six through final inspection. A route that has not started contributes no completed steps.',
+    'expected_steps': 'Parts and spools each have eight applicable fabrication steps; assemblies have six through final inspection. Explicitly not-required testing steps are excluded. A route that has not started contributes no completed steps.',
     'finished': 'Current physical preparation or ordinary fabrication release from the existing quality projection. This is separate from the recorded-step percentage.',
     'scope': 'Declared spool/BOM shortfalls and unassigned or undeclared scope remain visible. A recorded 100% alone does not mean the P.O. is complete.',
     'baseline': 'Earlier steps adopted with a historical baseline remain not recorded. Rework and return events reset downstream recorded steps.',
     'holds': 'Hold indicators describe current item holds, tracking holds, open rework or process exceptions. Other readiness warnings are shown separately.',
     'routes': 'A part follows preparation, a spool follows fabrication, and an assembly follows final assembly/finish. Parent work is not credited to a child’s own route.',
     'flow_colors': 'Individual spool colors show the last recorded station transfer. New records stay in Inventory until movement is recorded. QA results, work steps and release blockers do not move a spool. Completed linked children follow a later recorded parent movement.',
-    'testing': 'Testing includes assembly collection and dimensional inspection, with the existing required test/evidence gates retained before coating.',
+    'testing': 'Step 17 records the required YES/NO decision. YES requires separate NDT and pressure-test attempts with QA/QC approval and floor handoffs; NO excludes the testing review and floor-return steps. Required non-testing quality gates remain before coating.',
     'station_time': 'Elapsed calendar time from saved physical station transfers; same-station custody handoffs do not reset the clock. Separate visits retain returns and rework. Unknown historical entries remain unrecorded. Shared assembly visits are identified.',
 }
 COUNT_KEYS = ('items', 'parts', 'spools', 'assemblies', 'finished', 'wip', 'on_hold',
-              'planning_needed', 'completed_steps', 'total_steps', 'not_recorded_steps',
+              'planning_needed', 'completed_steps', 'total_steps', 'not_recorded_steps', 'not_required_steps',
               'missing_assemblies', 'missing_spools', 'missing_parts', 'undeclared_scope', 'shipped', 'delivered')
 
 
@@ -57,7 +59,7 @@ def _route(item, plan, flow):
     return 'component'
 
 
-def _steps(route, flow, events):
+def _steps(route, flow, events, testing=None, current_definition=None):
     definition = ROUTE_BY_ID[route]
     states = {n: 'not_recorded' if flow and n < flow.baseline_step else 'pending'
               for n in range(definition['first_step'], definition['last_step'] + 1)}
@@ -68,11 +70,20 @@ def _steps(route, flow, events):
                 for number in states:
                     if number >= target:
                         states[number] = 'pending'
-        elif event.action == 'advance' and event.step in states:
+        elif event.action == 'advance' and event.step in states and not (event.data or {}).get('phase_only'):
             states[event.step] = 'completed'
+    states = project_step_states(states, testing)
+    actual_current = flow.current_step if flow and flow.status == 'active' else None
+    states = {number: 'pending' if state == 'current' and number != actual_current else state
+              for number, state in states.items()}
     if flow and flow.status == 'active' and flow.current_step in states:
         states[flow.current_step] = 'current'
-    return [{'number': n, 'title': STEP_BY_NUMBER[n]['title'], 'state': state,
+    titles = {n: STEP_BY_NUMBER[n]['title'] for n in states}
+    if route == 'assembly' and flow and testing is None:
+        titles[17] = LEGACY_STEP_17['title']
+    if current_definition and flow and flow.current_step in states:
+        titles[flow.current_step] = current_definition['title']
+    return [{'number': n, 'title': titles[n], 'state': state,
              'stage': STAGE_BY_STEP[n], 'qa': STEP_BY_NUMBER[n]['qa'],
              'fabrication': n <= 22} for n, state in states.items()]
 
@@ -102,7 +113,9 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
     steps = [step for identifier in set(identifiers) for step in nodes[identifier]['steps']]
     result = []
     for stage in STAGES:
-        selected = [step for step in steps if step['stage'] == stage['key']]
+        all_selected = [step for step in steps if step['stage'] == stage['key']]
+        selected = [step for step in all_selected if step['state'] != 'not_required']
+        not_required = len(all_selected) - len(selected)
         total = len(selected)
         completed = sum(step['state'] == 'completed' for step in selected)
         current = sum(step['state'] == 'current' for step in selected)
@@ -117,10 +130,11 @@ def _stages(nodes, identifiers, summary, last_applicable_step=24):
                        and stage['steps'][0] <= last_applicable_step)
         state = ('completed' if total and completed == total and not missing else
                  'current' if current else 'not_recorded' if total and unrecorded == total else
-                 'pending' if total or missing else 'scope_unknown' if unknown else 'not_applicable')
+                 'pending' if total or missing else 'not_required' if not_required else
+                 'scope_unknown' if unknown else 'not_applicable')
         result.append({'key': stage['key'], 'label': stage['label'], 'completed': completed,
             'color': stage['color'], 'color_label': stage['color_label'], 'qa': stage['qa'],
-            'total': total, 'not_recorded': unrecorded, 'current': current,
+            'total': total, 'not_recorded': unrecorded, 'not_required': not_required, 'current': current,
             'state': state, 'percent': round(completed / total * 100, 1) if total else None,
             'missing_records': missing, 'separate': stage['separate']})
     return result
@@ -156,6 +170,7 @@ def _tree(s, selected_project_id=''):
     identities = {row.item_id: row for row in s.scalars(select(SpoolQrIdentity).where(SpoolQrIdentity.item_id.in_(ids)))}
     plans = {row.item_id: row for row in s.scalars(select(SpoolPlan).where(SpoolPlan.item_id.in_(ids))).all()}
     flows = {row.item_id: row for row in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(ids))).all()}
+    testing_states = {row.item_id: row for row in s.scalars(select(FlowTestingState).where(FlowTestingState.item_id.in_(ids))).all()}
     stations, stage_cache = station_positions(s, items.values(), flows=flows, plans=plans), {}
     events = _group(s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids),
         FlowEvent.action.in_(('advance', 'fail', 'reopen', 'admin_return_to_work')))
@@ -173,8 +188,11 @@ def _tree(s, selected_project_id=''):
         identifier = row['id']
         item, plan, flow = items[identifier], plans.get(identifier), flows.get(identifier)
         route = _route(item, plan, flow)
-        steps = _steps(route, flow, events[identifier])
-        fabrication = [step for step in steps if step['fabrication']]
+        from flow import current_step_definition
+        current_definition = current_step_definition(s, flow) if flow and flow.current_step else None
+        steps = _steps(route, flow, events[identifier], testing_states.get(identifier), current_definition)
+        not_required = sum(step['fabrication'] and step['state'] == 'not_required' for step in steps)
+        fabrication = [step for step in steps if step['fabrication'] and step['state'] != 'not_required']
         completed = sum(step['state'] == 'completed' for step in fabrication)
         unrecorded = sum(step['state'] == 'not_recorded' for step in fabrication)
         reasons = (['Item is on hold'] if item.on_hold else [])
@@ -191,7 +209,7 @@ def _tree(s, selected_project_id=''):
             'part_number': item.google_part_number, 'project_id': row['project_id'],
             'parent_id': row['parent_id'], 'location': item.location, 'handler': item.handler,
             'handler_name': staff.get(item.handler, item.handler),
-            'current_step': row['current_step'], 'current_title': row['current_title'],
+            'current_step': row['current_step'], 'current_title': current_definition['title'] if current_definition else row['current_title'],
             'flow_stage': {**stations[identifier], 'blocked': bool(reasons
                     or row['administrative_release'] or (row.get('receiving') or {}).get('required')
                     and not (row.get('receiving') or {}).get('can_proceed')
@@ -204,7 +222,8 @@ def _tree(s, selected_project_id=''):
             'route_started': flow is not None, 'flow_status': row['flow_status'],
             'step_entered_at': _stamp(flow.step_entered_at) if flow else None,
             'progress': {'completed': completed, 'total': len(fabrication),
-                         'not_recorded': unrecorded, 'percent': round(completed / len(fabrication) * 100, 1)},
+                         'not_recorded': unrecorded, 'not_required': not_required,
+                         'percent': round(completed / len(fabrication) * 100, 1) if fabrication else 0},
             'steps': steps, 'parts': part_summary, 'required_spools': None,
             'linked_spools': 0, 'missing_spools': 0, 'children': [], 'warnings': [],
             '_counts': {**{key: 0 for key in COUNT_KEYS}, 'items': 1,
@@ -212,7 +231,7 @@ def _tree(s, selected_project_id=''):
                 'assemblies': int(route == 'assembly'), 'finished': int(row['fabrication_finished']),
                 'wip': int(not row['fabrication_finished']), 'on_hold': int(bool(reasons)),
                 'planning_needed': int(not flow), 'completed_steps': completed,
-                'total_steps': len(fabrication), 'not_recorded_steps': unrecorded,
+                'total_steps': len(fabrication), 'not_recorded_steps': unrecorded, 'not_required_steps': not_required,
                 'shipped': int(row['flow_status'] in ('shipped', 'delivered')),
                 'delivered': int(row['flow_status'] == 'delivered')}}
         if route == 'assembly' and (stations[identifier]['key'] == 'ready_to_ship' or row['current_step'] in (23, 24)

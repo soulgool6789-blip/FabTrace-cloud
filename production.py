@@ -242,7 +242,11 @@ def prime_process_read_events(s, item_ids):
     missing = [item_id for item_id in identifiers
                if projection_get(s, _PROCESS_EVENTS_NAMESPACE, item_id) is PROJECTION_MISSING]
     from flow import FlowPlan
+    from flow_testing import FlowTestingState
     prime_rows(s, FlowPlan, FlowPlan.item_id, identifiers)
+    prime_rows(s, FlowTestingState, FlowTestingState.item_id, identifiers)
+    from projection_batches import prime_testing_eligibility
+    prime_testing_eligibility(s, identifiers)
     for offset in range(0, len(missing), 400):
         batch = missing[offset:offset + 400]
         grouped = {item_id: [] for item_id in batch}
@@ -297,9 +301,13 @@ def with_process_permissions(s, item_id, snapshot, user):
             choices = [choice for choice in choices if choice['key'] not in POST_FABRICATION_PROCESSES]
     current_heat_blocked = bool(heat_errors and current and current['process_key'] in POST_FABRICATION_PROCESSES)
     if flow is not None:
+        from flow_testing import can_control_flow_timer
         choices = []
         clock_key = current['process_key'] if current else f'clm_{flow.current_step:02d}' if flow.current_step else ''
-        if (flow.status == 'active' and can_control_process(user, clock_key) and
+        allowed = can_control_flow_timer(s, flow, user)
+        if allowed is None:
+            allowed = can_control_process(user, clock_key)
+        if (flow.status == 'active' and allowed and
                 (not item.released or flow.current_step in (16, 23, 24))):
             if current is not None and snapshot['status'] == 'running':
                 actions.append('pause')
@@ -461,9 +469,14 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
     _check_clock(snapshot, at)
     current = snapshot['current']
     restart_flow = bool(flow is not None and data.action == 'resume' and current is None)
-    if restart_flow and not can_control_process(u, f'clm_{flow.current_step:02d}'):
+    from flow_testing import can_control_flow_timer
+    flow_timer_allowed = can_control_flow_timer(s, flow, u) if flow is not None else None
+    if flow is not None and flow_timer_allowed is None:
+        clock_key = current['process_key'] if current else f'clm_{flow.current_step:02d}'
+        flow_timer_allowed = can_control_process(u, clock_key)
+    if restart_flow and not flow_timer_allowed:
         raise HTTPException(403, 'Your assigned position cannot resume the current process step.')
-    if current is not None and not can_control_process(u, current['process_key']):
+    if current is not None and not (flow_timer_allowed if flow is not None else can_control_process(u, current['process_key'])):
         raise HTTPException(403, 'Your assigned position cannot control the current process timer.')
     if data.action in ('start', 'move') and not can_control_process(u, data.process_key):
         raise HTTPException(403, 'Your assigned position cannot start or move to that process.')
@@ -481,8 +494,9 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
         if current and _process_identity(key, name) == _process_identity(current['process_key'], current['process_name']):
             raise HTTPException(409, 'This spool is already in that process; finish the current visit before starting another visit to the same process')
     elif restart_flow:
-        from flow import STEP_BY_NUMBER
-        key, name = f'clm_{flow.current_step:02d}', f"{flow.current_step}. {STEP_BY_NUMBER[flow.current_step]['title']}"
+        from flow import current_step_definition
+        definition = current_step_definition(s, flow)
+        key, name = f'clm_{flow.current_step:02d}', f"{flow.current_step}. {definition['title']}"
     else:
         key, name = current['process_key'], current['process_name']
     if data.action in ('start', 'move', 'resume') and (
@@ -499,3 +513,4 @@ def record_process(item_id: str, data: ProcessIn, u: Employee = Depends(auth), s
         s.rollback()
         raise HTTPException(409, 'Another process update was saved first; refresh and retry. No changes were saved.') from None
     return process_snapshot(s, item_id, user=u)
+

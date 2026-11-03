@@ -782,7 +782,8 @@ def _requirement_satisfied(s, req, weld=None):
                 review.evidence_id == (latest.id if latest else None))
 
 
-def _weld_blockers(s, weld, include_production=True, *, requirement_stages=None):
+def _weld_blockers(s, weld, include_production=True, *, requirement_stages=None,
+                   deferred_requirement_roles=()):
     errors = _weld_heat_errors(weld)
     if include_production and not _production_complete(s, weld):
         errors.append('Welding operations incomplete')
@@ -791,6 +792,8 @@ def _weld_blockers(s, weld, include_production=True, *, requirement_stages=None)
         errors.append('No approved weld requirement scope defined')
     for req in rows:
         if requirement_stages is not None and req.stage not in requirement_stages:
+            continue
+        if req.stage == 'after_welding' and req.owner_role in deferred_requirement_roles:
             continue
         if not _requirement_satisfied(s, req, weld):
             details = _check_errors(s, req, weld)
@@ -841,7 +844,7 @@ def _assembly_errors(s, item_id, project_id, assembly_id):
 
 
 @_snapshot_response
-def tracking_release_errors(s, item, *, requirement_stages=None):
+def tracking_release_errors(s, item, *, requirement_stages=None, deferred_requirement_roles=()):
     """Authoritative release gate for explicitly enrolled spools.
 
     Legacy aggregate Weld inspections cannot satisfy individual requirements.
@@ -868,9 +871,12 @@ def tracking_release_errors(s, item, *, requirement_stages=None):
         errors.append('Zero-weld scope requires an approved scope reason')
     for weld in welds:
         errors.extend(f'{weld.number}: {message}' for message in _weld_blockers(
-            s, weld, requirement_stages=requirement_stages))
+            s, weld, requirement_stages=requirement_stages,
+            deferred_requirement_roles=deferred_requirement_roles))
     for req in _requirements(s, item.id):
         if requirement_stages is not None and req.stage not in requirement_stages:
+            continue
+        if req.stage == 'after_welding' and req.owner_role in deferred_requirement_roles:
             continue
         if not _requirement_satisfied(s, req):
             details = _check_errors(s, req)
@@ -1655,5 +1661,6 @@ def exceptions(project_id: str = '', subproject_id: str = '', u: Employee = Depe
         for item in rows:
             result.extend({**row, **displays[item.id]} for row in _item_exceptions(s, item))
         return {'exceptions': result}
+
 
 

@@ -27,6 +27,7 @@ from exports import (WorkbookWriter, SheetRecord, TEMP_MEMORY_BYTES, XLSX_MEDIA_
                      SHEET_NS, _column_name, _date_serial, _stream_file, _utc, _xml_text)
 from flow import (FlowPlan, FlowEvent, FlowException, ComponentLink, STEPS, VERSION,
                   flow_stage_for_item)
+from flow_testing import FlowTestingState, PROTOCOL as TESTING_PROTOCOL
 from production import SpoolProcessEvent, summarize_process_events
 from tracking import (SpoolPlan, Weld, WeldWork, WeldRepair, WeldRequirement,
                       RequirementEvidence, RequirementReview, TrackingHold)
@@ -267,6 +268,7 @@ def _load_record(s, item_id, created_at):
         flow=events, process=process,
         timers={key:summarize_process_events(key,process_by_item[key],created_at) for key in related},
         flow_plans={key:s.get(FlowPlan,key) for key in related},
+        testing_states={key:row for key in related if (row:=s.get(FlowTestingState,key)) is not None},
         exceptions=rows(FlowException, FlowException.item_id.in_(related), FlowException.opened_at, FlowException.id),
         reworks=rows(Rework, Rework.item_id.in_(related), Rework.opened_at, Rework.id),
         inspections=rows(Inspection, Inspection.item_id.in_(related), Inspection.at, Inspection.id),
@@ -280,6 +282,81 @@ def _load_record(s, item_id, created_at):
             or_(DossierReview.item_id.in_(related),DossierReview.item_id.is_(None)),DossierReview.at,DossierReview.id),
         audit=rows(Audit, Audit.item_id.in_(related), Audit.at, Audit.id),
         station=flow_stage_for_item(s,item))
+
+
+def _testing_data(event):
+    data = event.data or {}
+    return data if data.get('testing_protocol') == TESTING_PROTOCOL else {}
+
+
+def _testing_events(r):
+    return [event for event in r['flow'] if _testing_data(event)]
+
+
+def _test_label(kind):
+    return {'ndt':'NDT','pressure':'Pressure test'}.get(kind,kind or '')
+
+
+def _testing_context(data):
+    if not data:
+        return ''
+    return (f'Testing cycle {data.get("testing_cycle", "")}; '
+            f'{_test_label(data.get("test_kind")) or "Testing decision"}; '
+            f'phase {data.get("testing_phase", "")}; '
+            f'attempt {data.get("testing_attempt", "")}; '
+            f'action {data.get("testing_action", "")}. ')
+
+
+def _testing_transition_notes(data,notes):
+    transitions=[]
+    if data.get('next_cycle') is not None:
+        transitions.append(f'Next testing cycle: {data["next_cycle"]}.')
+    if data.get('return_step') is not None:
+        transitions.append(f'Return step: {data["return_step"]}.')
+    if data.get('testing_required_preserved'):
+        transitions.append('Required testing remains YES.')
+    if data.get('carried_exception_ids'):
+        transitions.append('Carried open exception IDs: '+', '.join(map(str,data['carried_exception_ids']))+'.')
+    return ' '.join([*transitions,notes or '']).strip()
+
+
+def _exception_kinds(values):
+    return '; '.join(f'{key}: {_test_label(kind)}' for key,kind in (values or {}).items())
+
+
+def _route_status(event):
+    data = _testing_data(event)
+    if data:
+        action = data.get('testing_action')
+        if action == 'decision':
+            return 'Testing decision: ' + (data.get('testing_decision') or 'Not recorded')
+        if action == 'start':
+            return 'Test started'
+        if action == 'complete':
+            return 'Test report: ' + (data.get('test_result') or 'Not recorded')
+        if action == 'review':
+            return 'QA ' + (data.get('test_result') or ('FAIL' if event.action == 'fail' else 'Not recorded'))
+        if action == 'correct':
+            return 'Correction recorded; retest required'
+        if action == 'handoff':
+            return 'Floor handoff recorded'
+        if action == 'restart':
+            return 'Failed; testing restart required' if event.action == 'fail' else 'Testing restart recorded'
+        return 'Phase action recorded'
+    if (event.data or {}).get('phase_only'):
+        return 'Phase action recorded'
+    return 'Failed' if event.action == 'fail' else 'Completed'
+
+
+def _testing_not_required(r, identity, number):
+    state = r.get('testing_states',{}).get(identity)
+    if not state or state.protocol != TESTING_PROTOCOL or state.decision != 'NO':
+        return None
+    return next((event for event in reversed(_testing_events(r))
+        if event.item_id == identity and event.data.get('testing_cycle') == state.cycle
+        and event.data.get('testing_action') == 'decision'
+        and event.data.get('testing_decision') == 'NO'
+        and number in (event.data.get('not_required_steps') or [])),None)
 
 
 def _route_rows(r):
@@ -303,14 +380,14 @@ def _route_rows(r):
                 event = candidates[0] if candidates else None
                 if event:
                     used.add(event.id)
-                status = ('Failed' if event.action=='fail' else 'Completed') if event else ('In progress' if end is None and visit['status']=='running' else 'Paused' if end is None else 'Timer finished; step acceptance not recorded')
+                status = _route_status(event) if event else ('In progress' if end is None and visit['status']=='running' else 'Paused' if end is None else 'Timer finished; step acceptance not recorded')
                 actor = event.actor if event else visit['started_by']
-                notes = event.notes if event else ''
+                notes = (_testing_context(_testing_data(event)) + event.notes) if event else ''
                 notes += ('\n' if notes else '') + f'Item {identity}; process visit {visit["id"]}; active {visit["active_seconds"]:g}s; paused {visit["paused_seconds"]:g}s.'
                 if end is None:
                     notes += ' Elapsed to export timestamp; departure not recorded.'
                 title=((event.data or {}).get('step_definition') or {}).get('title') if event else None
-                result.append([number,title or step['title'],scope,visit_index,r['names'].get(actor,''),actor,start,end,
+                result.append([number,title or visit.get('process_name') or step['title'],scope,visit_index,r['names'].get(actor,''),actor,start,end,
                     Elapsed(visit['elapsed_seconds'],7,8,end is None),status,event.reference if event else '',notes])
                 wrote = True
                 identity_wrote = True
@@ -319,17 +396,165 @@ def _route_rows(r):
                     continue
                 title=((event.data or {}).get('step_definition') or {}).get('title')
                 result.append([number,title or step['title'],scope,None,r['names'].get(event.actor,''),event.actor,
-                    None,_utc(event.at),None,'Failed' if event.action=='fail' else 'Completed',event.reference,
-                    f'Flow event {event.id}; entry/duration not recorded. '+event.notes])
+                    None,_utc(event.at),None,_route_status(event),event.reference,
+                    f'Flow event {event.id}; entry/duration not recorded. '+_testing_context(_testing_data(event))+event.notes])
                 wrote = True
                 identity_wrote = True
             if not identity_wrote:
-                result.append([number,step['title'],scope,None,None,None,None,None,None,'Not recorded',None,None])
+                skipped = _testing_not_required(r,identity,number)
+                result.append([number,step['title'],scope,None,None,None,None,None,None,
+                    'Not required — recorded NO' if skipped else 'Not recorded',
+                    skipped.reference if skipped else None,
+                    f'Testing decision event {skipped.id}; no test, QA pass, station visit or duration is inferred.' if skipped else None])
                 wrote = True
         if not wrote:
             scope = 'Linked component' if number<=8 else 'This spool' if number<=16 else 'Shared parent assembly'
             result.append([number,step['title'],scope,None,None,None,None,None,None,'Not recorded',None,None])
     return result
+
+
+def _append_testing_summary(layout,r):
+    rows=[]
+    for identity,state in r.get('testing_states',{}).items():
+        if state.protocol != TESTING_PROTOCOL:
+            continue
+        rows.extend([
+            ['Source item ID',identity,None,None,None],
+            ['Testing protocol',state.protocol,None,None,None],
+            ['Testing cycle',state.cycle,None,None,None],
+            ['Testing required',state.decision or 'Not recorded',None,state.decision_by,_stamp(state.decision_at)],
+            ['Current testing phase',state.phase,None,None,_stamp(state.phase_entered_at)],
+            ['Current test / attempt',f'{_test_label(state.test_kind)} / {state.attempt}' if state.test_kind else 'Not recorded',None,None,None],
+            ['Current report result',state.report_result,None,state.reported_by,_stamp(state.reported_at)],
+            ['Current test report reference',state.report_reference,None,state.reported_by,_stamp(state.reported_at)],
+            ['Current test report basis SHA-256',state.report_basis,None,None,None],
+            ['Current QA result',state.qa_result,None,state.reviewed_by,_stamp(state.reviewed_at)],
+            ['Current QA reference',state.qa_reference,None,state.reviewed_by,_stamp(state.reviewed_at)],
+            ['NDT construction basis SHA-256',state.ndt_basis,None,None,None],
+            ['NDT test report event ID',str(state.ndt_report_event_id) if state.ndt_report_event_id is not None else None,None,None,None],
+            ['NDT QA review event ID',str(state.ndt_review_event_id) if state.ndt_review_event_id is not None else None,None,None,None],
+            ['Open testing exception IDs',', '.join(map(str,state.pending_exception_ids or [])),None,None,None],
+            ['Open testing exception types','; '.join(f'{key}: {_test_label((state.pending_exception_kinds or {}).get(str(key)))}'
+                for key in state.pending_exception_ids or []),None,None,None],
+        ])
+    if rows:
+        layout.table(('Testing state field','Saved value',None,'Recorded badge','Recorded (UTC)'),rows,
+            title='Current shared assembly testing state')
+        layout.note_row('This is the saved current cursor. Every prior decision, test attempt, failure, return and correction is listed in the route, inspection and rework histories. A test report and QA acceptance are separate records.')
+
+
+def _append_testing_route(layout,r):
+    events=_testing_events(r)
+    if not events:
+        return
+    scope=lambda key:_scope(key,r['item'].id,r['parent'])
+    layout.table(('Testing event ID','Source item ID','Record scope','Traveler step','Testing cycle','Test / phase','Attempt',
+        'Testing action','Decision / result','Recorded (UTC)','Employee name','Employee badge','Reference','Next phase','Notes'),[
+        [str(e.id),e.item_id,scope(e.item_id),e.step,e.data.get('testing_cycle'),
+            (_test_label(e.data.get('test_kind'))+' / '+e.data.get('testing_phase','')).strip(' /'),
+            e.data.get('testing_attempt'),e.data.get('testing_action'),e.data.get('testing_decision') or e.data.get('test_result') or ('FAIL' if e.action=='fail' else None),
+            _utc(e.at),r['names'].get(e.actor,''),e.actor,e.reference,e.data.get('next_phase'),
+            _testing_transition_notes(e.data,e.notes)]
+        for e in events],title='Assembly testing decisions and phase history')
+    layout.note_row('Testing phases repeat numeric Steps 17–19. A start, report, correction or intermediate QA pass does not by itself complete all testing. NO marks Steps 18–19 not required; it does not create a test result or QA approval. Legacy Hydro/UT events are retained under their saved definitions.')
+    moves=[]
+    for event in events:
+        handoff=event.data.get('handoff') or {}
+        if not handoff:
+            continue
+        before,after=handoff.get('from') or {},handoff.get('to') or {}
+        sender,receiver=handoff.get('sender') or {},handoff.get('receiver') or {}
+        moves.append([str(event.id),event.item_id,event.data.get('testing_cycle'),_test_label(event.data.get('test_kind')),
+            event.data.get('testing_attempt'),event.data.get('testing_action'),_utc(event.at),
+            sender.get('badge') or handoff.get('sender_badge'),sender.get('name'),
+            before.get('location_id'),before.get('location'),
+            receiver.get('badge') or handoff.get('receiver_badge'),receiver.get('name'),
+            after.get('location_id'),after.get('location'),handoff.get('handoff_recorded_by')])
+    layout.table(('Testing handoff event ID','Source item ID','Testing cycle','Test','Attempt','Testing action','Recorded (UTC)',
+        'Sender badge','Saved sender name','From station ID','From station label','Receiver badge','Saved receiver name',
+        'To station ID','To station label','Handoff recorded by badge'),moves,title='Recorded testing custody handoffs')
+
+
+def _append_testing_inspections(layout,r):
+    events=_testing_events(r)
+    if not events:
+        return
+    scope=lambda key:_scope(key,r['item'].id,r['parent'])
+    layout.table(('Test report event ID','Source item ID','Record scope','Testing cycle','Test','Attempt','Test result',
+        'Reported (UTC)','Report recorded by name','Report recorded by badge','Test report reference','Report notes',
+        'Testing sender badge','Saved testing sender name','Report basis SHA-256'),[
+        [str(e.id),e.item_id,scope(e.item_id),e.data.get('testing_cycle'),_test_label(e.data.get('test_kind')),
+            e.data.get('testing_attempt'),e.data.get('test_result'),_utc(e.at),r['names'].get(e.actor,''),e.actor,e.reference,e.notes,
+            ((e.data.get('handoff') or {}).get('sender') or {}).get('badge') or (e.data.get('handoff') or {}).get('sender_badge'),
+            ((e.data.get('handoff') or {}).get('sender') or {}).get('name'),(e.data.get('report') or {}).get('basis_sha256')]
+        for e in events if e.data.get('testing_action')=='complete'],title='Assembly NDT and pressure-test reports')
+    reviews=[]
+    for event in events:
+        if event.data.get('testing_action') != 'review':
+            continue
+        report=event.data.get('report') or {}
+        reviews.append([str(event.id),event.item_id,scope(event.item_id),event.data.get('testing_cycle'),
+            _test_label(event.data.get('test_kind')),event.data.get('testing_attempt'),event.data.get('test_result'),
+            _utc(event.at),r['names'].get(event.actor,''),event.actor,event.reference,
+            str(report['event_id']) if report.get('event_id') is not None else None,report.get('result'),
+            report.get('reference'),', '.join(map(str,event.data.get('closed_exception_ids') or [])),event.notes,report.get('basis_sha256')])
+    layout.table(('Test QA event ID','Source item ID','Record scope','Testing cycle','Test','Attempt','QA result',
+        'Reviewed (UTC)','QA name','QA badge','QA reference','Linked test report event ID','Linked test result',
+        'Linked test report reference','Closed exception IDs','Review notes','Linked report basis SHA-256'),reviews,title='Assembly test QA decisions')
+    layout.table(('NDT acceptance event ID','Source item ID','Testing cycle','Attempt','Construction basis SHA-256',
+        'Bound NDT report event ID','QA badge','Accepted (UTC)','QA reference'),[
+        [str(e.id),e.item_id,e.data.get('testing_cycle'),e.data.get('testing_attempt'),
+            e.data['ndt_accepted_basis'].get('basis_sha256'),
+            str(e.data['ndt_accepted_basis']['report_event_id']) if e.data['ndt_accepted_basis'].get('report_event_id') is not None else None,
+            e.actor,_utc(e.at),e.reference]
+        for e in events if e.data.get('ndt_accepted_basis')],title='Recorded NDT construction acceptance')
+    layout.note_row('Test reports retain the saved result, recording employee and actual sending custodian separately. QA decisions retain their explicit linked report snapshot and review identity. A failed attempt remains after correction or a later PASS. Current acceptance also depends on live readiness and the controlled evidence basis.')
+
+
+def _append_testing_rework(layout,r):
+    failures=[]
+    corrections=[]
+    carryovers=[]
+    scope=lambda key:_scope(key,r['item'].id,r['parent'])
+    for event in _testing_events(r):
+        data=event.data
+        if event.action=='fail' and data.get('testing_action')=='review':
+            origin=data.get('return_to') or {}
+            handoff=data.get('handoff') or {}
+            receiver=handoff.get('receiver') or {}
+            failures.append([str(event.id),event.item_id,scope(event.item_id),data.get('testing_cycle'),
+                _test_label(data.get('test_kind')),data.get('testing_attempt'),
+                str(data['exception_id']) if data.get('exception_id') is not None else None,event.reference,
+                origin.get('location_id'),origin.get('location_label'),origin.get('sender_badge'),origin.get('sender_name'),
+                receiver.get('badge') or handoff.get('receiver_badge'),_utc(event.at),event.notes])
+        elif data.get('testing_action')=='correct':
+            correction=data.get('correction') or {}
+            corrections.append([str(event.id),event.item_id,scope(event.item_id),data.get('testing_cycle'),
+                _test_label(data.get('test_kind')),data.get('testing_attempt'),
+                str(correction['exception_id']) if correction.get('exception_id') is not None else None,
+                _utc(event.at),r['names'].get(event.actor,''),event.actor,
+                correction.get('reference') or event.reference,correction.get('resolution') or data.get('resolution'),
+                data.get('next_phase'),event.notes])
+        if any(key in data for key in ('carried_exception_ids','remaining_exception_ids')):
+            carryovers.append([str(event.id),event.item_id,scope(event.item_id),data.get('testing_cycle'),
+                _test_label(data.get('test_kind')),data.get('testing_action'),_utc(event.at),data.get('next_cycle'),
+                ', '.join(map(str,data.get('closed_exception_ids') or [])),
+                ', '.join(map(str,data.get('carried_exception_ids') or [])),
+                ', '.join(map(str,data.get('remaining_exception_ids') or [])),
+                _exception_kinds(data.get('carried_exception_kinds') or data.get('remaining_exception_kinds')),
+                event.actor,event.notes])
+    if not failures and not corrections and not carryovers:
+        return
+    layout.table(('Failed test event ID','Source item ID','Record scope','Testing cycle','Test','Attempt','Exception ID',
+        'Failure reference','Return station ID','Return station label','Required return badge','Saved return employee name',
+        'Recorded receiving badge','Returned (UTC)','Failure / reason'),failures,title='Failed test returns to the recorded sender and station')
+    layout.table(('Testing correction event ID','Source item ID','Record scope','Testing cycle','Test','Attempt corrected',
+        'Exception ID','Correction recorded (UTC)','Recorded by name','Recorded by badge','Correction reference','Corrective work',
+        'Next phase','Saved notes'),corrections,title='Mandatory testing corrections')
+    layout.table(('Testing carryover event ID','Source item ID','Record scope','Testing cycle','Test','Testing action',
+        'Recorded (UTC)','Next testing cycle','Closed exception IDs','Carried exception IDs','Remaining exception IDs',
+        'Recorded exception types','Recorded badge','Notes'),carryovers,title='Testing exceptions carried or resolved across phases')
+    layout.note_row('A recorded correction requires a new test attempt and a separate QA decision. Correction timestamps record completion/recording only; no unrecorded work start or duration is inferred. Exception closure remains separately identified by the accepting QA event.')
 
 
 def _is_root(req):
@@ -438,16 +663,19 @@ def report_layouts(s,r):
         ['Missing events','Earlier baseline steps and work dates have not been reconstructed. Open visits are measured to the captured export timestamp.'],
         ['Weld work','Existing work events record completion/recording time only. Missing start times, independent recorder identities and per-operation durations stay blank.'],
         ['Inspection cycles','Work cycles and requirement cycles are separate counters. Approval events are not joined to work solely because their cycle numbers match.'],
+        ['Assembly testing','Explicit NDT and pressure-test phases are shown only when the phased protocol is recorded. Legacy Hydro/UT history is not reclassified.'],
         ['Material source','BOM source changed; adoption/review required.' if state['source_status']['changed'] else 'Current material values and retained history are exported as stored.'],
         ['Original documents','The document index lists references and stored file hashes. Download the listed files or an issued Job Packet for the original documents.'],
         ['QA release',('Recorded release at '+_utc(item.released_at).isoformat()) if item.released and item.released_at else 'Not recorded'],
     ])
+    _append_testing_summary(intro,r)
     book.append(intro)
 
     route = Layout('24-step Route','24-step production history',
         'Each recorded visit is retained. Performed by identifies the saved route/timer actor; handoff badges remain in the event detail below.',
         (9,42,38,16,26,34,24,24,24,32,40,66))
     route.table(ROUTE_HEADERS,_route_rows(r))
+    _append_testing_route(route,r)
     station_rows = []
     for visit in r['station'].get('station_visits',[]):
         start,end = _stamp(visit.get('entered_at')),_stamp(visit.get('departed_at'))
@@ -543,6 +771,7 @@ def report_layouts(s,r):
         'Recorded badge','Reference','Notes','Evidence fingerprint','Saved review snapshot'),[
         [str(e.id),e.item_id,scope(e.item_id) if e.item_id else 'Shared project review',e.code,e.decision,_utc(e.at),names.get(e.actor,''),e.actor,
             e.reference,e.notes,e.fingerprint,_json(e.snapshot)] for e in r['packet_reviews']],title='Job Packet review history')
+    _append_testing_inspections(inspections,r)
     book.append(inspections)
 
     work = Layout('Work and Rework','Weld work and rework detail',
@@ -585,6 +814,7 @@ def report_layouts(s,r):
             'Closed hold' if e.closed_at else 'Open',e.close_notes,None] for e in r['holds']]+[
         ['FLOW-'+str(e.id),e.item_id,'QA flow exception',_stamp(e.closed_at),names.get(e.closed_by,''),e.closed_by,
             'Passed reinspection' if e.closed_at else 'Open',e.resolution,e.reference] for e in r['exceptions']],title='Correction and hold closures')
+    _append_testing_rework(work,r)
     work.table(('Event ID','Source item ID','Record scope','Recorded (UTC)','Current directory name','Recorded badge','Event','Saved details'),[
         [str(e.id),e.item_id,scope(e.item_id),_utc(e.at),names.get(e.actor,''),e.actor,e.event,_json(e.details)] for e in r['audit']],title='Saved production and correction audit events')
     book.append(work)

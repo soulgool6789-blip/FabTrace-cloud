@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.03-edit-removal.1'
+APP_VERSION='2026.11.03-testing-route.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -629,6 +629,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(SpoolPlan.item_id).limit(1))
     s.execute(select(SpoolProcessEvent.id).limit(1))
     s.execute(select(FlowPlan.item_id).limit(1))
+    s.execute(select(FlowTestingState.item_id).limit(1))
     s.execute(select(QualityWorkspace.id).limit(1))
     s.execute(select(DossierProject.project_id).limit(1))
     s.execute(select(DossierIssue.id).limit(1))
@@ -677,6 +678,8 @@ from flow import (router as flow_router, FlowPlan, flow_release_errors,
                   lock_topology as lock_flow_topology, guard_reopen as guard_flow_reopen,
                   on_item_reopened as on_flow_item_reopened)
 app.include_router(flow_router)
+
+from flow_testing import FlowTestingState
 
 from parts import router as parts_router, SpoolPartsPlan, PartLine, PartAllocation, PartEvent
 app.include_router(parts_router)

@@ -749,7 +749,7 @@ def test_ready_to_ship_requires_child_packets_and_d04_then_shipping_keeps_issued
     inspect_dimensions(api, child)
     advance(api, child, role="inspector")
     advance(api, child)
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     for step in range(17, 23):
         if step in (18, 22):
@@ -812,4 +812,5 @@ def test_ready_to_ship_requires_child_packets_and_d04_then_shipping_keeps_issued
     assert packet(api, child)["latest_issue"]["current"]
     signed(issue_project(api))
     assert project(api)["latest_project_issue"]["current"]
+
 

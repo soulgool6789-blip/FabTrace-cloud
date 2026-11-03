@@ -274,7 +274,7 @@ def test_assembly_work_at17_can_defer_heat_and_mtr_but_release_to_testing_cannot
     child = completed_spool(api, 'HEAT-ASSEMBLY-CHILD')
     record = add_weld(api, assembly, **({'heat_a': '', 'heat_b': ''} if missing == 'heat'
                                       else {'mtr_a': '', 'mtr_b': ''}))
-    enroll(api, assembly, 'assembly', expected_children=1)
+    enroll(api, assembly, 'assembly', expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     ready_to_weld(api, assembly, record['id'])
     finish_weld(api, record['id'])
@@ -301,7 +301,7 @@ def test_late_assembly_baseline_cannot_skip_post_fabrication_heat_gate(api, star
 def test_active_child_heat_and_mtr_are_rechecked_at_assembly_testing_and_admin_release(api, field, label):
     assembly = create_item(api, 'HEAT-CHILD-SCOPE', kind='Assembly', planned=0)
     child = completed_spool(api, 'HEAT-CHILD-RETAINED')
-    enroll(api, assembly, 'assembly', expected_children=1)
+    enroll(api, assembly, 'assembly', expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     # Model a retained incomplete traceability record. No old approval is rewritten.
     boms = importlib.import_module('spool_boms')
@@ -318,3 +318,4 @@ def test_active_child_heat_and_mtr_are_rechecked_at_assembly_testing_and_admin_r
     response = blocked(api, f'{FLOW}/items/{assembly}/advance', action_body(api, assembly), expected=label)
     assert child in response.text
     blocked(api, f'/api/admin/items/{assembly}/release', disposition_body(api, assembly), expected=label)
+

@@ -87,6 +87,7 @@
 #productionProgressPage .pp-stage-not_applicable{background:#f1f4f7;border-style:dashed;color:#8392a1;display:flex;flex-direction:column;justify-content:space-between}
 #productionProgressPage .pp-stage-not_applicable small{font-size:10px}
 #productionProgressPage .pp-stage-not_recorded{border-color:#e8cc8c}
+#productionProgressPage .pp-stage-not_required{background:#f4f6f8;border-style:dashed;color:#657589}
 #productionProgressPage .pp-stage-scope_unknown{border-style:dashed;background:#fffaf0}
 #productionProgressPage .pp-stage-missing{display:block;color:#8b5700;font-size:10px;line-height:1.4;margin-top:7px}
 #productionProgressPage .pp-stage-sequence{display:inline-block;color:#587188;background:#eaf0f6;border-radius:50%;text-align:center;font-size:9px;line-height:17px;min-width:17px;margin-right:5px}
@@ -131,6 +132,8 @@
 #productionProgressPage .pp-step-current{border-color:#80bada!important;background:#eff8fe!important}
 #productionProgressPage .pp-step-current .pp-step-number{background:#1676a8;color:white}
 #productionProgressPage .pp-step-not_recorded .pp-step-number{background:#fff0cb;color:#916722}
+#productionProgressPage .pp-step-not_required{border-style:dashed;background:#f4f6f8}
+#productionProgressPage .pp-step-not_required .pp-step-number{background:#e4e9ef;color:#617184}
 #productionProgressPage .pp-qa{font-size:9px;font-weight:600;color:#7b608a;border:1px solid #ddd1e7;border-radius:3px;padding:1px 4px;margin-left:6px;white-space:nowrap}
 #productionProgressPage .pp-readiness p{font-size:11px;color:var(--pp-muted)}
 #productionProgressPage .pp-record-actions{margin-top:15px}

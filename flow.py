@@ -25,7 +25,7 @@ from flow_stages import STAGES, STAGE_BY_STEP, QA_DISPLAY_CODES
 
 
 router = APIRouter(prefix='/api/flow', tags=['CLM process flow'])
-VERSION = 'CLM-24-v5'
+VERSION = 'CLM-24-v6'
 TOPOLOGY_LOCK = 0x4641425452414345
 MANAGE = ['admin', 'supervisor']
 HANDOFF = ['admin', 'supervisor', 'handler']
@@ -72,7 +72,7 @@ STEPS = (
     _step(14, 'Complete Welds', 'Spool fabrication', ['Complete all individual weld operations to the approved WPS']),
     _step(15, 'Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
     _step(16, 'Return to Floor', 'Spool fabrication', ['Material coordinator receives the completed spool on the floor', 'Record the scanned handoff']),
-    _step(17, 'Release to Testing (Hydro/UT)', 'Testing', ['Verify the assembly ID and every required released child spool', 'Scan each child spool barcode', 'Release the assembly for applicable Hydro/UT testing']),
+    _step(17, 'Determine if Spool need to be sent to Testing', 'Testing', ['Verify the assembly ID and every required released child spool', 'Scan each child spool barcode', 'Determine testing requirements against the approved scope']),
     _step(18, 'Verify Test Results', 'Testing', ['Verify applicable Hydro/UT results against the approved requirements', 'Verify current passing dimensions and required weld / test acceptance', 'Record the test report and QA/QC approval reference']),
     _step(19, 'Return to Floor', 'Testing', ['Material coordinator receives the tested assembly on the floor', 'Record the scanned handoff']),
     _step(20, 'Release to Sandblast and Paint', 'Sandblast & paint', ['Material coordinator issues the assembly', 'Record the scanned handoff']),
@@ -82,6 +82,9 @@ STEPS = (
     _step(24, 'Ship to Customer', 'Shipment', ['Scan the assembly at shipping', 'Record shipment and its destination', 'Complete production records / close the work order']),
 )
 STEP_BY_NUMBER = {row['number']: row for row in STEPS}
+LEGACY_STEP_17 = _step(17, 'Release to Testing (Hydro/UT)', 'Testing',
+    ['Verify the assembly ID and every required released child spool', 'Scan each child spool barcode',
+     'Release the assembly for applicable Hydro/UT testing'])
 
 
 class FlowPlan(Base):
@@ -152,6 +155,10 @@ PLAN_KEYS = tuple(FlowPlan.__table__.columns.keys())
 EVENT_KEYS = tuple(FlowEvent.__table__.columns.keys())
 EXCEPTION_KEYS = tuple(FlowException.__table__.columns.keys())
 
+# Import after the historical models so metadata and lazy flow references stay
+# compatible with the existing main/tracking import order.
+from flow_testing import FlowTestingState
+
 
 class Input(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
@@ -194,12 +201,32 @@ class AdvanceIn(VersionIn):
     shipment_reference: str = Field(default='', max_length=500)
     destination: str = Field(default='', max_length=500)
     resolution: str = Field(default='', max_length=3000)
+    testing_phase: str = Field(default='', max_length=40)
+    testing_attempt: int | None = Field(default=None, ge=1, strict=True)
+    testing_action: Literal['decision', 'start', 'complete', 'review', 'correct', 'handoff'] | None = None
+    testing_decision: Literal['YES', 'NO'] | None = None
+    test_result: Literal['PASS', 'FAIL'] | None = None
 
 
 class FailIn(VersionIn):
     reason: str = Field(min_length=4, max_length=3000)
     reference: str = Field(min_length=2, max_length=500)
     return_step: int | None = Field(default=None, ge=1, le=24, strict=True)
+    testing_phase: str = Field(default='', max_length=40)
+    testing_attempt: int | None = Field(default=None, ge=1, strict=True)
+    testing_action: Literal['review'] | None = None
+    test_result: Literal['FAIL'] | None = None
+    scanned_item_id: str = Field(default='', max_length=60)
+    sender_badge: str = Field(default='', max_length=80)
+    receiver_badge: str = Field(default='', max_length=80)
+    location_id: str = Field(default='', max_length=80)
+    operational_status: str = Field(default='', max_length=40)
+    expected_transfer_version: int | None = Field(default=None, ge=0, strict=True)
+
+
+class RestartTestingIn(VersionIn):
+    reason: str = Field(min_length=4, max_length=3000)
+    reference: str = Field(min_length=2, max_length=500)
 
 
 class DeliverIn(VersionIn):
@@ -263,7 +290,8 @@ def _commit(s):
         raise HTTPException(409, 'Conflicting process-flow update; refresh and retry. No changes were saved.') from None
 
 
-def _event(s, item, plan, actor, action, step, at, reference='', notes='', data=None, first=False):
+def _event(s, item, plan, actor, action, step, at, reference='', notes='', data=None, first=False,
+           step_definition=None):
     at = _utc(at)
     if plan.updated_at and at < _utc(plan.updated_at):
         raise HTTPException(409, 'Server clock precedes the last process-flow update; retry when time has caught up')
@@ -271,8 +299,14 @@ def _event(s, item, plan, actor, action, step, at, reference='', notes='', data=
         plan.version += 1
     plan.updated_at = at
     item.updated_at = at
+    if step_definition is None:
+        step_definition = STEP_BY_NUMBER.get(step)
+        if step == 17:
+            from flow_testing import testing_state, phase_definition
+            testing = testing_state(s, plan)
+            step_definition = phase_definition(testing, step_definition) if testing else LEGACY_STEP_17
     data = {**(data or {}), 'definition_version': VERSION,
-        'step_definition': STEP_BY_NUMBER.get(step)}
+        'step_definition': step_definition}
     row = FlowEvent(item_id=item.id, sequence=plan.version, action=action, step=step,
         actor=actor, at=at, reference=reference, notes=notes, data=data)
     s.add(row)
@@ -284,7 +318,24 @@ def _event(s, item, plan, actor, action, step, at, reference='', notes='', data=
 
 def _sync(s, item, actor, step, at, notes):
     from production import sync_flow_process
-    sync_flow_process(s, item, actor, STEP_BY_NUMBER[step] if step is not None else None, at, notes)
+    plan = s.get(FlowPlan, item.id)
+    definition = current_step_definition(s, plan) if plan and step is not None else None
+    sync_flow_process(s, item, actor, definition, at, notes)
+
+
+def current_step_definition(s, plan):
+    if plan is None or plan.current_step is None:
+        return None
+    from flow_testing import testing_state, phase_definition
+    state = testing_state(s, plan)
+    base = STEP_BY_NUMBER[plan.current_step]
+    if state is None and plan.current_step == 17:
+        return LEGACY_STEP_17
+    if state is not None and plan.current_step == 22:
+        return {**base, 'return_steps': [17, 20, 21]}
+    return phase_definition(state, base) if state and state.phase in (
+        'decision', 'ndt', 'ndt_qa', 'ndt_rework', 'floor_before_pressure',
+        'pressure_test', 'pressure_qa', 'pressure_rework', 'floor_before_paint') else base
 
 
 def _exceptions(s, item_id, open_only=False):
@@ -433,8 +484,13 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     if not plan or plan.status != 'active' or plan.current_step is None:
         return []
     step = plan.current_step
+    from flow_testing import testing_state
+    testing = testing_state(s, plan)
     from spool_receiving import receiving_errors
     errors = receiving_errors(s, item)
+    if testing and testing.phase in ('decision', 'ndt', 'ndt_qa', 'ndt_rework',
+            'floor_before_pressure', 'pressure_test', 'pressure_qa', 'pressure_rework', 'floor_before_paint') and step >= 20:
+        errors.append('Complete the pending testing phase and required QA results before coating or final release')
     if step >= 15:
         errors.extend(post_fabrication_heat_errors(s, item))
     if step in (7, 9, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21, 23, 24):
@@ -445,13 +501,31 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
         errors.extend(_assembly_errors(s, item, plan))
     if step in (10, 11, 14):
         errors.extend(_weld_errors(s, item, step))
+    if testing and step == 17:
+        # A decision or completed correction leaves the editable fabrication
+        # phase. Test approvals remain at QA; own physical welds must already
+        # be complete before either YES or NO can send the item onward.
+        errors.extend(_weld_errors(s, item, 14))
     if step == 18 and (item.dimensional != 'Pass' or not item.dimension_at or not _after(item.dimension_at, item.last_work_at)):
         errors.append('Record a fresh passing dimensional inspection for the assembly')
     if step == 18:
         # Test verification precedes coating. Use the configured requirement
         # stages; final-release obligations may include post-coating records.
         errors.extend(tracking_release_errors(s, item,
+            requirement_stages=('before_welding', 'after_welding'),
+            deferred_requirement_roles=('pressure_testing_technician',)
+                if testing and testing.phase == 'ndt_qa' else ()))
+    if testing and step in (20, 21):
+        # NO bypasses test execution, never weld/dimensional/material readiness.
+        # YES also rechecks these gates if evidence changes after test approval.
+        errors.extend(tracking_release_errors(s, item,
             requirement_stages=('before_welding', 'after_welding')))
+    if testing and step in (20, 21, 22):
+        from flow_testing import accepted_report_errors
+        errors.extend(accepted_report_errors(s, item, plan))
+    elif testing:
+        from flow_testing import ndt_prerequisite_errors
+        errors.extend(ndt_prerequisite_errors(s, item, plan))
     if step in (15, 22):
         errors.extend(tracking_release_errors(s, item))
     if step in (16, 23, 24) and not item.released:
@@ -471,6 +545,10 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     for exception in _exceptions(s, item.id, True):
         # Rework steps remain available. A matching QA step can resolve the
         # ticket with new evidence and explicit resolution notes.
+        if (testing and testing.phase == 'floor_before_pressure' and
+                exception.id in testing.pending_exception_ids and
+                testing.pending_exception_kinds.get(str(exception.id)) == 'pressure'):
+            continue
         if step > exception.step or (step == exception.step and not allow_matching_exception):
             errors.append(f'Open exception from step {exception.step} requires passing reinspection')
     return list(dict.fromkeys(errors))
@@ -493,6 +571,13 @@ def flow_release_errors(s, item, approving_step=None, for_update=True):
     if required is None:
         return ['Components complete preparation through their traveler; final spool release is not a component action']
     errors = []
+    from flow_testing import ACTIVE_PHASES, testing_state
+    testing = testing_state(s, plan)
+    if testing and testing.phase in ACTIVE_PHASES:
+        errors.append('Complete the recorded testing decision, applicable tests and QA results before final release')
+    if testing:
+        from flow_testing import accepted_report_errors
+        errors.extend(accepted_report_errors(s, item, plan))
     if approving_step != required or plan.current_step != required or plan.status != 'active':
         errors.append(f'Complete QA step {required} in the CLM process flow to approve final release')
     if for_update:
@@ -526,7 +611,9 @@ def guard_reopen(s, item):
     if parent_id:
         parent_item = lock_item(s, parent_id)
         parent = s.get(FlowPlan, parent_item.id)
-        if parent and (parent.status != 'active' or (parent.current_step or 99) >= 18 or parent_item.released):
+        from flow_testing import fabrication_editable
+        if parent and (parent.status != 'active' or (parent.current_step or 99) >= 18 or parent_item.released
+                       or not fabrication_editable(s, parent)):
             raise HTTPException(409, 'Return the parent assembly to step 17 through its controlled QA/rework flow before reopening a child spool')
 
 
@@ -535,6 +622,12 @@ def on_item_reopened(s, item, actor, at):
     if not plan:
         return
     step = 15 if plan.route == 'spool' else 22 if plan.route == 'assembly' else None
+    from flow_testing import PHASE_STEP, testing_state
+    testing = testing_state(s, plan)
+    if testing and testing.phase in PHASE_STEP:
+        step = PHASE_STEP[testing.phase]
+        testing.phase_entered_at = at
+        testing.updated_at = at
     if step is None:
         return
     plan.status = 'active'
@@ -554,13 +647,18 @@ def guard_weld_operation(s, item, operation):
     allowed = (10, 14) if operation == 'fitup' else (14,)
     if plan.route == 'assembly':
         allowed = (17,)
-    if plan.status != 'active' or plan.current_step not in allowed:
+    from flow_testing import fabrication_editable
+    if (plan.status != 'active' or plan.current_step not in allowed or
+            plan.route == 'assembly' and not fabrication_editable(s, plan)):
         raise HTTPException(409, 'Record this work at the fabrication step in the CLM traveler: ' + ', '.join(map(str, allowed)))
 
 
 def _step_states(s, plan):
     route = ROUTE_BY_ID[plan.route]
-    states = {number: {**STEP_BY_NUMBER[number], 'status': 'not_recorded' if number < plan.baseline_step else 'pending',
+    from flow_testing import testing_state, project_step_states
+    testing = testing_state(s, plan)
+    states = {number: {**(LEGACY_STEP_17 if number == 17 and testing is None else STEP_BY_NUMBER[number]),
+        'status': 'not_recorded' if number < plan.baseline_step else 'pending',
         'completed_at': None, 'last_actor': None, 'attempts': 0} for number in range(route['first_step'], route['last_step'] + 1)}
     for event in s.scalars(select(FlowEvent).where(FlowEvent.item_id == plan.item_id).order_by(FlowEvent.sequence)):
         if event.action in ('fail', 'reopen', 'admin_return_to_work'):
@@ -568,12 +666,16 @@ def _step_states(s, plan):
             for number, state in states.items():
                 if target is not None and number >= target:
                     state.update(status='pending', completed_at=None, last_actor=None)
-        elif event.action == 'advance' and event.step in states:
+        elif event.action == 'advance' and event.step in states and not event.data.get('phase_only'):
             states[event.step].update(status='completed', completed_at=_utc(event.at).isoformat(), last_actor=event.actor)
             states[event.step]['attempts'] += 1
     if plan.status == 'active' and plan.current_step in states:
         states[plan.current_step]['status'] = 'current'
-    return list(states.values())
+    projected = project_step_states(list(states.values()), testing)
+    for row in projected:
+        if row['status'] == 'current' and (plan.status != 'active' or row['number'] != plan.current_step):
+            row['status'] = 'pending'
+    return projected
 
 
 def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, stations=None, stage_cache=None):
@@ -629,7 +731,7 @@ def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cach
     return {
         'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
-        'current_title': STEP_BY_NUMBER[plan.current_step]['title'] if plan and plan.current_step else '',
+        'current_title': current_step_definition(s, plan)['title'] if plan and plan.current_step else '',
         **(presentation if presentation is not None else item_presentation(
             s, item, plan=plan, stations=stations, stage_cache=stage_cache)),
         'step_entered_at': _utc(plan.step_entered_at).isoformat() if plan and plan.step_entered_at else None,
@@ -665,7 +767,7 @@ def detail(s, item, user):
     if not plan and user.role in MANAGE and not arrival_blockers:
         actions.append('start')
     if plan and plan.status == 'active':
-        step = STEP_BY_NUMBER[plan.current_step]
+        step = current_step_definition(s, plan)
         if user.role in step['roles']:
             if not arrival_blockers:
                 actions.append('advance')
@@ -673,10 +775,15 @@ def detail(s, item, user):
                 actions.append('fail')
         if plan.route == 'component' and (plan.current_step <= 5 or not link) and user.role in HANDOFF:
             actions.append('assign-component')
-        if plan.route == 'assembly' and plan.current_step == 17 and user.role in MANAGE:
+        from flow_testing import assembly_editable
+        editable = assembly_editable(s, plan)
+        if plan.route == 'assembly' and plan.current_step == 17 and editable and user.role in MANAGE:
             actions.append('link-spool')
-        if user.role in MANAGE and (plan.route == 'spool' and plan.current_step == 9 or plan.route == 'assembly' and plan.current_step == 17):
+        if user.role in MANAGE and (plan.route == 'spool' and plan.current_step == 9 or plan.route == 'assembly' and plan.current_step == 17 and editable):
             actions.append('scope')
+        from flow_testing import restart_allowed
+        if user.role in MANAGE and restart_allowed(s, item, plan):
+            actions.append('restart-testing')
         actions.extend(action for action in process['permissions']['allowed_actions'] if action in ('pause', 'resume'))
     if plan and plan.status == 'shipped' and user.role in HANDOFF:
         actions.append('deliver')
@@ -692,6 +799,7 @@ def detail(s, item, user):
     stations, stage_cache = station_positions(s, family.values()), {}
     display = item_presentation(s, item, plan=plan, receiving=arrival,
                                 stations=stations, stage_cache=stage_cache)
+    from flow_testing import summary as testing_summary
     return {
         'project_id': project_id, 'subproject_id': subproject_id,
         'removal': removal_summary(s, 'item', item.id), 'can_mutate': active,
@@ -706,7 +814,7 @@ def detail(s, item, user):
         'transfer': transfer_snapshot(s, item, user),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
         'flow': {**_dict(plan, PLAN_KEYS), 'steps': _step_states(s, plan),
-            'current': STEP_BY_NUMBER[plan.current_step] if plan.current_step else None,
+            'current': current_step_definition(s, plan), 'testing': testing_summary(s, plan),
             'blockers': _step_errors(s, item, plan)} if plan else None,
         'production_process': process,
         'components': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in component_ids],
@@ -832,7 +940,7 @@ def start(item_id: str, data: StartIn, u: Employee = Depends(auth), s: Session =
 
 def _verify_form(s, item, plan, data):
     from transfers import validate_location, validate_transfer
-    step = STEP_BY_NUMBER[plan.current_step]
+    step = current_step_definition(s, plan)
     expected = {row['id'] for row in step['checks']}
     if len(data.confirmations) != len(set(data.confirmations)) or set(data.confirmations) != expected:
         raise HTTPException(422, 'Confirm each checklist entry for the current step exactly once')
@@ -855,15 +963,22 @@ def _verify_form(s, item, plan, data):
         link = s.get(ComponentLink, item.id)
         if not link or data.target_spool_id != link.spool_id:
             raise HTTPException(422, 'Verify the selected target spool ID against this component assignment')
-    if step['number'] == 17:
+    if step.get('requires_child_scans', step['number'] == 17):
         expected_ids = _spool_ids(s, item.id)
         if len(data.scanned_child_ids) != len(set(data.scanned_child_ids)) or set(data.scanned_child_ids) != set(expected_ids):
             raise HTTPException(422, 'Scan or enter each linked child spool exactly once')
     if step['number'] == 24 and any(len(value) < 2 for value in (data.carrier, data.shipment_reference, data.destination)):
         raise HTTPException(422, 'Record the carrier, shipment reference and destination before marking shipped')
     matching = [row for row in _exceptions(s, item.id, True) if row.step == step['number']]
+    from flow_testing import testing_state
+    testing = testing_state(s, plan)
+    if testing and testing.phase in ('ndt_qa', 'pressure_qa'):
+        matching = [row for row in matching if row.id in testing.pending_exception_ids and
+                    testing.pending_exception_kinds.get(str(row.id)) == testing.test_kind]
     if matching and len(data.resolution) < 4:
         raise HTTPException(422, 'Record the corrective disposition / resolution for the open exception before passing reinspection')
+    if step.get('requires_resolution') and len(data.resolution) < 4:
+        raise HTTPException(422, 'Record the completed corrective work before starting a fresh test attempt')
     return selected, matching
 
 
@@ -880,11 +995,16 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     _version(plan, data.expected_version)
     if plan.status != 'active' or plan.current_step is None:
         raise HTTPException(409, 'This traveler has no current production step')
-    step = STEP_BY_NUMBER[plan.current_step]
+    step = current_step_definition(s, plan)
     permit(u, *step['roles'])
     if item.released and step['number'] not in (16, 23, 24):
         raise HTTPException(409, 'Only post-QA handoff and shipping steps may change a released item')
     _lock_children(s, item, plan)
+    from flow_testing import advance_testing, is_active
+    if is_active(s, plan):
+        return advance_testing(s, item, plan, data, u)
+    if data.testing_phase or data.testing_attempt is not None or data.testing_action is not None or data.testing_decision is not None or data.test_result is not None:
+        raise HTTPException(422, 'Testing phase fields are only accepted at the current versioned testing action')
     selected, matching = _verify_form(s, item, plan, data)
     errors = _step_errors(s, item, plan, quality_for_update=True)
     if errors:
@@ -940,12 +1060,18 @@ def fail(item_id: str, data: FailIn, u: Employee = Depends(auth), s: Session = D
     _version(plan, data.expected_version)
     if plan.status != 'active' or plan.current_step is None:
         raise HTTPException(409, 'There is no active QA step to fail')
-    step = STEP_BY_NUMBER[plan.current_step]
+    step = current_step_definition(s, plan)
     permit(u, *step['roles'])
     if not step['qa']:
         raise HTTPException(409, 'Exception routing is available at the defined QA / material verification steps')
     if item.released:
         raise HTTPException(409, 'Reopen this released item before recording a new QA failure')
+    from flow_testing import fail_testing, is_active
+    if is_active(s, plan):
+        _lock_children(s, item, plan)
+        return fail_testing(s, item, plan, data, u)
+    if data.testing_phase or data.testing_attempt is not None or data.testing_action is not None or data.test_result is not None:
+        raise HTTPException(422, 'Testing phase fields are only accepted at the current versioned testing QA review')
     target = data.return_step if data.return_step is not None else (21 if step['number'] == 22 else step['return_steps'][0])
     if target not in step['return_steps']:
         raise HTTPException(422, 'Choose one of this inspection step\'s allowed rework destinations')
@@ -966,11 +1092,44 @@ def fail(item_id: str, data: FailIn, u: Employee = Depends(auth), s: Session = D
         item.dimension_at = None
         item.reinspection_due = True
     failed_step = step['number']
+    from flow_testing import event_context, testing_state
+    testing = testing_state(s, plan)
+    testing_context = event_context(testing, action='restart') if testing and failed_step == 22 and target == 17 else {}
     plan.current_step = target
     plan.step_entered_at = now
+    from flow_testing import restart_after_final_qa
+    restart_after_final_qa(s, plan, failed_step, target, now)
     _event(s, item, plan, u.badge, 'fail', failed_step, now, data.reference, data.reason,
-        {'exception_id': row.id, 'return_step': target})
+        {'exception_id': row.id, 'return_step': target, **testing_context,
+         **({'next_step': target, 'next_phase': testing.phase, 'next_cycle': testing.cycle}
+            if testing_context else {})}, step_definition=step)
     _sync(s, item, u.badge, target, now, f'CLM QA exception {row.id}: {data.reason}')
+    _commit(s)
+    return detail(s, item, u)
+
+
+@router.post('/items/{item_id}/restart-testing')
+def restart_testing(item_id: str, data: RestartTestingIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    permit(u, *MANAGE)
+    item, plan = _locked(s, item_id)
+    _version(plan, data.expected_version)
+    from flow_testing import event_context, restart_allowed, restart_cycle, testing_state
+    testing = testing_state(s, plan)
+    if not restart_allowed(s, item, plan):
+        raise HTTPException(409, 'Return to testing requires the applicable QA disposition and completed correction before starting a fresh test cycle')
+    _lock_children(s, item, plan)
+    now, prior_step = _utc(utcnow()), plan.current_step
+    context = event_context(testing, action='restart')
+    carried = list(testing.pending_exception_ids)
+    carried_kinds = dict(testing.pending_exception_kinds)
+    definition = current_step_definition(s, plan)
+    testing = restart_cycle(s, plan, now)
+    _event(s, item, plan, u.badge, 'reopen', prior_step, now, data.reference, data.reason,
+        {**context, 'return_step': 17, 'next_step': 17, 'next_phase': testing.phase,
+         'next_cycle': testing.cycle, 'testing_required_preserved': testing.decision == 'YES',
+         'carried_exception_ids': carried, 'carried_exception_kinds': carried_kinds},
+        step_definition=definition)
+    _sync(s, item, u.badge, 17, now, 'Controlled return for a fresh testing cycle')
     _commit(s)
     return detail(s, item, u)
 
@@ -1056,7 +1215,9 @@ def link_spool(item_id: str, data: LinkIn, u: Employee = Depends(auth), s: Sessi
     permit(u, *MANAGE)
     assembly, plan = _locked(s, item_id)
     _version(plan, data.expected_version)
-    if plan.route != 'assembly' or plan.status != 'active' or plan.current_step != 17 or assembly.released:
+    from flow_testing import assembly_editable
+    if (plan.route != 'assembly' or plan.status != 'active' or plan.current_step != 17 or assembly.released
+            or not assembly_editable(s, plan)):
         raise HTTPException(409, 'Link child spools at step 17 before releasing the assembly to testing')
     child = lock_item(s, data.spool_id)
     child_plan = s.scalar(select(SpoolPlan).where(SpoolPlan.item_id == child.id).execution_options(populate_existing=True))
@@ -1100,9 +1261,10 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
     elif plan.route == 'assembly':
         from orders import guard_flow_scope as guard_order_scope
         guard_order_scope(s, item_id, data.expected_children)
+    from flow_testing import assembly_editable
     if plan.status != 'active' or item.released or not (
             plan.route == 'spool' and plan.current_step == 9 or
-            plan.route == 'assembly' and plan.current_step == 17):
+            plan.route == 'assembly' and plan.current_step == 17 and assembly_editable(s, plan)):
         raise HTTPException(409, 'Change child scope before spool step 9 is completed, or at assembly step 17 before release to testing')
     ids = _lock_children(s, item, plan)
     if data.expected_children < len(ids):
@@ -1122,4 +1284,5 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
         {'before': before, 'after': after})
     _commit(s)
     return detail(s, item, u)
+
 

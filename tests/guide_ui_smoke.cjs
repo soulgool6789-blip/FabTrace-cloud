@@ -68,6 +68,10 @@ async function check(name,fn){await fn();checks.push(name);}
     const before=calls.length;await context.FabGuide.open({project:'P1',section:'flow'});
     assert.deepEqual(calls.slice(before).map(c=>c.url),['/api/progress/projects','/api/dossier/projects','/api/progress/projects/P1','/api/dossier/projects/P1']);
     assert.equal(context.url,'/?guide=1&project=P1&section=flow');assert.deepEqual(topics(),['flow']);
+    assert.match(html(),/CLM-24-v6/);assert.match(html(),/explicit <strong>YES or NO<\/strong>; neither is preselected/);
+    assert.match(html(),/NDT at 17 → NDT QA\/QC at 18 → Floor at 19 → pressure testing at 17 → pressure QA\/QC at 18 → Floor at 19 → Paint\/finishing at 20/);
+    assert.match(html(),/exact previous testing station and employee who sent the attempt into QA\/QC/);assert.match(html(),/Scope stays locked through later correction and restart cycles/);
+    assert.match(html(),/Return to testing/);assert.match(html(),/QA\/QC controls the QA review/);assert.match(html(),/Historical travelers/);assert.doesNotMatch(html(),/CLM-24-v5/);
   });
   await check('empty and zero scope never means finished',async()=>{
     setProjects();await context.FabGuide.open();assert.match(html(),/No structured projects are registered/);assert.doesNotMatch(html(),/data-guide-status="done"/);assert.ok(topics().length>=10);
@@ -187,3 +191,4 @@ async function check(name,fn){await fn();checks.push(name);}
   });
   console.log('PASS: Guide & setup ('+checks.length+' contracts): '+checks.join('; ')+'.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

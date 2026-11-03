@@ -395,7 +395,9 @@ def _spool_deficits(s, order, groups, plans):
             if missing:
                 if parent.released:
                     raise HTTPException(409, 'Return the released purchase-order assembly to work before generating missing child spools.')
-                if traveler and (traveler.status != 'active' or traveler.current_step != 17):
+                from flow_testing import assembly_editable
+                if traveler and (traveler.status != 'active' or traveler.current_step != 17
+                                 or not assembly_editable(s, traveler)):
                     raise HTTPException(409, 'Generate missing child spools at step 17 before releasing the assembly to testing.')
                 deficits.append((group, parent.id, line, missing))
     return deficits
@@ -550,4 +552,5 @@ def generate_labels(project_id: str, data: GenerateLabelsIn,
                   remaining_quantity=result['totals']['remaining_quantity'])
     _commit(s)
     return result
+
 

@@ -162,11 +162,34 @@ def _components(s, spool_ids):
                 _remember(s, ComponentLink, row.component_id, row)
 
 
+def prime_testing_eligibility(s, identifiers):
+    """Only untouched assembly Step 17 needs its historical-route check."""
+    if not projection_enabled(s):
+        return
+    from flow import FlowEvent, FlowPlan
+    from flow_testing import FlowTestingState
+    candidates = []
+    for key in set(identifiers):
+        plan = read_get(s, FlowPlan, key)
+        if (plan is not None and plan.route == 'assembly' and plan.status == 'active'
+                and plan.current_step == 17 and plan.baseline_step <= 17
+                and read_get(s, FlowTestingState, key) is None
+                and projection_get(s, 'testing_legacy_work', key) is PROJECTION_MISSING):
+            candidates.append(key)
+    for batch in _chunks(candidates):
+        legacy = set(s.scalars(select(FlowEvent.item_id).where(FlowEvent.item_id.in_(batch),
+            or_((FlowEvent.action == 'advance') & (FlowEvent.step >= 17),
+                (FlowEvent.action == 'fail') & (FlowEvent.step >= 18))).distinct()))
+        for key in batch:
+            projection_put(s, 'testing_legacy_work', key, key in legacy)
+
+
 def prime_projection(s, items):
     if not projection_enabled(s):
         return
     from main import Item
     from flow import ComponentLink, FlowPlan
+    from flow_testing import FlowTestingState
     from tracking import Project, SpoolPlan
     from parts import PartAllocation, PartLine, SpoolPartsPlan
     from order_spools import OrderSpool, SpoolQrIdentity, effective_children_by_assembly
@@ -210,7 +233,8 @@ def prime_projection(s, items):
             break
         prime_rows(s, Item, Item.id, batch_ids)
         models = ((SpoolPlan, SpoolPlan.item_id), (OrderSpool, OrderSpool.item_id),
-            (FlowPlan, FlowPlan.item_id), (OrderAssembly, OrderAssembly.item_id),
+            (FlowPlan, FlowPlan.item_id), (FlowTestingState, FlowTestingState.item_id),
+            (OrderAssembly, OrderAssembly.item_id),
             (ComponentLink, ComponentLink.component_id), (PartAllocation, PartAllocation.component_id),
             (SpoolPartsPlan, SpoolPartsPlan.spool_id), (SpoolQrIdentity, SpoolQrIdentity.item_id))
         for model, column in models:
@@ -230,6 +254,7 @@ def prime_projection(s, items):
         seen |= batch_ids
         pending = parents - seen
 
+    prime_testing_eligibility(s, seen)
     registrations = [read_get(s, OrderSpool, key) for key in seen]
     requirement_ids = {row.requirement_id for row in registrations if row}
     requirements = prime_rows(s, OrderSpoolRequirement, OrderSpoolRequirement.id, requirement_ids)
@@ -255,3 +280,4 @@ def prime_projection(s, items):
     _document_rows(s, _document_sets(s, physical, requirement_ids))
     _holds(s, seen)
     _components(s, physical)
+

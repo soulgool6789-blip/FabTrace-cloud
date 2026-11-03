@@ -63,6 +63,7 @@ TABLES = {
     "Holds": ("tracking", "TrackingHold"),
     "Process events": ("production", "SpoolProcessEvent"),
     "Flow plans": ("flow", "FlowPlan"),
+    "Assembly testing states": ("flow_testing", "FlowTestingState"),
     "Flow events": ("flow", "FlowEvent"),
     "Flow exceptions": ("flow", "FlowException"),
     "Component links": ("flow", "ComponentLink"),
@@ -727,7 +728,7 @@ def test_flow_export_preserves_checklists_exceptions_links_and_component_project
     receipt = next(row for row in events if row["action"].value == "advance")
     data = json.loads(receipt["data"].value)
     assert data["confirmations"] == [row["id"] for row in current["current"]["checks"]]
-    assert data["definition_version"] == "CLM-24-v5"
+    assert data["definition_version"] == importlib.import_module('flow').VERSION
     assert data["step_definition"]["number"] == 1
     assert receipt["notes"].value == "Receipt α < & >"
     exception = workbook.records("Flow exceptions")[0]

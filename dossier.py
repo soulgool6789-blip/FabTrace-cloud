@@ -435,14 +435,28 @@ def _actual_records(s, item, plan, user):
         'flow': row_dict(fp) if fp else None, 'flow_events': flow_events,
         'flow_exceptions': exceptions, 'quality_records': quality}
 
+def _fabrication_event(event):
+    data = event.get('data') or {}
+    if data.get('testing_protocol') == 'CLM-TEST-v1' and event['action'] == 'advance':
+        # The phased protocol records QA acceptance twice at numeric Step18.
+        # Successful reviews and custody/report actions do not fabricate the
+        # item and must not stale the very test proof that they approved.
+        # Recorded corrective work does change the physical evidence basis.
+        return data.get('testing_action') == 'correct'
+    # Preserve the established legacy basis exactly. A QA failure still
+    # invalidates prior proof, including for the new testing protocol.
+    return ((event['action'] == 'advance' and event['step'] in (1, 7, 18)) or
+            (event['action'] in ('fail', 'reopen') and
+             (data.get('return_step', event['step']) or 0) <= 19))
+
+
 def _structural(records):
     tr = records['tracking']
     welds = []
     for w in tr['welds']:
         welds.append({k: w[k] for k in ('id','number','version','cycle','component_a','heat_a','mtr_a',
             'component_b','heat_b','mtr_b','wps','wps_revision','required_operations','completed_at','work','repairs')})
-    physical_events = [e for e in records['flow_events'] if (e['action']=='advance' and e['step'] in (1,7,18)) or
-        (e['action'] in ('fail','reopen') and (e['data'].get('return_step', e['step']) or 0) <= 19)]
+    physical_events = [e for e in records['flow_events'] if _fabrication_event(e)]
     return {'item_id':tr['item']['id'], 'drawing':tr['item']['drawing'],
         **({'parts': records['parts']['basis']} if records.get('parts') else {}),
         **({'material_trace': records['material_trace']} if records.get('material_trace') else {}),
@@ -1480,3 +1494,4 @@ def download_issue(issue_id:int,user:Employee=Depends(auth),s:Session=Depends(db
     return StreamingResponse(_zip_stream(output),media_type='application/zip',headers={
         'Content-Disposition':'attachment; filename="'+filename+'"','Cache-Control':'private, no-store',
         'X-Content-Type-Options':'nosniff','X-Snapshot-SHA256':issue.sha256},background=BackgroundTask(output.close))
+

@@ -101,7 +101,7 @@ Template revisions are immutable and apply when creating new welds. Creating a l
 
 ## 8. Track time in each production process
 
-Open a spool from **Projects & welds → Spool register** and find **Production process**. Available timers follow your assigned position; supervisors and administrators can coordinate all processes. The spool register shows the current process and how long the spool has been there. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for each position's timer scope.
+Open a spool from **Projects & welds → Spool register** and find **Production process**. Manual timers follow your assigned position; supervisors and administrators can coordinate those manual processes. Numbered testing phases use the specific roles described below. The spool register shows the current process and how long the spool has been there. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) for each position's timer scope.
 
 1. **Start process:** choose the current stage and start its timer when the spool enters that process. Available stages include material preparation, cutting and beveling, fit-up, welding, NDE/testing, PWHT, dimensional inspection, coating/painting, final QA and ready for dispatch. Use a custom name for another process.
 2. **Move to process:** when the spool enters another stage, this closes the previous visit and starts the selected stage at the same moment. You need authority over both processes; otherwise an authorized employee finishes the current timer and the next position starts its process, or a supervisor coordinates the move. A return creates a new visit and keeps the earlier one.
@@ -114,32 +114,32 @@ Each visit records its process, start/end timestamps, employee badges and durati
 
 Time begins with the first recorded start. Earlier production is not reconstructed from old weld counts or inspection dates. Timing is a separate production record: starting or finishing a process does not record an individual weld operation or accept a requirement. Placing a quality hold does not pause a timer, and pausing a timer does not create a quality hold. Record both when both are intended.
 
-For manual process timing, final release closes an open visit and administrative reopening does not restart it. Select the actual process and start it when work resumes. A numbered traveler controls step changes automatically: reopening ordinary QA release returns to its QA checkpoint, while returning an administrative release restores its saved prior route position. Pause/resume follows the current step's job permissions, with supervisor/admin coordination access. The manually selected ready-for-dispatch process remains a label; only the numbered shipment action creates a shipment record.
+For manual process timing, final release closes an open visit and administrative reopening does not restart it. Select the actual process and start it when work resumes. A numbered traveler controls step and testing-phase changes automatically: reopening ordinary QA release returns to its QA checkpoint, while returning an administrative release restores its pending testing phase or saved prior route position. Current testing pause/resume follows the displayed phase roles: NDT, pressure technician, QA/QC, or the decision/Floor coordination roles, with administrator access to each phase. Other numbered and retained legacy routes keep their existing timer permissions. The manually selected ready-for-dispatch process remains a label; only the numbered shipment action creates a shipment record.
 
 Administrators can use **Export Excel** to download **Process events**, **Process visits** and **Process totals** with the other business records. Visit and total reports include project, subproject and spool IDs, numeric seconds, decimal hours, and the calculation timestamp. In Excel, sum elapsed, active and paused hours by process or use a PivotTable to compare projects and spools. Open visits are a snapshot at export time; download again for newer totals.
 
 ## 9. Follow the numbered CLM fabrication flow
 
-The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v5**. Step 2 reviews available material documentation and permits heat/MTR verification to be deferred until QA/QC-003. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
+The **Process flow** workspace follows the supplied **Pipe Spool / Assembly Fabrication Process Flow** chart. The current catalog is **CLM-24-v6**, with **CLM-TEST-v1** phases inside steps 17–19. Step 2 reviews available material documentation and permits heat/MTR verification to be deferred until QA/QC-003. Its full map shows all 24 numbers; earlier events retain their originally recorded labels. Each physical component, spool and assembly keeps its own item ID, QR label and route; parent/child links connect the routes.
 
 | Phase | Numbered steps |
 | --- | --- |
 | Material receipt | **1** Receive Shipment; **2** QA/QC-001 · Check Dimensions; **3** Capture Location; **4** Material in Inventory |
 | Component preparation | **5** Select Components for Spool; **6** Release to Fabrication Prep Technician; **7** Prep Components; **8** Return to Floor |
 | Spool fabrication | **9** Release to Fit-Up Welder; **10** Fit-Up & Tack Weld; **11** QA/QC-002 · Check Dimensions; **12** Return to Floor; **13** Release to Process Welder; **14** Complete Welds; **15** QA/QC-003 · Inspect Welds; **16** Return to Floor |
-| Testing | **17** Release to Testing (Hydro/UT); **18** QA/QC-004 - Verify Test Results; **19** Return to Floor |
+| Testing | **17** Determine if Spool need to be sent to Testing, then the current NDT/pressure work phase; **18** QA/QC-004 for that test attempt; **19** Return to Floor after each QA PASS |
 | Sandblast & paint | **20** Release to Sandblast and Paint; **21** Sandblast & Paint; **22** QA/QC-005 - Final Inspection |
 | Shipment | **23** Release to Ready to Ship; **24** Ship to Customer |
 
 ### Set up the records and their scope
 
-Register each physical component as a **Part**. Spools and assemblies need their project/weld plans before starting a numbered route. An item already enrolled as a spool remains a spool even if its older item type was Part. An assembly needs its own Assembly item ID before the traveler can record work; step 17 verifies that existing identity/barcode and the linked physical assembly before release to testing.
+Register each physical component as a **Part**. Spools and assemblies need their project/weld plans before starting a numbered route. An item already enrolled as a spool remains a spool even if its older item type was Part. An assembly needs its own Assembly item ID before the traveler can record work; the step 17 decision verifies that identity and the linked physical spools. Testing and finishing remain on the assembly traveler; a completed child spool links to its parent process.
 
 Open the item using its QR label, item record, or the **Process flow** lookup. An administrator or supervisor chooses the route: components **1–8**, spools **9–16**, or assemblies **17–24**. Declare how many individual components or child spools the route requires. Link each component to its target spool before component selection is completed, and link the required released spools to the assembly at collection. An individual component belongs to one spool. Use separate item IDs for separate physical pieces.
 
-Component and spool assignments must be within the same project. The assembly uses the existing spool-to-assembly relationship. Step 17 requires scanning or entering every linked child-spool ID exactly once. Missing declared children, incomplete component preparation, incomplete spool travelers, unresolved material/rework issues or missing child quality releases prevent advancement.
+Component and spool assignments must be within the same project. The assembly uses the existing spool-to-assembly relationship. The testing-decision phase requires scanning or entering every linked child-spool ID exactly once. Subsequent technician-report and QA phases verify the current assembly without repeating that collection form. Missing declared children, incomplete component preparation, incomplete spool travelers, unresolved material/rework issues or missing child quality releases prevent advancement.
 
-**Edit required count** lets a supervisor or administrator correct the declared count with a reference and reason while the spool is at step 9 or the assembly is at step 17. It cannot lower the count below the linked records. Later assembly work must return through its QA/rework path before changing collection scope.
+**Edit required count** lets a supervisor or administrator correct the declared count with a reference and reason while the spool is at step 9 or the assembly is at its first, unrecorded testing-decision phase. It cannot lower the count below the linked records. The assembly child count and links lock after the first YES/NO decision and remain locked through correction and restart cycles. A P.O.-managed assembly's count must be corrected before its traveler starts; it is then fixed to the declared order scope.
 
 For an existing spool with controlled historical material records, zero newly linked components requires an explicit material reference. If work is already underway, select its current starting step and supply a baseline reference and reason. Earlier steps show **Not recorded**, not completed. This starts current timing without reconstructing historical work or accepting old quality records automatically.
 
@@ -149,23 +149,36 @@ The current step lists its required observations. Complete the checklist, scan o
 
 The current step has the available action; future steps cannot be checked off out of order. Its process clock starts automatically, moves when the step advances and retains repeated visits. **Pause / record delay** and **Resume** keep running and paused durations separate. Timing measures calendar time and continues across logout. Manual process selection cannot bypass the numbered traveler.
 
-Record individual fit-up and welding work in **Projects & welds**. The traveler checks those records at steps 10, 11 and 14. Spool fit-up can be recorded at step 10 or during repair work at step 14; welding operations belong to step 14. An assembly with its own joining welds records those operations while at step 17, before QA/QC verifies the test results at step 18. Completing a checklist does not invent a weld, operation, evidence record or acceptance.
+Record individual fit-up and welding work in **Projects & welds**. The traveler checks those records at steps 10, 11 and 14. Spool fit-up can be recorded at step 10 or during repair work at step 14; welding operations belong to step 14. Complete an assembly's own joining welds before its initial testing decision. Later permitted repairs use the designated correction path and require fresh testing. Completing a checklist does not invent a weld, operation, evidence record or acceptance.
+
+### Record the testing decision and both test types
+
+At step 17, Material coordinator, Shop Foreman or Administrator must choose **YES or NO**; neither is preselected.
+
+- **YES:** NDT at 17 → NDT QA/QC PASS/FAIL at 18 → Floor handoff at 19 → pressure testing at 17 → pressure QA/QC PASS/FAIL at 18 → Floor handoff at 19 → Paint/finishing at 20.
+- **NO:** continue to 20. Steps 18/19 become **Not required** and are excluded from the applicable progress denominator. This records no test or QA pass and leaves other quality gates in force.
+
+The NDT employee or Pressure Testing Technician first records a scanned receipt into Testing. A non-admin employee must use their own receiving badge. The recorded testing employee or an administrator then records the actual report result, **PASS or FAIL**, its reference and the handoff to QA/QC. QA/QC or an administrator records a separate explicit acceptance decision for that exact test attempt. A failed technician report requires QA FAIL. QA PASS is blocked when the current scope, earlier required NDT proof, dimensions or applicable evidence no longer support acceptance. Each passing test requires its actual Floor handoff before the next phase.
+
+When changed construction or source evidence requires another cycle, a Shop Foreman or administrator can use **Return to testing** where it is offered, with a reason and reference. Availability is supplied by the server for the current state; a numbered step alone does not grant it. A pending QA attempt must receive its disposition first, and mandatory correction must be completed before restart. A recorded YES stays required. Restart preserves earlier failures and correction records and starts a separately identified cycle; the assembly child scope stays locked.
 
 ### QA failures and return visits
 
 QA steps **2, 11, 15, 18 and 22** are labeled **QA/QC-001 through QA/QC-005**, respectively, and require QA/QC or Administrator. QA-001 covers incoming dimensional/material verification. The saved per-piece QA-001 decisions and overall spool arrival approval do not automatically complete a component traveler step; record the actual route inspection separately when that route applies. Record the inspection reference. Current underlying weld/requirement and dimensional checks must be satisfied before the relevant QA step can pass.
 
-**Record failed inspection** creates an exception with its report reference and reason, then returns to the allowed earlier step:
+A failed inspection creates an exception with its report reference and reason. The current testing route uses its required PASS/FAIL form; other checkpoints use **Record failed inspection**:
 
 - Step 2 stays at incoming verification for supplier/disposition resolution.
 - Step 11 returns to fit-up at step 10.
 - Step 15 returns to welding at step 14.
-- Step 18 returns to testing at step 17 or test-result reinspection at step 18.
-- Step 22 returns to the appropriate assembly or coating step, 17–21.
+- Step 18 QA FAIL returns to the **exact previous testing station and employee who sent the attempt into QA/QC**, using scanned sender/receiver badges. The required destination is shown by the server; no arbitrary return step is selected.
+- Step 22 on the current testing route returns to a fresh testing cycle at 17 or the permitted coating step 20/21.
 
-The affected later step completions are reopened, while earlier attempts remain in history. Failures at 11/15 also invalidate the affected weld requirement approvals. Passing the failed checkpoint again requires fresh applicable approval and written resolution; it closes the matching exception. Use **Open repair** on an individual weld when physical rewelding is required. The flow exception does not silently start a repair cycle or claim that welding was redone.
+After testing QA FAIL, the recorded testing employee or an administrator records the completed correction and reference. A fresh test attempt, report and QA result are mandatory; NO cannot bypass the correction. Passing reinspection resolves the current test kind's matching exceptions. Corrected pressure failures carried through a new NDT cycle stay visible and open until fresh pressure QA resolves them. The affected later step completions are reopened, while earlier attempts remain in history. Failures at 11/15 also invalidate the affected weld requirement approvals. Use **Open repair** on an individual weld when physical rewelding is required. The flow exception does not silently start a repair cycle or claim that welding was redone.
 
-Release to testing and coating require fresh dimensional verification afterward. At QA/QC-004, current weld and spool requirements scheduled Before welding or After welding, dimensions and the report reference must pass. Configure Hydro/UT checks due here as After welding; requirements scheduled for Final release remain due at QA/QC-005, so post-coating records are not demanded before paint. QA/QC-004 does not record final shipping release; step 22 remains the final inspection. Step 19 records the floor handoff using the current sender, receiver and location. An open component quality/rework issue remains a blocker for its spool and the final assembly, including shipment. A child spool cannot be reopened while its parent is in later assembly stages or has been released; return the parent through its controlled QA/rework path first. Shipped or delivered assemblies cannot be reopened through the production action.
+Testing and coating retain their fresh dimensional verification requirements. At QA/QC-004, applicable Before welding / After welding evidence, current dimensions and the exact attempt's report must support acceptance. Pressure-test evidence remains due at its pressure review; NDT review does not accept it early. Requirements scheduled for Final release remain due at QA/QC-005. QA/QC-004 does not record final shipping release; step 22 remains the final inspection. Each step 19 Floor phase records its actual sender, receiver and location. An open component quality/rework issue remains a blocker for its spool and final assembly, including shipment. Child reopening follows the server's controlled parent/correction restrictions. Shipped or delivered assemblies cannot be reopened through the production action.
+
+**Historical travelers:** existing routes with recorded legacy testing work retain their original **Release to Testing (Hydro/UT)** labels, generic step 18 return choices and timer permissions. Their saved work and inspections are not converted into new test decisions. New assembly routes and eligible untouched step 17 work use the current protocol described above.
 
 ### Release, shipment and delivery
 
@@ -274,4 +287,5 @@ Open **Job Packets** to configure the intended spool/assembly packet count, actu
 QA issues each complete current item packet, followed by a completed-project revision after the declared scope and all current packets are reconciled. Print or download the issued package; record actual physical and digital dispatches separately and then their actual acknowledgements. Downloading does not send a packet. New evidence or rework can invalidate current approval without rewriting an issued snapshot.
 
 See [DOSSIER_GUIDE.md](DOSSIER_GUIDE.md) for the full step-by-step setup, customer-document crosswalk, coating/shipping gates, file revision controls, print/ZIP output, transfer records and troubleshooting.
+
 

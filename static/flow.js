@@ -13,12 +13,12 @@
   const spoolText=(value,label=spoolNumber(value))=>flowStatus()?.spoolText?.(value,label)||esc(label);
   const routeNames={component:'Component',spool:'Spool',assembly:'Assembly'};
   const statusNames={admin_released:'Administrative release',not_started:'Not started',active:'In progress',completed:'Route complete',shipped:'Shipped',delivered:'Delivered',rework:'Needs rework'};
-  const stepStatusNames={pending:'Upcoming',current:'Current step',completed:'Completed',not_recorded:'Not recorded',rework:'Needs reinspection',other_route:'Linked record'};
+  const stepStatusNames={pending:'Upcoming',current:'Current step',completed:'Completed',not_recorded:'Not recorded',not_required:'Not required',rework:'Needs reinspection',other_route:'Linked record'};
   const phases=[
     {id:'materials',label:'Material receipt & inventory',first:1,last:4},
     {id:'components',label:'Component preparation',first:5,last:8},
     {id:'spool',label:'Spool fabrication',first:9,last:16},
-    {id:'assembly',label:'Testing (Hydro/UT)',first:17,last:19},
+    {id:'assembly',label:'Testing decision, NDT & pressure',first:17,last:19},
     {id:'paint',label:'Sandblast & paint',first:20,last:22},
     {id:'shipping',label:'Shipment',first:23,last:24},
   ];
@@ -27,7 +27,7 @@
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
   const removed=()=>state.detail?.removal?.removed===true||state.detail?.item?.removal?.removed===true;
-  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action);
+  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action)&&(!['scope','link-spool'].includes(action)||!testingScopeFrozen())&&(action!=='advance'||!testingActorRestriction())&&(action!=='restart-testing'||canRestartTesting());
   const action=(name,label,id='',className='',spool=null)=>`<button type="button" class="${esc(className)}" data-flow-action="${esc(name)}"${id?` data-flow-id="${esc(id)}"`:''}>${spool?spoolText(spool,label):esc(label)}</button>`;
   const option=(value,label,selected='')=>`<option value="${esc(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
   const secondary=text=>`<span class="ff-secondary">${esc(text)}</span>`;
@@ -37,6 +37,83 @@
   const definition=step=>arr(state.catalog?.steps).find(row=>Number(row.number)===Number(step));
   const openExceptions=()=>arr(state.detail?.exceptions).filter(row=>!row.closed_at);
   const displayStatus=row=>num(row.open_exceptions)>0?'rework':row.status||'not_started';
+  const testing=()=>state.detail?.flow?.testing?.protocol==='CLM-TEST-v1'?state.detail.flow.testing:null;
+  const activeTesting=()=>{const value=testing();return value?.active===true&&value.action?value:null;};
+  const testingScopeFrozen=()=>{const value=testing();return Boolean(value&&(value.phase!=='decision'||value.decision!=null||num(value.cycle)>1));};
+  const testingReview=()=>activeTesting()?.action==='review';
+  const failedTestReport=value=>value?.action==='review'&&value.report?.result==='FAIL';
+  const canRestartTesting=()=>['admin','supervisor'].includes(me?.role);
+  const testingPassBlockers=()=>testingReview()?arr(state.detail?.flow?.blockers):[];
+  const needsResolution=step=>step.requires_resolution===true||activeTesting()?.action==='correct'||step.qa&&(testingReview()?arr(activeTesting().review_exception_ids).length>0:openExceptions().some(row=>Number(row.step)===Number(step.number)));
+  function testingActorRestriction(){
+    const value=activeTesting(),badge=value?.action==='complete'?value.test_started_by:value?.action==='correct'?value.return_to?.sender_badge:null;
+    return badge&&me?.role!=='admin'&&badge!==me?.badge?`The recorded testing employee (${badge}) or an administrator must ${value.action==='correct'?'record the completed rework':'submit this test report'}.`:'';
+  }
+  const testingNames={decision:'Testing decision',ndt:'NDT',ndt_qa:'NDT · QA/QC result',ndt_rework:'NDT · Required rework',floor_before_pressure:'Floor · Before pressure testing',pressure_test:'Pressure testing',pressure_qa:'Pressure testing · QA/QC result',pressure_rework:'Pressure testing · Required rework',floor_before_paint:'Floor · Before Paint/finishing',complete:'Testing complete',not_required:'Testing not required'};
+  const testName=value=>value?.test_kind==='pressure'?'Pressure test':'NDT';
+  const childScans=step=>typeof step.requires_child_scans==='boolean'?step.requires_child_scans:!activeTesting()&&step.number===17;
+  function testingPayload(value){
+    if(value?.active!==true||!value.action)return {};
+    if(!testingNames[value.phase]||!Number.isInteger(value.attempt)||value.attempt<1||!['decision','start','complete','review','correct','handoff'].includes(value.action))throw Error('Refresh the testing phase before recording this action.');
+    return {testing_phase:value.phase,testing_attempt:value.attempt,testing_action:value.action};
+  }
+  function returnDestination(value){
+    const to=value?.return_to;if(!to)return 'The prior testing station and sending employee must be verified before recording a failure.';
+    return `Return to ${to.location_label||to.location_id||'the recorded testing station'} · ${to.sender_name?to.sender_name+' ('+to.sender_badge+')':to.sender_badge||'sending employee not recorded'}.`;
+  }
+  function testingSummary(){
+    const value=testing();if(!value)return '';
+    const phase=testingNames[value.phase]||'Testing phase',decision=['YES','NO'].includes(value.decision)?`<p><strong>Testing required: ${esc(value.decision)}</strong>${value.decision==='NO'?' · Continue to Paint/finishing.':' · NDT and pressure testing each require their own QA/QC result.'}</p>`:'';
+    let description=activeTesting()?(value.action==='start'?`The ${testName(value)} employee records receipt with both employee badges before starting this test.`:value.action==='complete'?`Record the ${testName(value)} report and its result, then hand the item to QA/QC. QA/QC records a separate acceptance decision.`:value.action==='review'?failedTestReport(value)?'The technician’s report records FAIL. QA/QC must record a FAIL disposition, with required rework and a fresh test.':`QA/QC must record PASS or FAIL for this ${testName(value).toLowerCase()} attempt. PASS proceeds to the required Floor handoff.`:value.action==='correct'?'Complete and document the required rework. A fresh test report and a new QA/QC result are required afterward.':value.phase==='floor_before_pressure'?'Record the Floor handoff before the pressure testing employee starts the next test.':value.phase==='floor_before_paint'?'Record the Floor handoff before continuing to Paint/finishing.':'Record the testing decision for this assembly and its linked spools.'):(['complete','not_required'].includes(value.phase)?'':'This saved testing phase is not active at the current process step.');
+    if(testingPassBlockers().length&&!failedTestReport(value))description='QA/QC PASS is blocked. Resolve the recorded requirements below before accepting this test attempt.';
+    if(activeTesting()?.action==='review')description+=' '+(failedTestReport(value)?'Required return: ':'If QA/QC records FAIL: ')+returnDestination(value);
+    else if(activeTesting()?.rework_required)description+=' '+returnDestination(value);
+    const report=value.report,reportFacts=report?`<div class="ff-testing-report"><strong>Technician test report</strong>${metadata([['Recorded result',report.result||report.test_result],['Report reference',report.reference],['Recorded by',report.actor||report.recorded_by],['Recorded at',report.at?stamp(report.at):'']])}<p>QA/QC acceptance is recorded separately.</p></div>`:'';
+    const qaFacts=value.qa?`<div class="ff-testing-report"><strong>Recorded QA/QC decision</strong>${metadata([['QA/QC result',value.qa.result],['Review reference',value.qa.reference],['Reviewed by',value.qa.actor],['Reviewed at',value.qa.at?stamp(value.qa.at):'']])}</div>`:'';
+    return `<section class="ff-testing-phase" data-testing-phase="${esc(value.phase)}"><span class="ff-phase-kicker">Testing route${Number.isInteger(value.cycle)&&value.cycle>1?' · Cycle '+value.cycle:''}${Number.isInteger(value.attempt)&&value.attempt>0?' · Attempt '+value.attempt:''}</span><h3>${esc(phase)}</h3>${decision}${description?`<p>${esc(description)}</p>`:''}${reportFacts}${qaFacts}</section>`;
+  }
+  function testingChoices(){
+    const value=activeTesting();if(!value)return '';
+    const decision=value.requires_decision===true,result=value.requires_result===true;
+    if(!decision&&!result)return '';
+    const name=decision?'testing_decision':'test_result',title=decision?'Does this spool need to be sent to testing?':value.action==='review'?'QA/QC result for this test attempt':'Result recorded in the technician’s test report';
+    const choices=decision?[['YES','Send to NDT, then QA/QC. A passing NDT result is followed by Floor and pressure testing.'],['NO','Continue directly to Paint/finishing. Testing steps will be recorded as not required.']]:value.action==='review'?[['PASS','Accept this test attempt and proceed to the mandatory Floor handoff.'],['FAIL','Return to the recorded testing station and sending employee for rework and a fresh test.']]:[['PASS','The technician’s report records a passing test result. QA/QC must review it.'],['FAIL','The technician’s report records a failed test result. QA/QC must review it.']];
+    return `<fieldset class="ff-test-choice"><legend>${esc(title)} *</legend><div class="ff-test-options">${choices.map(([choice,help])=>{const retained=decision&&choice==='NO'&&value.decision==='YES',failedReport=choice==='PASS'&&failedTestReport(value),blockedPass=choice==='PASS'&&testingPassBlockers().length>0,disabled=retained||failedReport||blockedPass||value.action==='review'&&!(choice==='FAIL'?can('fail'):can('advance'));return `<label class="ff-test-option" for="ff-${name}-${choice}"><input id="ff-${name}-${choice}" name="${name}" type="radio" value="${choice}" required${disabled?' disabled':''}><span><strong>${choice}</strong><small>${esc(retained?'Testing remains required by the recorded YES decision. This rework cycle must return to testing.':failedReport?'The technician’s report records FAIL. Record a FAIL disposition and complete rework before a fresh test can receive QA/QC PASS.':blockedPass?'QA/QC PASS is blocked. Review the recorded requirements shown above.':help)}</small></span></label>`;}).join('')}</div><p id="flowTestingHint" class="ff-testing-hint" aria-live="polite">Choose ${decision?'YES or NO':'PASS or FAIL'} before recording this action.</p></fieldset>`;
+  }
+  function handoffInputs(step,failed=false){
+    const transfer=state.detail.transfer||state.detail.item.transfer,value=activeTesting(),destination=failed?returnDestination(value):step.handoff_target_role?`Receiving role: ${roleLabel(step.handoff_target_role)}.`:'';
+    return `<div class="ff-span"><h3>Identify both employees for this handoff</h3><p class="fh-help">Current recorded custodian: <strong>${esc(transfer?.handler_name||transfer?.handler||state.detail.item.handler)}</strong>${transfer?.handler_name?' ('+esc(transfer.handler)+')':''}. Scan the sending badge and receiving badge in their separate fields. The signed-in employee records the step.</p>${destination?`<p class="ff-testing-return">${esc(destination)}</p>`:''}${window.FabHandoff.controlHtml('flowHandoff',{transfer,options:state.handoffOptions,heading:false})}<div id="flowHandoffReview" class="fh-review" aria-live="polite"></div><p class="fh-record-note">Badges identify the parties; no independent acceptance signature is recorded. Completing this numbered step applies its existing process and QA checks.</p></div>`;
+  }
+  function testingFailureInputs(step){
+    if(!testingReview())return '';
+    return `<fieldset id="flowTestingFailure" class="ff-testing-failure hidden" disabled><h3>Failure details and return handoff</h3><p>${esc(returnDestination(activeTesting()))}</p>${field('reason','Failure / nonconformance and required repair','',{required:true,type:'textarea',full:true,minlength:4,maxlength:3000})}${handoffInputs(step,true)}</fieldset>`;
+  }
+  function testingButton(value,choice){
+    if(!value?.action)return '';
+    if(value.action==='decision')return choice==='YES'?'Save YES · Send to NDT':choice==='NO'?'Save NO · Continue to Paint/finishing':'Record testing decision';
+    if(value.action==='start')return 'Record receipt · Start '+testName(value);
+    if(value.action==='complete')return 'Submit '+testName(value)+' report to QA/QC';
+    if(value.action==='review')return choice==='FAIL'?'Record FAIL · Return for rework':choice==='PASS'?'Record PASS · Return to Floor':'Record QA/QC result';
+    if(value.action==='correct')return 'Record rework · Require a fresh '+testName(value);
+    return value.phase==='floor_before_pressure'?'Record Floor handoff · Pressure testing next':'Record Floor handoff · Paint/finishing next';
+  }
+  function updateTestingChoice(){
+    const value=activeTesting();if(!value)return;
+    const name=value.requires_decision?'testing_decision':value.requires_result?'test_result':'',choices=value.requires_decision?['YES','NO']:['PASS','FAIL'];
+    const choice=name?choices.find(option=>node('ff-'+name+'-'+option)?.checked)||'':'';
+    const failing=value.action==='review'&&choice==='FAIL',failure=node('flowTestingFailure'),checks=node('flowTestingPassChecks');
+    if(failure){if(!failure.disabled&&!failing)window.FabHandoff?.stopCamera?.();failure.disabled=!failing;failure.classList.toggle('hidden',!failing);}
+    if(checks)checks.disabled=failing;
+    if(value.action==='review')for(const field of ['resolution','notes'])if(node('ff-field-'+field))node('ff-field-'+field).disabled=failing;
+    const button=node('flowAdvance');if(button){button.textContent=testingButton(value,choice);button.disabled=state.saving||Boolean(name&&!choice)||Boolean(value.requires_decision&&value.decision==='YES'&&choice==='NO')||Boolean(choice==='PASS'&&failedTestReport(value))||(failing?!can('fail'):!can('advance')||arr(state.detail?.flow?.blockers).length>0);}
+    const hint=node('flowTestingHint');if(hint)hint.textContent=failedTestReport(value)&&choice!=='FAIL'?'The technician’s report records FAIL. Select FAIL to record the required return and rework.':testingPassBlockers().length&&choice!=='FAIL'?'QA/QC PASS is blocked: '+testingPassBlockers().join(' '):!choice?'Choose '+(value.requires_decision?'YES or NO':'PASS or FAIL')+' before recording this action.':value.requires_decision?choice==='YES'?'YES: NDT, QA/QC, Floor, then pressure testing.':'NO: Continue to Paint/finishing; testing is recorded as not required.':value.action==='review'?choice==='PASS'?'PASS: Record QA/QC acceptance and proceed to the required Floor handoff.':'FAIL: '+returnDestination(value)+' Record the failure and scan both employees for the return.':'Record the technician’s '+choice+' test result and send the report to QA/QC for a separate decision.';
+  }
+  function constrainTestingDestination(){
+    const value=activeTesting(),step=state.detail?.flow?.current;if(!value||!node('flowHandoffLocation'))return;
+    const target=value.action==='review'?value.return_to?.location_id:step.handoff_location_id;if(!target)return;
+    const location=arr(state.handoffOptions?.locations).find(row=>row.id===target&&row.active),element=node('flowHandoffLocation');
+    element.innerHTML=location?option(location.id,location.label,location.id):option('','Recorded destination unavailable; refresh');element.value=location?.id||'';
+  }
 
   function errorText(error){
     try{const detail=JSON.parse(error.message);if(Array.isArray(detail))return detail.map(row=>`${arr(row.loc).filter(x=>x!=='body').join(' / ')}: ${row.msg||'Check this value'}`).join('\n');if(detail.message)return detail.message;if(detail.flow_blockers)return arr(detail.flow_blockers).join('\n')}catch(_){}
@@ -176,7 +253,7 @@
   }
   function routeProgress(){
     const flow=state.detail.flow;
-    return `<div class="ff-route" aria-label="${esc(routeNames[flow.route]||flow.route)} route progress">${arr(flow.steps).map(step=>{const visual=stepState(step);return `<div class="ff-route-step ${visual}"${step.status==='current'?' aria-current="step"':''}><span class="ff-num">${step.number}</span><strong>${esc(step.title)}</strong><small>${esc(stepStatusNames[visual])}</small></div>`}).join('')}</div><div class="ff-legend"><span class="done">Completed</span><span class="current">Current step</span><span>Upcoming</span><span class="rework">Needs reinspection</span><span class="unknown">Earlier work not recorded</span></div>`;
+    return `<div class="ff-route" aria-label="${esc(routeNames[flow.route]||flow.route)} route progress">${arr(flow.steps).map(step=>{const visual=stepState(step);return `<div class="ff-route-step ${visual}"${step.status==='current'?' aria-current="step"':''}><span class="ff-num">${step.number}</span><strong>${esc(step.title)}</strong><small>${esc(stepStatusNames[visual])}</small>${visual==='not_required'?'<small>Testing decision: NO</small>':''}</div>`}).join('')}</div><div class="ff-legend"><span class="done">Completed</span><span class="current">Current step</span><span>Upcoming</span><span class="rework">Needs reinspection</span><span class="unknown">Earlier work not recorded</span>${arr(flow.steps).some(step=>step.status==='not_required')?'<span class="not-required">Not required by the recorded testing decision</span>':''}</div>`;
   }
   function timing(){
     const detail=state.detail,flow=detail.flow,process=detail.production_process,current=process?.current;
@@ -185,56 +262,60 @@
     const age=Number.isFinite(asOf)&&Number.isFinite(entered)?Math.max(0,(asOf-entered)/1000):num(current?.elapsed_seconds);
     const running=process.status==='running'&&Boolean(current),paused=process.status==='paused'&&Boolean(current);
     let html='<div class="ff-time-row">';
-    if(flow.current)html+=`<div><span>Time at current step</span><strong>${clock(process,age,flow.status==='active')}</strong></div>`;
+    if(flow.current)html+=`<div><span>${activeTesting()?'Time in current phase':'Time at current step'}</span><strong>${clock(process,age,flow.status==='active')}</strong></div>`;
     if(current)html+=`<div><span>Running time</span><strong>${clock(process,current.active_seconds,running)}</strong></div><div><span>Paused time</span><strong>${clock(process,current.paused_seconds,paused)}</strong></div>`;
     html+='</div>';
     if(current)html+=`<div class="actions">${can('pause')?action('pause','Pause / record delay'):''}${can('resume')?action('resume','Resume process'):''}${process.status==='paused'?tag('rework','Process paused'):''}</div>`;
-    return html+'<p class="ff-footer-note">Elapsed clock time includes pauses. This measures the item’s time in the process, not employee labor hours. Stage timers move when the numbered step advances.</p>';
+    return html+`<p class="ff-footer-note">Elapsed clock time includes pauses. This measures the item’s time in the process, not employee labor hours. ${activeTesting()?'Phase timers move with each recorded testing transition.':'Stage timers move when the numbered step advances.'}</p>`;
   }
   function stepInputs(step){
     let content='';
     if(step.requires_scan)content+=field('scanned_item_id','Scan or enter this item ID again','',{required:true,maxlength:500,help:'Verify the physical item being processed: '+state.detail.item.id});
-    if(step.number===17)content+=field('scanned_child_ids','Scan or enter each linked spool ID','',{required:true,type:'textarea',full:true,rows:4,help:'One spool ID or FabTrace QR link per line. Verify every linked spool before releasing the assembly to testing.'});
+    if(childScans(step))content+=field('scanned_child_ids','Scan or enter each linked spool ID','',{required:true,type:'textarea',full:true,rows:4,help:'One spool ID or FabTrace QR link per line. Verify every linked spool before recording this assembly’s testing decision.'});
     if(step.requires_handoff){
-      const transfer=state.detail.transfer||state.detail.item.transfer;
-      content+=`<div class="ff-span"><h3>Identify both employees for this handoff</h3><p class="fh-help">Current recorded custodian: <strong>${esc(transfer?.handler_name||transfer?.handler||state.detail.item.handler)}</strong>${transfer?.handler_name?' ('+esc(transfer.handler)+')':''}. Scan the sending badge and receiving badge in their separate fields. The signed-in employee records the step.</p>${window.FabHandoff.controlHtml('flowHandoff',{transfer,options:state.handoffOptions,heading:false})}<div id="flowHandoffReview" class="fh-review" aria-live="polite"></div><p class="fh-record-note">Badges identify the parties; no independent acceptance signature is recorded. Completing this numbered step applies its existing process and QA checks.</p></div>`;
+      content+=handoffInputs(step);
     }else if(step.requires_location||step.number===3){
       const transfer=state.detail.transfer||state.detail.item.transfer;
       content+=`<div class="field"><label for="ff-field-location_id">${step.number===3?'Storage location':'Receiving location / work center'} *</label><select id="ff-field-location_id" name="location_id" required>${window.FabHandoff.locationOptions(state.handoffOptions,transfer,transfer?.location?'current':'')}</select><span class="ff-form-help">Choose an active work center or retain the actual recorded location.</span></div>`;
     }
     if(step.number===5)content+=field('target_spool_id','Assigned spool ID',state.detail.parent?.item_id||'',{required:true,maxlength:500,help:'This must match the spool linked to this component.'});
-    if(step.requires_reference)content+=field('reference',step.number===18?'Hydro/UT test report / approval reference':step.qa?'Inspection report / approval reference':'PO, BOM, drawing, or record reference','',{required:true,maxlength:500,full:true});
+    if(step.requires_reference||testingReview())content+=field('reference',activeTesting()?.action==='complete'?testName(activeTesting())+' report reference':testingReview()?'QA/QC inspection / approval or NCR reference':activeTesting()?.action==='correct'?'Repair / corrective work record reference':step.number===18?'Hydro/UT test report / approval reference':step.qa?'Inspection report / approval reference':'PO, BOM, drawing, or record reference','',{required:true,minlength:2,maxlength:500,full:true});
     if(step.number===24)content+=field('carrier','Carrier','',{required:true,maxlength:160})+field('shipment_reference','Shipping document / tracking reference','',{required:true,maxlength:500})+field('destination','Destination / customer','',{required:true,maxlength:500,full:true});
-    if(step.qa&&openExceptions().some(row=>Number(row.step)===Number(step.number)))content+=field('resolution','Rework resolution and reinspection findings','',{required:true,type:'textarea',full:true,maxlength:3000});
+    if(needsResolution(step))content+=field('resolution',activeTesting()?.action==='correct'?'Completed rework and corrective action':'Rework resolution and reinspection findings','',{required:true,type:'textarea',full:true,maxlength:3000});
     content+=field('notes','Work notes / measurements','',{type:'textarea',full:true,maxlength:3000});
     return fields(content);
   }
   function blockers(){
     const list=arr(state.detail.flow?.blockers);
-    return list.length?`<div class="ff-blockers"><strong>Resolve before completing this step</strong><ul>${list.map(value=>`<li>${esc(value)}</li>`).join('')}</ul></div>`:'';
+    return list.length?`<div class="ff-blockers"><strong>${testingReview()?'QA/QC PASS is blocked':'Resolve before completing this step'}</strong><ul>${list.map(value=>`<li>${esc(value)}</li>`).join('')}</ul></div>`:'';
   }
   function currentStep(){
     const detail=state.detail,flow=detail.flow,step=flow.current;
     if(!step){
+      const inheritedAssembly=flow.route==='spool'&&detail.parent?.route==='assembly'&&detail.flow_stage?.inherited===true&&detail.flow_stage.source_item_id===detail.parent.item_id;
       let title=flow.status==='admin_released'?'Administrative release':flow.status==='shipped'?'Shipment recorded · awaiting delivery':flow.status==='delivered'?'Delivered to customer':'Route complete';
       let description=flow.route==='component'?'This component is ready for the linked spool’s fabrication route.':flow.route==='spool'?'This completed spool can be collected for its assembly.':'The assembly’s recorded route is complete.';
       if(flow.status==='admin_released')description='An administrator released this component. Its recorded work, inspections and unresolved requirements retain their actual status. Admin controls can return it to its previous process position.';
       if(flow.status==='shipped')description='Record the delivery receipt when the customer receives the assembly.';
       if(flow.status==='delivered')description='The delivery acknowledgment remains in the process history.';
+      if(inheritedAssembly)description='This spool’s fabrication route is complete. Its recorded station follows the parent assembly, where testing and finishing are recorded for the linked spools.';
       const shipment=['shipped','delivered'].includes(flow.status)?metadata([['Shipped',stamp(flow.shipped_at)],['Carrier',flow.carrier],['Shipping reference',flow.shipment_reference],['Destination',flow.destination],...(flow.status==='delivered'?[['Delivered',stamp(flow.delivered_at)],['Receipt reference',flow.receipt_reference],['Received by',flow.recipient]]:[])]):'';
-      return `<section class="card ff-current"><div class="ff-current-label">${esc(routeNames[flow.route])} route</div><h2>${title}</h2><p class="muted">${description}</p>${shipment}${can('deliver')?action('deliver','Record delivery receipt','','primary'):''}${timing()}</section>`;
+      return `<section class="card ff-current"><div class="ff-current-label">${esc(routeNames[flow.route])} route</div><h2>${title}</h2><p class="muted">${description}</p>${inheritedAssembly?`<div class="actions">${action('item','Open assembly process',detail.parent.item_id,'primary')}</div>`:''}${shipment}${can('deliver')?action('deliver','Record delivery receipt','','primary'):''}${timing()}</section>`;
     }
-    const allowed=can('advance'),qa=step.qa,blocked=arr(flow.blockers).length>0;
-    let html=`<section class="card ff-current"><div class="ff-section-head"><div><div class="ff-current-label">Current step ${step.number} of 24 · ${esc(routeNames[flow.route])} route</div><h2>${esc(step.title)}</h2></div>${tag(openExceptions().length?'rework':'active')}</div>${timing()}${blockers()}`;
+    const allowed=can('advance')||testingReview()&&can('fail'),qa=step.qa,blocked=arr(flow.blockers).length>0;
+    let html=`<section class="card ff-current"><div class="ff-section-head"><div><div class="ff-current-label">Current step ${step.number} of 24 · ${esc(routeNames[flow.route])} route</div><h2>${esc(step.title)}</h2></div>${tag(openExceptions().length?'rework':'active')}</div>${testingSummary()}${timing()}${blockers()}`;
     html+=`<p class="ff-footer-note">Recorded by: ${arr(step.roles).map(value=>esc(roleLabel(value))).join(' · ')}</p>`;
-    if(allowed)html+='<form id="flowStepForm"><div id="flowStepError" class="ff-error hidden" role="alert"></div>';
+    if(allowed)html+='<form id="flowStepForm"><div id="flowStepError" class="ff-error hidden" role="alert"></div>'+testingChoices();
+    if(allowed&&testingReview())html+='<fieldset id="flowTestingPassChecks" class="ff-testing-pass-checks">';
     html+=`<ul class="ff-checklist">${arr(step.checks).map(check=>`<li>${allowed?`<label><input type="checkbox" name="check_${esc(check.id)}" required> <span>${esc(check.label)}</span></label>`:`<span class="ff-check-read">${esc(check.label)}</span>`}</li>`).join('')}</ul>`;
+    if(allowed&&testingReview())html+='</fieldset>';
     if(allowed){
-      html+=stepInputs(step)+`<div class="actions"><button id="flowAdvance" type="submit" class="primary"${blocked?' disabled':''}>${step.number===24?'Record shipment':qa?'Pass inspection & continue':'Complete step '+step.number}</button>${can('fail')?action('fail',step.number===2?'Record failure / exception':'Record failed inspection'):''}</div></form>`;
+      html+=stepInputs(step)+testingFailureInputs(step)+`<div class="actions"><button id="flowAdvance" type="submit" class="primary"${blocked?' disabled':''}>${activeTesting()?esc(testingButton(activeTesting())):step.number===24?'Record shipment':qa?'Pass inspection & continue':'Complete step '+step.number}</button>${can('fail')&&!activeTesting()?action('fail',step.number===2?'Record failure / exception':'Record failed inspection'):''}</div></form>`;
     }else{
-      html+='<p class="ff-footer-note">An authorized employee can complete this step after checking the physical item and its records.</p>';
-      if(can('fail'))html+=action('fail','Record failed inspection');
+      html+=`<p class="ff-footer-note">${esc(testingActorRestriction()||'An authorized employee can complete this step after checking the physical item and its records.')}</p>`;
+      if(can('fail')&&!activeTesting())html+=action('fail','Record failed inspection');
     }
+    if(can('restart-testing'))html+=`<div class="actions">${action('restart-testing','Return to testing')}</div><p class="ff-footer-note">Start a new testing cycle when changed material or physical scope requires another review.</p>`;
     return html+'</section>';
   }
   function childCard(child){
@@ -248,6 +329,7 @@
     if(flow.route==='spool')html+=`<h3>Components · ${components.length} / ${num(flow.expected_children)} expected</h3>${components.length?components.map(childCard).join(''):'<p class="muted">No components linked. Open a component’s process record to assign it to this spool.</p>'}`;
     if(flow.route==='assembly')html+=`<h3>Spools · ${spools.length} / ${num(flow.expected_children)} expected</h3>${spools.length?spools.map(childCard).join(''):'<p class="muted">No spools linked yet.</p>'}`;
     html+=`<div class="actions">${can('assign-component')?action('assign-component',detail.parent?'Update spool assignment':'Assign component to spool'):''}${can('link-spool')?action('link-spool','Link spool to assembly'):''}${can('scope')&&!orderedAssembly?action('scope','Edit required count'):''}</div>`;
+    if(testingScopeFrozen())html+='<p class="ff-footer-note">The linked spool scope is fixed by this recorded testing route.</p>';
     if(orderedAssembly)html+=`<p class="ff-footer-note">Required spool count is managed by PO <strong>${esc(detail.order_scope.purchase_order)}</strong> · GPN / Assembly ${esc(detail.order_scope.gpn)}${detail.order_scope.assembly_part_number!==detail.order_scope.gpn?` · Retained part number ${esc(detail.order_scope.assembly_part_number)}`:''}. The count is locked once the assembly traveler starts.</p>`;
     if(flow.material_reference)html+=`<p class="ff-footer-note">Existing material basis: ${esc(flow.material_reference)}</p>`;
     return html+'</section>';
@@ -259,7 +341,11 @@
   function eventHistory(){
     const labels={start:'Route started',adopt:'Existing work adopted',advance:'Step completed',fail:'Inspection failed',deliver:'Delivery recorded',assign_component:'Component assigned',link_spool:'Spool linked',shipment:'Shipment recorded'};
     const rows=arr(state.detail.events);
-    return `<section class="card"><h2>Process history</h2>${rows.length?[...rows].reverse().map(row=>`<div class="ff-history"><strong>${esc(labels[row.action]||String(row.action).replace(/_/g,' '))}${row.step?' · step '+esc(row.step):''}</strong>${row.reference?`<p>Reference: ${esc(row.reference)}</p>`:''}${row.notes?`<p>${esc(row.notes)}</p>`:''}<small>${esc(row.actor)} · ${esc(stamp(row.at))}</small>${row.data&&Object.keys(row.data).length?`<details><summary class="ff-footer-note">Recorded details</summary><pre>${esc(JSON.stringify(row.data,null,2))}</pre></details>`:''}</div>`).join(''):'<p class="muted">No route events recorded.</p>'}</section>`;
+    return `<section class="card"><h2>Process history</h2>${rows.length?[...rows].reverse().map(row=>{
+      const data=row.data||{},isTesting=data.testing_protocol==='CLM-TEST-v1',restarted=isTesting&&data.testing_action==='restart',phase=isTesting?testingNames[restarted?data.next_phase:data.testing_phase]||'Testing':'',cycle=restarted?data.next_cycle:data.testing_cycle,attempt=restarted?null:data.testing_attempt,decision=restarted&&data.testing_required_preserved===true?'YES':data.testing_decision||data.decision,result=data.test_result;
+      const recorded=isTesting?({decision:'Testing decision recorded',start:'Test receipt recorded',complete:'Technician test report recorded',review:'QA/QC result recorded',correct:'Completed rework recorded',handoff:'Floor handoff recorded',restart:'Returned to testing'})[data.testing_action]:null;
+      return `<div class="ff-history"><strong>${esc(recorded||labels[row.action]||String(row.action).replace(/_/g,' '))}${row.step?' · step '+esc(row.step):''}</strong>${isTesting?`<p>${esc(phase)}${Number.isInteger(cycle)&&cycle>1?' · Cycle '+cycle:''}${Number.isInteger(attempt)?' · Attempt '+attempt:''}${['YES','NO'].includes(decision)?' · Testing required: '+esc(decision):''}${['PASS','FAIL'].includes(result)?' · Result: '+esc(result):''}</p>`:''}${row.reference?`<p>Reference: ${esc(row.reference)}</p>`:''}${row.notes?`<p>${esc(row.notes)}</p>`:''}<small>${esc(row.actor)} · ${esc(stamp(row.at))}</small>${Object.keys(data).length?`<details><summary class="ff-footer-note">Recorded details</summary><pre>${esc(JSON.stringify(data,null,2))}</pre></details>`:''}</div>`;
+    }).join(''):'<p class="muted">No route events recorded.</p>'}</section>`;
   }
   function timingHistory(){
     const process=state.detail.production_process;if(!process)return '';
@@ -301,11 +387,13 @@
     }
     const search=node('flowSearch');if(search)search.oninput=()=>{state.query=search.value;const start=search.selectionStart,end=search.selectionEnd;render();node('flowSearch').focus();node('flowSearch').setSelectionRange(start,end)};
     const form=node('flowStepForm');if(form)form.onsubmit=submitStep;
+    for(const name of ['testing_decision','test_result'])for(const choice of ['YES','NO','PASS','FAIL'])if(node('ff-'+name+'-'+choice))node('ff-'+name+'-'+choice).onchange=updateTestingChoice;
     if(node('flowHandoffSender')){
       const transfer=state.detail.transfer||state.detail.item.transfer;
       const update=control=>{if(node('flowHandoffReview'))node('flowHandoffReview').innerHTML=window.FabHandoff.reviewHtml(control,transfer,state.handoffOptions,state.detail.item)};
-      state.handoffControl=window.FabHandoff.bindControls('flowHandoff',{transfer,options:state.handoffOptions,onChange:update});update(state.handoffControl);
+      state.handoffControl=window.FabHandoff.bindControls('flowHandoff',{transfer,options:state.handoffOptions,onChange:update});constrainTestingDestination();update(state.handoffControl);
     }
+    updateTestingChoice();
   }
   async function save(path,payload){
     if(state.saving)return false;
@@ -328,21 +416,34 @@
   }
   async function submitStep(event){
     event.preventDefault();if(state.saving)return;
-    const detail=state.detail,step=detail.flow.current,sequence=state.sequence;if(!can('advance')||!step)return;
+    const detail=state.detail,step=detail.flow.current,sequence=state.sequence,value=activeTesting();if(!step)return;
     const values=Object.fromEntries(new FormData(event.target)),button=node('flowAdvance'),errorNode=node('flowStepError');
+    const qaFail=value?.action==='review'&&values.test_result==='FAIL';if(!(qaFail?can('fail'):can('advance')))return;
     button.disabled=true;errorNode.classList.add('hidden');
     try{
+      if(value?.requires_decision&&!['YES','NO'].includes(values.testing_decision))throw Error('Choose YES or NO to record whether testing is required.');
+      if(value?.requires_decision&&value.decision==='YES'&&values.testing_decision==='NO')throw Error('Testing remains required by the recorded YES decision. Select YES to continue this rework cycle.');
+      if(value?.requires_result&&!['PASS','FAIL'].includes(values.test_result))throw Error('Choose PASS or FAIL for this test attempt.');
+      if(failedTestReport(value)&&values.test_result==='PASS')throw Error('The technician’s report records FAIL. Record a QA/QC FAIL disposition, complete rework, and submit a fresh test before QA/QC PASS.');
+      if(value?.action==='review'&&values.test_result==='PASS'&&testingPassBlockers().length)throw Error('QA/QC PASS is blocked: '+testingPassBlockers().join(' '));
       const confirmations=arr(step.checks).filter(check=>values['check_'+check.id]==='on').map(check=>check.id);
-      if(confirmations.length!==arr(step.checks).length)throw Error('Confirm every checklist item before completing this step.');
-      const payload={expected_version:detail.flow.version,confirmations,notes:String(values.notes||'').trim()};
+      if(!qaFail&&confirmations.length!==arr(step.checks).length)throw Error('Confirm every checklist item before completing this step.');
+      const payload={expected_version:detail.flow.version,...testingPayload(value),...(!qaFail?{confirmations,notes:String(values.notes||'').trim()}:{test_result:'FAIL'})};
+      if(value?.requires_decision)payload.testing_decision=values.testing_decision;
+      if(value?.requires_result)payload.test_result=values.test_result;
       if(step.requires_scan)payload.scanned_item_id=await readId(values.scanned_item_id);
-      if(step.number===17){
+      if(childScans(step)){
         payload.scanned_child_ids=await Promise.all(String(values.scanned_child_ids||'').split(/\r?\n/).map(value=>value.trim()).filter(Boolean).map(value=>readId(value,'Linked spool ID')));
         if(!payload.scanned_child_ids.length)throw Error('Scan or enter each linked spool ID on its own line.');
       }
-      if(step.requires_handoff){
+      if(step.requires_handoff||qaFail){
+        if(qaFail&&(!value.return_to?.location_id||!value.return_to?.sender_badge))throw Error('Refresh the recorded return station and sending employee before recording QA/QC FAIL.');
         if(!state.handoffControl)throw Error('Refresh this handoff before identifying both employees.');
         Object.assign(payload,await state.handoffControl.read(values));
+        if(value?.action==='start'&&me?.role!=='admin'&&(!me?.badge||payload.receiver_badge!==me.badge))throw Error('The signed-in testing employee must scan their own receiving badge before starting the test.');
+        const destination=qaFail?value.return_to?.location_id:step.handoff_location_id;
+        if(destination&&payload.location_id!==destination)throw Error('Use the destination required by this testing phase.');
+        if(qaFail&&(!value.return_to?.sender_badge||payload.receiver_badge!==value.return_to.sender_badge))throw Error('Scan the receiving badge of the recorded employee who sent this test into QA/QC.');
       }
       else if(step.requires_location||step.number===3){
         const transfer=detail.transfer||detail.item.transfer,location_id=String(values.location_id||'').trim();
@@ -351,15 +452,16 @@
         payload.location_id=location_id;payload.expected_transfer_version=transfer.version;
       }
       if(step.number===5)payload.target_spool_id=await readId(values.target_spool_id,'Assigned spool ID');
-      if(step.requires_reference){payload.reference=String(values.reference||'').trim();if(!payload.reference)throw Error('Enter the required record or inspection reference.');}
+      if(step.requires_reference||qaFail){payload.reference=String(values.reference||'').trim();if(payload.reference.length<2)throw Error('Enter the required record or inspection reference (at least two characters).');}
       if(step.number===24)for(const key of ['carrier','shipment_reference','destination']){payload[key]=String(values[key]||'').trim();if(!payload[key])throw Error('Enter the carrier, shipping reference, and destination.');}
-      if(step.qa&&openExceptions().some(row=>Number(row.step)===Number(step.number))){payload.resolution=String(values.resolution||'').trim();if(!payload.resolution)throw Error('Record the rework resolution and reinspection findings.');}
+      if(!qaFail&&needsResolution(step)){payload.resolution=String(values.resolution||'').trim();if(payload.resolution.length<4)throw Error('Record the completed rework and reinspection findings (at least four characters).');}
+      if(qaFail){payload.reason=String(values.reason||'').trim();if(payload.reason.length<4)throw Error('Record the failure, required repair and nonconformance details (at least four characters).');}
       if(state.sequence!==sequence||state.item!==detail.item.id)return;
-      await save(ROOT+'/items/'+encode(detail.item.id)+'/advance',payload);
+      await save(ROOT+'/items/'+encode(detail.item.id)+(qaFail?'/fail':'/advance'),payload);
     }catch(error){
       if(state.sequence!==sequence)return;
       const target=node('flowStepError');if(target){target.textContent=errorText(error);target.classList.remove('hidden');target.scrollIntoView({block:'nearest'})}else notify(errorText(error));
-    }finally{button.disabled=arr(state.detail?.flow?.blockers).length>0}
+    }finally{if(state.sequence===sequence){button.disabled=arr(state.detail?.flow?.blockers).length>0;updateTestingChoice();}}
   }
   function dialog(title,content,callback,label='Save'){
     node('flowDialogTitle').textContent=title;node('flowDialogFields').innerHTML=content;
@@ -402,6 +504,7 @@
   }
   function failStep(){
     if(!can('fail'))return;
+    if(activeTesting()){if(testingReview()&&node('ff-test_result-FAIL')){node('ff-test_result-PASS').checked=false;node('ff-test_result-FAIL').checked=true;updateTestingChoice();node('ff-field-reason')?.focus();}return;}
     const detail=state.detail,step=detail.flow.current,choices=arr(step.return_steps);
     dialog('Record failure · step '+step.number,'<p>The exception stays in the history. The item returns to the selected process and requires a new inspection before continuing.</p>'+fields(field('reason','Failure / nonconformance and required repair','',{required:true,type:'textarea',full:true,maxlength:3000})+field('reference','Inspection / NCR reference','',{required:true,maxlength:500,full:true})+field('return_step','Return to step',choices[0],{required:true,options:choices.map(number=>[number,`${number} · ${definition(number)?.title||''}`])})),async values=>{
       const payload={expected_version:detail.flow.version,reason:String(values.reason||'').trim(),reference:String(values.reference||'').trim(),return_step:Number(values.return_step)};
@@ -422,6 +525,15 @@
       if(reason.length<4||reference.length<2)throw Error('Enter the correction reason and authorization reference.');
       return save(ROOT+'/items/'+encode(detail.item.id)+'/scope',{expected_version:flow.version,expected_children:expected,material_reference:material,reason,reference});
     },'Save scope correction');
+  }
+  function restartTesting(){
+    if(!can('restart-testing'))return;
+    const detail=state.detail;
+    dialog('Return to testing','<p>Return this assembly and its linked spools to Step 17 for a new testing cycle when the earlier testing evidence needs to be reviewed again. The earlier reports, failures, and correction records stay in the route history. Open failure requirements must still be resolved.</p>'+(testing()?.decision==='YES'?'<p class="notice">Testing remains required by the recorded YES decision. The new cycle must complete NDT, pressure testing, and their separate QA/QC reviews.</p>':'')+fields(field('reason','Why testing must be reviewed again','',{required:true,type:'textarea',full:true,maxlength:3000})+field('reference','Changed material, scope, or authorization reference','',{required:true,minlength:2,maxlength:500,full:true})),values=>{
+      const reason=String(values.reason||'').trim(),reference=String(values.reference||'').trim();
+      if(reason.length<4||reference.length<2)throw Error('Enter the reason (at least four characters) and a source or authorization reference (at least two characters).');
+      return save(ROOT+'/items/'+encode(detail.item.id)+'/restart-testing',{expected_version:detail.flow.version,reason,reference});
+    },'Return to testing');
   }
   function linkItem(kind){
     if(!can(kind))return;
@@ -462,6 +574,7 @@
     if(name==='start')return startFlow();
     if(name==='fail')return failStep();
     if(name==='scope')return editScope();
+    if(name==='restart-testing')return restartTesting();
     if(name==='assign-component'||name==='link-spool')return linkItem(name);
     if(name==='deliver')return deliver();
     if(name==='pause'||name==='resume')return pauseProcess(name);
@@ -484,4 +597,5 @@
   node('itemFlowBtn').onclick=()=>{if(current)open({item:current.id})};
   window.FabFlow={open,refresh,cancelPending(){state.sequence++;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
 })();
+
 

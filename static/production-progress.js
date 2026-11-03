@@ -8,8 +8,8 @@
   const stageBadge=value=>flowStatus()?.badge(value)||'';
   const spoolNumber=value=>flowStatus()?.spoolNumber?.(value)||value.qr_alias||value.spool_number||value.part_number||value.id;
   const spoolText=(value,label=spoolNumber(value),tag='span')=>flowStatus()?.spoolText?.(value,label,tag)||`<${tag}>${esc(label)}</${tag}>`;
-  const stepNames={completed:'Recorded',current:'Current step',pending:'Pending',not_recorded:'Earlier step not recorded'};
-  const stageNames={completed:'Recorded',current:'In progress',pending:'Pending',not_recorded:'History incomplete',scope_unknown:'Scope not declared',not_applicable:'Outside this route'};
+  const stepNames={completed:'Recorded',current:'Current step',pending:'Pending',not_recorded:'Earlier step not recorded',not_required:'Not required — testing decision recorded'};
+  const stageNames={completed:'Recorded',current:'In progress',pending:'Pending',not_recorded:'History incomplete',not_required:'Not required',scope_unknown:'Scope not declared',not_applicable:'Outside this route'};
   const button=(action,label,id='',project='',cls='')=>`<button type="button" class="${esc(cls)}" data-pp-action="${esc(action)}" data-pp-id="${esc(id)}" data-pp-project="${esc(project)}">${esc(label)}</button>`;
   const option=(value,label,current)=>`<option value="${esc(value)}"${text(value)===text(current)?' selected':''}>${esc(label)}</option>`;
   const finite=v=>typeof v==='number'&&Number.isFinite(v),quantity=v=>Number.isInteger(v)&&v>=0?v:0;
@@ -32,11 +32,11 @@
   function errorText(error){try{const d=JSON.parse(error.message);if(d.message)return d.message;}catch(_){}return text(error.message||'Production progress could not be loaded.');}
   function key(kind,id){return kind+':'+id;}
   function opened(k,force=false){return force||state.expanded.has(k)?' open':'';}
-  function ownProgress(n){return {completed:n.progress?.completed,total:n.progress?.total,not_recorded:n.progress?.not_recorded,percent:n.progress?.percent};}
-  function overallProgress(s){return {completed:s?.completed_steps,total:s?.total_steps,not_recorded:s?.not_recorded_steps,percent:s?.percent};}
+  function ownProgress(n){return {completed:n.progress?.completed,total:n.progress?.total,not_recorded:n.progress?.not_recorded,not_required:n.progress?.not_required,percent:n.progress?.percent};}
+  function overallProgress(s){return {completed:s?.completed_steps,total:s?.total_steps,not_recorded:s?.not_recorded_steps,not_required:s?.not_required_steps,percent:s?.percent};}
   function meter(p,title,complete=false,small=false){
-    const pct=percent(p?.percent),total=quantity(p?.total),done=quantity(p?.completed),unrecorded=quantity(p?.not_recorded);
-    return `<div class="pp-meter${small?' pp-meter-small':''}${complete&&pct===100?' pp-meter-complete':''}"><div class="pp-meter-heading"><span>${esc(title)}</span><strong>${number(pct)}</strong></div>${pct===null?'<div class="pp-empty-meter" aria-label="Progress is not yet known"></div>':`<progress max="100" value="${pct}" aria-label="${esc(title)}">${number(pct)}</progress>`}<small>${total?`${done} of ${total} recorded steps`:'No registered production steps'}${unrecorded?` · ${unrecorded} earlier step${unrecorded===1?'':'s'} not recorded`:''}</small></div>`;
+    const pct=percent(p?.percent),total=quantity(p?.total),done=quantity(p?.completed),unrecorded=quantity(p?.not_recorded),notRequired=quantity(p?.not_required);
+    return `<div class="pp-meter${small?' pp-meter-small':''}${complete&&pct===100?' pp-meter-complete':''}"><div class="pp-meter-heading"><span>${esc(title)}</span><strong>${number(pct)}</strong></div>${pct===null?'<div class="pp-empty-meter" aria-label="Progress is not yet known"></div>':`<progress max="100" value="${pct}" aria-label="${esc(title)}">${number(pct)}</progress>`}<small>${total?`${done} of ${total} recorded steps`:notRequired?'No required steps':'No registered production steps'}${unrecorded?` · ${unrecorded} earlier step${unrecorded===1?'':'s'} not recorded`:''}${notRequired?` · ${notRequired} not required`:''}</small></div>`;
   }
   function summaryBadges(s){
     let html=`<span>${quantity(s?.spools)} spool${quantity(s?.spools)===1?'':'s'}</span><span>${quantity(s?.parts)} part${quantity(s?.parts)===1?'':'s'}</span>`;
@@ -54,11 +54,11 @@
   }
   function stageStrip(stages,title='Flow progress',current=null){
     const active=flowStatus()?.normalize(current);
-    const card=(s,index)=>`<li class="pp-stage pp-stage-${esc(s.state)}${active?.key===s.key?' pp-stage-effective-current':''}" data-pp-stage="${esc(s.key)}"${active?.key===s.key?' aria-current="step"':''}><div><strong><span class="pp-stage-sequence">${index+1}</span>${stageText(s,s.label)}</strong><span>${active?.key===s.key?'Current part status':esc(stageNames[s.state]||'Pending')}</span></div>${s.state==='not_applicable'?'<small>No steps on this route</small>':`${meter({completed:s.completed,total:s.total,not_recorded:s.not_recorded,percent:s.percent},s.label,false,true)}`}${current?stationTotal(current,s.key):''}${quantity(s.missing_records)?`<small class="pp-stage-missing">${quantity(s.missing_records)} required item${s.missing_records===1?'':'s'} still to register</small>`:''}${s.separate?'<small class="pp-shipping-note">Shipment recorded separately</small>':''}</li>`;
+    const card=(s,index)=>`<li class="pp-stage pp-stage-${esc(s.state)}${active?.key===s.key?' pp-stage-effective-current':''}" data-pp-stage="${esc(s.key)}"${active?.key===s.key?' aria-current="step"':''}><div><strong><span class="pp-stage-sequence">${index+1}</span>${stageText(s,s.label)}</strong><span>${active?.key===s.key?'Current part status':esc(stageNames[s.state]||'Pending')}</span></div>${s.state==='not_applicable'?'<small>No steps on this route</small>':s.state==='not_required'?'<small>Testing decision recorded; excluded from required steps</small>':`${meter({completed:s.completed,total:s.total,not_recorded:s.not_recorded,not_required:s.not_required,percent:s.percent},s.label,false,true)}`}${current?stationTotal(current,s.key):''}${quantity(s.missing_records)?`<small class="pp-stage-missing">${quantity(s.missing_records)} required item${s.missing_records===1?'':'s'} still to register</small>`:''}${s.separate?'<small class="pp-shipping-note">Shipment recorded separately</small>':''}</li>`;
     return `<section class="pp-stage-section"><h3>${esc(title)}</h3><ol class="pp-stage-grid">${arr(stages).map(card).join('')}</ol></section>`;
   }
   function itemStages(n){
-    return arr(state.data?.stage_catalog).map(s=>{const steps=arr(n.steps).filter(x=>arr(s.steps).includes(x.number));const completed=steps.filter(x=>x.state==='completed').length,current=steps.filter(x=>x.state==='current').length,not_recorded=steps.filter(x=>x.state==='not_recorded').length;return {...s,total:steps.length,completed,current,not_recorded,percent:steps.length?completed/steps.length*100:null,state:!steps.length?'not_applicable':completed===steps.length?'completed':current?'current':not_recorded===steps.length?'not_recorded':'pending'};});
+    return arr(state.data?.stage_catalog).map(s=>{const selected=arr(n.steps).filter(x=>arr(s.steps).includes(x.number)),steps=selected.filter(x=>x.state!=='not_required'),not_required=selected.length-steps.length;const completed=steps.filter(x=>x.state==='completed').length,current=steps.filter(x=>x.state==='current').length,not_recorded=steps.filter(x=>x.state==='not_recorded').length;return {...s,total:steps.length,completed,current,not_recorded,not_required,percent:steps.length?completed/steps.length*100:null,state:!steps.length?(not_required?'not_required':'not_applicable'):completed===steps.length?'completed':current?'current':not_recorded===steps.length?'not_recorded':'pending'};});
   }
   function searchMatch(values){const q=state.query.trim().toLowerCase();return !q||values.some(v=>text(v).toLowerCase().includes(q));}
   function ownMatch(n){return (state.kind==='all'||kind(n)===state.kind)&&(state.status==='all'||state.status==='hold'&&n.on_hold||state.status==='finished'&&n.fabrication_finished||state.status==='wip'&&!n.fabrication_finished);}

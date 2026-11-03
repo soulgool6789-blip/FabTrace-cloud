@@ -40,8 +40,8 @@ DESCRIPTIONS = {
     'painter': 'Sandblast and paint completion, coating timing and coating evidence for QA review.',
     'finisher': 'Component preparation, cutting/beveling timing, surface-preparation and packaging evidence.',
     'misc': 'General support: view records, badge handoffs, custom task timing and explicitly assigned miscellaneous evidence.',
-    'pressure_testing_technician': 'Assigned pressure-test evidence, pressure-testing Job Packet records and testing timers; QA/QC accepts test results.',
-    'ndt': 'Assigned NDE evidence, Inspection and NDE Job Packet records and testing timers; QA/QC accepts test results.',
+    'pressure_testing_technician': 'Pressure-test custody, recorded test results, mandatory test corrections, assigned pressure evidence and testing timers; QA/QC accepts results.',
+    'ndt': 'NDT custody, recorded test results, mandatory test corrections, assigned NDE evidence and testing timers; QA/QC accepts results.',
 }
 ALL_PROCESSES = ('material_prep', 'cutting_beveling', 'fit_up', 'welding', 'nde',
                  'pwht', 'dimensional', 'coating', 'final_qa', 'dispatch', 'custom')
@@ -179,4 +179,5 @@ def can_control_process(user, key):
             return True
         return 1 <= step <= 24 and (role in ('admin', 'supervisor') or role in flow_step_roles(step))
     return key in PROCESS_KEYS.get(role, ())
+
 

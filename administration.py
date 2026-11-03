@@ -392,7 +392,7 @@ def release_override(item_id: str, data: DecisionIn, u: Employee = Depends(auth)
 
 @router.post('/items/{item_id}/return-to-work')
 def return_to_work(item_id: str, data: DecisionIn, u: Employee = Depends(auth), s: Session = Depends(db)):
-    from flow import STEP_BY_NUMBER, _event, guard_reopen, on_item_reopened
+    from flow import current_step_definition, _event, guard_reopen, on_item_reopened
     from production import sync_flow_process
     from tracking import is_tracked, reopen_tracked
     item, actor = _locked_item(s, item_id, u)
@@ -414,12 +414,22 @@ def return_to_work(item_id: str, data: DecisionIn, u: Employee = Depends(auth), 
             # new timed visit. No inspection or actual work state is replaced.
             target = prior['current_step']
             plan.current_step, plan.status = target, prior['status']
+            from flow_testing import ACTIVE_PHASES, FlowTestingState, PHASE_STEP, PROTOCOL
+            testing = s.get(FlowTestingState, item.id) if plan.route == 'assembly' else None
+            pending_phase = (testing.phase if testing and testing.protocol == PROTOCOL
+                             and testing.phase in ACTIVE_PHASES else None)
+            if pending_phase:
+                target = PHASE_STEP[pending_phase]
+                plan.current_step, plan.status = target, 'active'
             plan.step_entered_at = now if target is not None and plan.status == 'active' else None
-            plan.completed_at = dt.datetime.fromisoformat(prior['completed_at']) if prior.get('completed_at') else None
+            plan.completed_at = (dt.datetime.fromisoformat(prior['completed_at'])
+                                 if prior.get('completed_at') and not pending_phase else None)
             _event(s, item, plan, actor.badge, 'admin_return_to_work', target, now,
                 reference=data.reference, notes=data.reason,
-                data={'return_step': target, 'override_audit_id': override['audit_id'], 'prior_override_flow': current_flow})
-            sync_flow_process(s, item, actor.badge, STEP_BY_NUMBER[target] if target is not None and plan.status == 'active' else None,
+                data={'return_step': target, 'override_audit_id': override['audit_id'],
+                      'prior_override_flow': current_flow,
+                      **({'restored_testing_phase': pending_phase} if pending_phase else {})})
+            sync_flow_process(s, item, actor.badge, current_step_definition(s, plan) if target is not None and plan.status == 'active' else None,
                 now, 'Returned to the pre-override production position. ' + data.reason)
     else:
         item.reinspection_due, item.dimensional, item.weld = True, 'Not started', 'Not started'
@@ -623,3 +633,4 @@ def restore_employee(badge: str, data: EmployeeRemovalIn, u: Employee = Depends(
         'from': before, 'to': after, 'existing_sessions_revoked': True, 'access_restored': False})
     _commit(s)
     return {**after, 'reauthenticate': False}
+

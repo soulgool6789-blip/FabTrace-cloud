@@ -33,7 +33,7 @@ def test_later_clm_resume_and_corrective_sync_need_heat_and_mtr_without_blocking
     assembly = create_item(api, 'HEAT-LATER-TIMER', kind='Assembly', planned=1)
     child = completed_spool(api, 'HEAT-LATER-TIMER-CHILD')
     record = add_weld(api, assembly)
-    enroll(api, assembly, 'assembly', expected_children=1)
+    enroll(api, assembly, 'assembly', expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     ready_to_weld(api, assembly, record['id'])
     finish_weld(api, record['id'])
@@ -75,3 +75,4 @@ def test_later_clm_resume_and_corrective_sync_need_heat_and_mtr_without_blocking
     resumed = ok(api.post(path, {'action': 'resume', 'expected_version': allowed['version']}), 201)
     assert resumed['status'] == 'running'
     assert resumed['current']['process_key'] == 'clm_18'
+

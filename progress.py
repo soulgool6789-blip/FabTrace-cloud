@@ -45,7 +45,7 @@ def _stamp(value):
     return value.isoformat()
 
 
-def _recorded_steps(plan, events):
+def _recorded_steps(plan, events, testing=None):
     if not plan:
         return 0, 0, 0
     route = ROUTE_BY_ID[plan.route]
@@ -58,11 +58,15 @@ def _recorded_steps(plan, events):
                 for n in states:
                     if n >= target:
                         states[n] = 'pending'
-        elif event.action == 'advance' and event.step in states:
+        elif event.action == 'advance' and event.step in states and not (event.data or {}).get('phase_only'):
             states[event.step] = 'completed'
+    from flow_testing import project_step_states
+    states = project_step_states(states, testing)
     if plan.status == 'active' and plan.current_step in states:
         states[plan.current_step] = 'current'
-    return sum(v == 'completed' for v in states.values()), len(states), sum(v == 'not_recorded' for v in states.values())
+    return (sum(v == 'completed' for v in states.values()),
+            sum(v != 'not_required' for v in states.values()),
+            sum(v == 'not_recorded' for v in states.values()))
 
 
 def project_rows(s, project_id=None):
@@ -187,7 +191,10 @@ def project_rows(s, project_id=None):
                 elif not flow or flow.route != 'component':
                     errors.append('Set up the structured spool plan or component route')
                 errors.extend(post_fabrication_heat_errors(s, item))
-                completed, total, unrecorded = _recorded_steps(flow, flow_events[item.id])
+                from flow import current_step_definition
+                from flow_testing import testing_state
+                completed, total, unrecorded = _recorded_steps(flow, flow_events[item.id], testing_state(s, flow))
+                current_definition = current_step_definition(s, flow) if flow and flow.current_step else None
                 kind = 'assembly' if plan and item.kind == 'Assembly' else 'spool' if plan else 'component' if flow and flow.route == 'component' else 'unplanned'
                 raw[item.id] = {'id': item.id, 'description': item.description,
                     'google_part_number': item.google_part_number, 'kind': kind, 'item_kind': item.kind,
@@ -197,7 +204,7 @@ def project_rows(s, project_id=None):
                     'qa_accepted': qa, 'completed_steps': completed, 'total_steps': total,
                     'not_recorded_steps': unrecorded, 'flow_status': flow.status if flow else 'not_started',
                     'current_step': flow.current_step if flow else None,
-                    'current_title': STEP_BY_NUMBER[flow.current_step]['title'] if flow and flow.current_step else '',
+                    'current_title': current_definition['title'] if current_definition else '',
                     'released': bool(item.released), 'location': item.location, 'handler': item.handler,
                     'release_mode': release_control['mode'], 'release_label': release_control['label'],
                     'administrative_release': release_control['active_override'],
@@ -348,3 +355,4 @@ def project_progress(project_id: str,
         'as_of': _stamp(utcnow()), 'definitions': DEFINITIONS, 'counts': counts,
         'subprojects': [{'id': p.id, 'name': p.name} for p in s.scalars(select(Subproject).where(Subproject.project_id == project_id).order_by(Subproject.id))],
         'items': matches, 'total': len(matches)}
+

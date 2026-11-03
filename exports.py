@@ -31,6 +31,7 @@ from tracking import (
 )
 from production import SpoolProcessEvent, process_snapshot
 from flow import FlowPlan, FlowEvent, FlowException, ComponentLink, STEPS as FLOW_STEPS, VERSION as FLOW_VERSION
+from flow_testing import FlowTestingState
 from quality import (QualityWorkspace, QualityRequirement, QualityDocument, QualityEvidence,
                      QualityAction, QualityReview, QualityEvent, workspace_detail)
 from dossier import (DossierProject, DossierEntry, DossierDocument, DossierReview,
@@ -124,6 +125,7 @@ TABLE_SPECS = (
     _spec(TrackingHold, 'Holds', 'id item_id weld_id reason opened_by opened_at closed_by closed_at close_notes'),
     _spec(SpoolProcessEvent, 'Process events', 'id item_id sequence event process_key process_name actor at notes'),
     _spec(FlowPlan, 'Flow plans', 'item_id route current_step status version expected_children baseline_step baseline_reference baseline_reason material_reference started_by started_at step_entered_at updated_at completed_at shipped_at carrier shipment_reference destination delivered_at receipt_reference recipient', 'item_id'),
+    _spec(FlowTestingState, 'Assembly testing states', 'item_id protocol cycle phase decision decision_by decision_at test_kind attempt test_started_by test_started_at report_result report_reference report_notes reported_by reported_at report_event_id report_basis ndt_basis ndt_report_event_id ndt_review_event_id qa_result qa_reference reviewed_by reviewed_at origin_snapshot pending_exception_ids pending_exception_kinds correction phase_entered_at created_at updated_at', 'item_id'),
     _spec(FlowEvent, 'Flow events', 'id item_id sequence action step actor at reference notes data'),
     _spec(FlowException, 'Flow exceptions', 'id item_id step return_step reason reference opened_by opened_at closed_by closed_at resolution'),
     _spec(ComponentLink, 'Component links', 'component_id spool_id assigned_by assigned_at', 'component_id'),

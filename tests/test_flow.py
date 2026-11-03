@@ -43,7 +43,8 @@ def create_item(api, item_id, kind="Part", planned=0, project=PROJECT):
     return item_id
 
 
-def enroll(api, item_id, route, *, start_step=None, expected_children=0, **values):
+def enroll(api, item_id, route, *, start_step=None, expected_children=0,
+           legacy_testing=False, **values):
     from receiving_helpers import ensure_scope_arrival
     ensure_scope_arrival(api, item_id)
     body = {"route": route, "expected_children": expected_children, **values}
@@ -51,7 +52,37 @@ def enroll(api, item_id, route, *, start_step=None, expected_children=0, **value
         body.setdefault("material_reference", "TEST-EXISTING-MATERIAL-REGISTER")
     if start_step is not None:
         body.update({"start_step": start_step, "baseline_reference": "TEST-CONTROLLED-BASELINE", "baseline_reason": "Test work was already in progress when the traveler was enrolled"})
-    return ok(api.post(f"{ROOT}/items/{item_id}/start", body), 201)
+    record = ok(api.post(f"{ROOT}/items/{item_id}/start", body), 201)
+    if legacy_testing:
+        # Only tests that explicitly exercise the retained one-pass Hydro/UT
+        # route opt in. The default is a pristine Step17 and must make the new
+        # decision. Append documented prior progress and a controlled return;
+        # do not suppress the production protocol or overwrite its history.
+        assert route == 'assembly' and record['flow']['current_step'] == 17
+        flow = importlib.import_module('flow')
+        with api.session_factory() as session:
+            item = session.get(api.application.Item,item_id)
+            plan = session.get(flow.FlowPlan,item_id)
+            assert session.get(flow.FlowTestingState,item_id) is None
+            at = api.application.utcnow()
+            plan.current_step,plan.step_entered_at = 18,at
+            flow._event(session,item,plan,BADGES['admin'],'advance',17,at,
+                reference='TEST-RETAINED-LEGACY-TESTING-RELEASE',
+                notes='Synthetic retained legacy Hydro/UT release; earlier supporting scope is not reconstructed.',
+                data={'next_step':18,'fixture_history':'Retained legacy traveler'},
+                step_definition=flow.LEGACY_STEP_17)
+            flow._sync(session,item,BADGES['admin'],18,at,'Retained legacy testing release fixture')
+            plan.current_step,plan.step_entered_at = 17,at
+            flow._event(session,item,plan,BADGES['admin'],'admin_return_to_work',17,at,
+                reference='TEST-LEGACY-CONTROLLED-RETURN',
+                notes='Synthetic controlled return to Step17; the next release must satisfy every live gate.',
+                data={'return_step':17,'fixture_history':'Controlled return of retained legacy traveler'},
+                step_definition=flow.LEGACY_STEP_17)
+            flow._sync(session,item,BADGES['admin'],17,at,'Controlled return of legacy testing fixture')
+            session.commit()
+        record = detail(api,item_id)
+        assert record['flow']['testing'] is None
+    return record
 
 
 def action_body(api, item_id, **values):
@@ -131,7 +162,7 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     steps = definition["steps"]
     assert [row["number"] for row in steps] == list(range(1, 25))
     assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 18, 22}
-    assert definition['version'] == 'CLM-24-v5'
+    assert definition['version'] == 'CLM-24-v6'
     assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
         (2, 'QA-001', 'QA/QC-001 · Check Dimensions'),
         (11, 'QA-002', 'QA/QC-002 · Check Dimensions'),
@@ -184,7 +215,7 @@ def test_step2_reviews_available_documents_with_heat_and_mtr_deferred(api):
         reference='TEST-AVAILABLE-ISOMETRIC', notes='Available dimensions and documents reviewed; heat and MTR deferred.')
     assert_current(progressed, 3)
     event = next(row for row in progressed['events'] if row['action'] == 'advance' and row['step'] == 2)
-    assert event['data']['definition_version'] == 'CLM-24-v5'
+    assert event['data']['definition_version'] == 'CLM-24-v6'
     assert event['data']['confirmations'] == ['s2_1', 's2_2']
     assert event['data']['step_definition']['checks'][1] == {'id': 's2_2', 'label': expected_label}
     assert 'Verify MTR and material documentation' not in str(event['data']['step_definition'])
@@ -215,7 +246,7 @@ def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, monkeyp
     assert retained[0]['data']['definition_version'] == legacy_version
     assert retained[0]['data']['step_definition'] == legacy
     definition = catalog(api)
-    assert definition['version'] == 'CLM-24-v5'
+    assert definition['version'] == 'CLM-24-v6'
     current = detail(api, item_id)
     assert current['events'] == retained
     assert current['flow']['current']['title'] == 'QA/QC-001 · Check Dimensions'
@@ -223,7 +254,7 @@ def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, monkeyp
     assert current['flow']['current']['checks'] != legacy['checks']
     progressed = advance(api, item_id, role='inspector')
     newer = next(row for row in progressed['events'] if row['action'] == 'advance')
-    assert newer['data']['definition_version'] == 'CLM-24-v5'
+    assert newer['data']['definition_version'] == 'CLM-24-v6'
     assert newer['data']['step_definition']['qa_code'] == 'QA-001'
     assert newer['data']['step_definition'] == definition['steps'][1]
     assert next(row for row in progressed['events'] if row['sequence'] == retained[0]['sequence']) == retained[0]
@@ -253,7 +284,7 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
     weld = add_weld(api, spool_id)
     enroll(api, component, "component")
     enroll(api, spool_id, "spool", expected_children=1)
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     expected_stages = {
         1: ('inventory', 'black'), 2: ('qa_001', 'black'),
         3: ('qa_001', 'black'), 4: ('inventory', 'black'),
@@ -349,7 +380,8 @@ def test_all_twenty_four_steps_keep_component_spool_assembly_identity_and_confir
         record = detail(api, identity)
         assert record["item"]["id"] == identity
         assert record["production_process"]["current"] is None
-        assert len(record["production_process"]["visits"]) == 8
+        # The retained assembly fixture includes its prior release and return.
+        assert len(record["production_process"]["visits"]) == (10 if identity == assembly else 8)
         assert all(row["status"] == "finished" for row in record["production_process"]["visits"])
     with api.session_factory() as session:
         identities = session.scalars(select(api.application.Item.id)).all()
@@ -678,7 +710,7 @@ def test_assembly_collection_needs_full_declared_scope_and_each_child_scan(api):
     assembly = create_item(api, "FLOW-COLLECT-ASSEMBLY", kind="Assembly")
     first = completed_spool(api, "FLOW-ASSEMBLY-SPOOL-A")
     second = completed_spool(api, "FLOW-ASSEMBLY-SPOOL-B")
-    enroll(api, assembly, "assembly", expected_children=2)
+    enroll(api, assembly, "assembly", expected_children=2, legacy_testing=True)
     link_spool(api, assembly, first)
     route = f"{ROOT}/items/{assembly}/advance"
     assert api.post(route, action_body(api, assembly)).status_code == 409
@@ -694,7 +726,7 @@ def test_assembly_collection_needs_full_declared_scope_and_each_child_scan(api):
 def test_parent_processing_freezes_child_reopen_and_requires_fresh_assembly_dimensions(api):
     assembly = create_item(api, "FLOW-FROZEN-ASSEMBLY", kind="Assembly")
     child = completed_spool(api, "FLOW-FROZEN-SPOOL")
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     advance(api, assembly)
     at_inspection = detail(api, assembly)
@@ -724,7 +756,7 @@ def test_assembly_joining_welds_finish_before_test_verification(api):
     assembly = create_item(api, "FLOW-JOINED-ASSEMBLY", kind="Assembly", planned=1)
     child = completed_spool(api, "FLOW-JOINED-SPOOL")
     weld = add_weld(api, assembly)
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     ready_to_weld(api, assembly, weld["id"])
     complete_physical_weld(api, weld["id"])
@@ -746,7 +778,7 @@ def test_assembly_joining_welds_finish_before_test_verification(api):
 def test_test_results_checkpoint_requires_signed_acceptance_of_configured_ut(api):
     assembly = create_item(api, "FLOW-UT-ASSEMBLY", kind="Assembly")
     child = completed_spool(api, "FLOW-UT-SPOOL")
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     requirement = ok(api.post(f"/api/tracking/spools/{assembly}/requirements", {
         "code": "UT-REPORT", "label": "Required UT test report acceptance",
@@ -803,7 +835,7 @@ def test_test_results_checkpoint_requires_signed_acceptance_of_configured_ut(api
 def test_return_to_floor_after_testing_requires_item_badges_and_location(api):
     assembly = create_item(api, "FLOW-TEST-HANDOFF", kind="Assembly")
     child = completed_spool(api, "FLOW-TEST-HANDOFF-SPOOL")
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     advance(api, assembly)
     inspect_dimensions(api, assembly)
@@ -857,7 +889,7 @@ def test_assembly_link_rejects_self_wrong_kind_other_project_and_duplicate_paren
 def test_failed_final_qa_preserves_old_steps_but_invalidates_current_downstream_approvals(api):
     assembly = create_item(api, "FLOW-REWORK-ASSEMBLY", kind="Assembly")
     child = completed_spool(api, "FLOW-REWORK-SPOOL")
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, child)
     for step in range(17, 22):
         if step == 18:
@@ -892,7 +924,7 @@ def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shi
         if step == 15:
             inspect_dimensions(api, spool_id)
         advance(api, spool_id, role="inspector" if step in (11, 15) else "admin")
-    enroll(api, assembly, "assembly", expected_children=1)
+    enroll(api, assembly, "assembly", expected_children=1, legacy_testing=True)
     link_spool(api, assembly, spool_id)
     for step in range(17, 24):
         if step in (18, 22):
@@ -965,4 +997,5 @@ def test_scope_correction_requires_basis_and_keeps_assembly_minimum_one(api):
         response = api.post(route, {**body, **values})
         assert response.status_code in (409, 422), response.text
     assert detail(api, assembly)["events"] == current["events"]
+
 

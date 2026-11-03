@@ -34,8 +34,8 @@ Generic **Welder** (`welder`) and **Miscellaneous** (`misc`) are retired from ne
 | QA/QC | Incoming dimensional verification, fit-up, weld, assembly and final inspection | Requirement acceptance, hold resolution, ordinary QA release, audit reviews and Job Packet issue |
 | Painter | Combined sandblast/paint process completion | Surface-preparation and coating evidence for subsequent QA review |
 | Fab Prep Technician | Component preparation, including cleaning/buffing preparation records | Surface-preparation and preservation/packaging evidence for subsequent QA review |
-| Pressure Testing Technician | Pressure-test work records through assigned evidence; NDE/testing timing | Evidence assigned to this position; pressure-test checklist and section 06 files for subsequent QA review |
-| NDT | Nondestructive-test work records through assigned evidence; NDE/testing timing | Evidence assigned to NDT; NDE checklist and section 04 files for subsequent QA review |
+| Pressure Testing Technician | Pressure-test receipt, report PASS/FAIL, required correction and pressure-phase timing | Evidence assigned to this position; pressure-test checklist and section 06 files for separate QA acceptance |
+| NDT | NDT receipt, report PASS/FAIL, required correction and NDT-phase timing | Evidence assigned to NDT; NDE checklist and section 04 files for separate QA acceptance |
 
 All positions above, and retained legacy accounts, can use ordinary **Scan & Handoff** with both employee badges. Administrators and Shop Foremen manage custom shop locations. Employee access, private PIN resets, administrative release exceptions and Excel exports remain administrator controls.
 
@@ -45,7 +45,20 @@ Only **Fit-up welder**, **Administrator** and retained legacy **Welder** account
 
 **Fab Prep Technician** or Administrator completes component-preparation step **7**. **Painter** or Administrator completes combined sandblast/paint step **21**. That combined step includes painting; a Fab Prep Technician's preparation responsibility does not authorize its completion.
 
-QA steps **2, 11, 15, 18 and 22** require **QA/QC** or Administrator. Step **17 — Release to Testing (Hydro/UT)** and the other receiving, inventory, collection, handoff and shipping steps retain Material coordinator, Shop Foreman or Administrator authority. Step **19 — Return to Floor** is the post-test handoff. Pressure Testing Technician and NDT may pause/resume timers at steps 17 and 18, but cannot advance step 17 or accept step 18.
+QA steps **2, 11, 15, 18 and 22** require **QA/QC** or Administrator. The current **CLM-24-v6 / CLM-TEST-v1** route gives steps **17–19** explicit phases:
+
+| Current phase | Authorized position |
+| --- | --- |
+| Step 17: required YES/NO testing decision and child-spool verification | Material coordinator, Shop Foreman or Administrator |
+| Step 17: NDT receipt, technician report and required correction | NDT or Administrator |
+| Step 17: pressure-test receipt, technician report and required correction | Pressure Testing Technician or Administrator |
+| Step 18: explicit QA/QC PASS/FAIL for the current NDT or pressure attempt | QA/QC or Administrator |
+| Step 19: actual Floor handoff after each QA PASS | Material coordinator, Shop Foreman or Administrator |
+| Return to testing, when offered by the server | Shop Foreman or Administrator, with a reason and reference |
+
+YES follows **NDT → QA/QC → Floor → pressure testing → QA/QC → Floor → Paint/finishing**. NO continues to step 20 and records steps 18/19 as **Not required**. Neither decision is preselected. Each technician records the actual report result and reference; this does not grant QA acceptance. A non-admin testing employee must receive using their own badge. The recorded testing custodian or an administrator submits the report and correction.
+
+QA FAIL requires a reference, failure details and scanned return to the exact previous testing station and employee who sent the attempt into QA. Completed correction, a fresh test attempt and another QA decision are mandatory. An existing YES cannot be changed to NO on rework. Scope and child links lock after the initial testing decision and stay locked through restarts. A pending QA attempt must receive its disposition, and required correction must be completed before a controlled restart is available. The server advertises the eligible restart action; its availability is not determined by the numbered step alone.
 
 Normal engineering, hold-point, evidence, route and release checks remain applicable. Heat numbers and MTR references may be deferred through step **14 — Complete Welds**; current completeness checks remain required at step **15 — QA/QC-003**, later acceptance and release. A testing position does not bypass those checks or the current arrival approval. An administrator's separate **Release as administrator** action retains its explicit exception history and its existing material/arrival safeguards.
 
@@ -66,7 +79,11 @@ Manual timers are limited by position:
 | Pressure Testing Technician / NDT | NDE/testing |
 | Miscellaneous (retained legacy accounts) | Custom support processes |
 
-Moving an open manual timer requires authority over both the current and destination process. Otherwise, an authorized employee finishes the current timer and the next position starts its own process, or a Shop Foreman coordinates the transition. A numbered traveler owns its stage transitions; its pause/resume controls follow the current step's roles, with Administrator/Shop Foreman coordination access. Pressure Testing Technician and NDT also have pause/resume access at numbered steps 17 and 18, without authority to complete either step. Timing does not record physical completion, test results, acceptance or employee labor hours.
+Moving an open manual timer requires authority over both the current and destination process. Otherwise, an authorized employee finishes the current timer and the next position starts its own process, or a Shop Foreman coordinates the transition.
+
+The current testing traveler owns its phase transitions. Pause/resume follows the phase roles in the table above: NDT controls NDT work/correction, Pressure Testing Technician controls pressure work/correction, QA/QC controls test review, and Material coordinator/Shop Foreman controls the decision and Floor phases. Administrator can control each phase. A testing position cannot pause or resume the active QA-review phase. Timing alone does not record physical completion, test results, acceptance or employee labor hours.
+
+**Historical travelers:** retained legacy routes keep their recorded labels, transition rules and earlier timer permissions. On those routes, the former **Release to Testing (Hydro/UT)** step 17 is a coordination action; NDT and Pressure Testing Technician may pause/resume the old numbered 17/18 timers without gaining authority to advance step 17 or accept step 18. Other numbered steps retain their existing role and coordination permissions. An upgrade creates no historical test decisions or approvals.
 
 ## Requirement evidence and QA acceptance
 
@@ -102,3 +119,4 @@ An administrator opens **Employees → Print employee QR badge** to print the em
 ## When a control is unavailable
 
 Check the signed-in account's position, the item's current process and release state, and the requirement's responsible position. Use an administrator account to correct an employee assignment; use the appropriate Shop Foreman/QA workflow to correct controlled requirement scope. The server checks permissions on every change, including direct requests and stale pages. Selecting another employee's badge or editing a request cannot elevate the signed-in account's permissions.
+

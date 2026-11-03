@@ -121,3 +121,33 @@
 @media(max-width:1000px){#flowPage .ff-map{grid-template-columns:repeat(2,minmax(0,1fr))}#flowPage .ff-grid{grid-template-columns:1fr}#flowPage .ff-route{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:600px){#flowPage .ff-head h1{font-size:22px}#flowPage .ff-head>.actions{width:100%}#flowPage .ff-head>.actions button{flex:1}#flowPage .ff-map{grid-template-columns:1fr}#flowPage .ff-route{grid-template-columns:1fr}#flowPage .ff-route-step{display:grid;grid-template-columns:27px 1fr;gap:0 8px}#flowPage .ff-route-step .ff-num{grid-row:1/3}#flowPage .ff-route-step strong{margin:0 0 3px}#flowPage .ff-metrics{grid-template-columns:1fr 1fr;gap:9px}#flowPage .ff-metric{padding:12px}#flowPage .ff-fields,#flowDialog .ff-fields{grid-template-columns:1fr}#flowPage .ff-lookup{padding:12px}#flowPage .ff-lookup button{flex:1}#flowPage .ff-meta{grid-template-columns:1fr 1fr}#flowDialog{padding:17px}#flowDialog .ff-dialog-footer{bottom:-17px}}
 @media print{#flowPage button,#flowPage .ff-filters,#flowPage .ff-lookup{display:none!important}#flowPage .ff-map{grid-template-columns:repeat(3,minmax(0,1fr))}#flowPage .card{box-shadow:none}#flowPage .ff-map-section{break-inside:avoid}#flowPage .tablewrap{overflow:visible}#flowPage .ff-table{min-width:0}}
+
+/* Explicit testing decisions and repeated phases within steps 17–19. */
+#flowPage .ff-testing-phase{margin:14px 0;padding:15px;border:1px solid #bcd5e5;border-radius:9px;background:#f0f7fc}
+#flowPage .ff-testing-phase h3{font-size:16px;margin:5px 0 8px;overflow-wrap:anywhere}
+#flowPage .ff-testing-phase p{font-size:13px;line-height:1.55;margin:6px 0;color:var(--ff-muted)}
+#flowPage .ff-testing-phase .ff-phase-kicker{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#34617c}
+#flowPage .ff-testing-report{border-top:1px solid #cfdeea;padding-top:12px;margin-top:12px;font-size:13px}
+#flowPage .ff-testing-pass-checks{border:0;padding:0;margin:0;min-width:0}
+#flowPage .ff-testing-pass-checks:disabled{opacity:.6}
+#flowPage .ff-test-choice{padding:0;border:0;margin:16px 0 20px;min-width:0}
+#flowPage .ff-test-choice legend{font-size:15px;font-weight:700;padding:0;margin:0 0 10px;color:var(--ff-ink)}
+#flowPage .ff-test-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+#flowPage .ff-test-option{display:flex;align-items:flex-start;gap:10px;margin:0;padding:13px;border:1px solid #c6d6e2;border-radius:9px;background:#fff;cursor:pointer;min-width:0;font-size:14px;font-weight:400}
+#flowPage .ff-test-option input{flex:0 0 auto;width:18px;height:18px;margin:3px 0 0;accent-color:var(--ff-blue)}
+#flowPage .ff-test-option>span{min-width:0;overflow-wrap:anywhere}
+#flowPage .ff-test-option strong{display:block;font-size:15px;color:var(--ff-ink)}
+#flowPage .ff-test-option small{display:block;font-size:12px;line-height:1.5;color:var(--ff-muted);margin-top:4px}
+#flowPage .ff-test-option:has(input:checked){border-color:#287caf;background:#edf7fd;box-shadow:inset 0 0 0 1px #287caf}
+#flowPage .ff-test-option:focus-within{outline:3px solid #b9ddef;outline-offset:2px}
+#flowPage .ff-test-option:has(input:disabled){background:#f4f6f8;color:var(--ff-muted);cursor:default}
+#flowPage .ff-testing-hint{margin-top:9px;font-size:13px;line-height:1.5;color:#3c627a;min-height:1.5em}
+#flowPage .ff-testing-failure{padding:15px;margin:14px 0;border:1px solid #e1bd91;border-radius:8px;background:#fff8ef;min-width:0}
+#flowPage .ff-testing-failure h3{font-size:15px;margin:0 0 8px}
+#flowPage .ff-testing-failure .field{margin-bottom:12px}
+#flowPage .ff-testing-failure p,#flowPage .ff-testing-return{font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+#flowPage .ff-route-step.not_required,#flowPage .ff-map-step.not_required{background:#f6f7f8;border:1px dashed #aebbc5}
+#flowPage .ff-route-step.not_required .ff-num{background:#edf0f3;color:#627381}
+#flowPage .ff-legend .not-required::before{background:#f6f7f8;border-style:dashed;border-color:#8da0ae}
+@media(max-width:600px){#flowPage .ff-test-options{grid-template-columns:1fr}#flowPage .ff-test-option{padding:13px 12px;min-height:58px}#flowPage .ff-testing-phase,#flowPage .ff-testing-failure{padding:13px}#flowPage .ff-route-step.not_required small{grid-column:2}}
+

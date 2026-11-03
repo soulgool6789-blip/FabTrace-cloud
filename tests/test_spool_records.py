@@ -233,3 +233,287 @@ def test_root_visual_label_requires_explicit_inspection_identity(application):
     assert _is_root(SimpleNamespace(code='QA_14',label='Root pass visual inspection'))
     assert not _is_root(SimpleNamespace(code='CAUSE',label='Visual root cause investigation'))
     assert not _is_root(SimpleNamespace(code='GENERAL_VT',label='Final visual examination'))
+
+
+def seed_testing_history(api,data,*,decision='YES'):
+    """Saved protocol events, including distinct test and QA evidence links."""
+    flow=importlib.import_module('flow')
+    testing=importlib.import_module('flow_testing')
+    production=importlib.import_module('production')
+    parent=data['parent']
+    def hour(n):
+        return WHEN+dt.timedelta(hours=n)
+    # step, phase, action, kind, attempt, result, actor role, next phase
+    rows=[(17,'decision','decision',None,1,None,'handler','ndt' if decision=='YES' else 'not_required')]
+    if decision=='YES':
+        rows += [
+            (17,'ndt','start','ndt',1,None,'ndt','ndt'),
+            (17,'ndt','complete','ndt',1,'FAIL','admin','ndt_qa'),
+            (18,'ndt_qa','review','ndt',1,'FAIL','inspector','ndt_rework'),
+            (17,'ndt_rework','correct','ndt',1,None,'ndt','ndt'),
+            (17,'ndt','start','ndt',2,None,'ndt','ndt'),
+            (17,'ndt','complete','ndt',2,'PASS','ndt','ndt_qa'),
+            (18,'ndt_qa','review','ndt',2,'PASS','inspector','floor_before_pressure'),
+            (19,'floor_before_pressure','handoff','ndt',2,None,'handler','pressure_test'),
+            (17,'pressure_test','start','pressure',1,None,'pressure_testing_technician','pressure_test'),
+            (17,'pressure_test','complete','pressure',1,'PASS','pressure_testing_technician','pressure_qa'),
+            (18,'pressure_qa','review','pressure',1,'PASS','inspector','floor_before_paint'),
+            (19,'floor_before_paint','handoff','pressure',1,None,'handler','complete'),
+        ]
+    reports={}
+    review_ids={}
+    ids=[]
+    exception_id=None
+    with api.session_factory() as s:
+        s.add(flow.FlowPlan(item_id=parent,route='assembly',current_step=20,status='active',version=len(rows)+1,
+            expected_children=2,baseline_step=17,started_by=BADGES['admin'],started_at=hour(9),
+            step_entered_at=hour(9+len(rows)),updated_at=hour(9+len(rows))))
+        s.add(production.SpoolProcessEvent(item_id=parent,sequence=3,event='start',process_key='clm_17',
+            process_name='Determine testing requirements',actor=BADGES['admin'],at=hour(9),notes='Synthetic phase timer'))
+        for n,(step,phase,action,kind,attempt,result,role,next_phase) in enumerate(rows,1):
+            at=hour(9+n)
+            detail={'testing_protocol':testing.PROTOCOL,'testing_cycle':1,'testing_phase':phase,
+                'testing_action':action,'test_kind':kind,'testing_attempt':attempt,'test_result':result,
+                'phase_only':action in ('decision','start','correct'),'next_phase':next_phase,
+                'step_definition':{'number':step,'title':f'Saved {kind or "testing"} {action}, attempt {attempt}'}}
+            if action=='decision':
+                detail['testing_decision']=decision
+                if decision=='NO':
+                    detail['not_required_steps']=[18,19]
+            if action=='review':
+                detail['report']=dict(reports[(kind,attempt)])
+            elif action=='complete':
+                detail['report']={'result':result,'reference':f'{kind}-{action}-{attempt}-{result}',
+                    'basis_sha256':'a'+str(attempt)*63}
+            if result=='FAIL' and action=='review':
+                exception=flow.FlowException(item_id=parent,step=18,return_step=17,
+                    reason='Synthetic failed NDT requires actual correction',reference='NDT-QA-FAIL',
+                    opened_by=BADGES['inspector'],opened_at=at,closed_by=BADGES['inspector'],
+                    closed_at=hour(17),resolution='Corrected, retested and reviewed')
+                s.add(exception);s.flush();exception_id=exception.id
+                detail.update(exception_id=exception.id,return_step=17,
+                    return_to={'sender_badge':BADGES['ndt'],'sender_name':'Saved original NDT employee',
+                               'location_id':'testing','location_label':'Testing'})
+            if action=='correct':
+                detail['correction']={'exception_id':exception_id,'attempt':attempt,'test_kind':kind,
+                    'reference':'NDT-CORRECTION-REF','resolution':'Removed defect and completed required correction',
+                    'actor':BADGES[role],'at':at.isoformat()}
+            if action=='review' and result=='PASS':
+                detail['closed_exception_ids']=[exception_id] if kind=='ndt' else []
+                detail['remaining_exception_ids']=[]
+                detail['remaining_exception_kinds']={}
+                if kind=='ndt':
+                    detail['ndt_accepted_basis']={'basis_sha256':'b'*64,
+                        'report_event_id':reports[(kind,attempt)]['event_id']}
+            if action in ('start','complete','handoff') or result=='FAIL' and action=='review':
+                tester=BADGES['ndt' if kind=='ndt' else 'pressure_testing_technician']
+                if action=='start':
+                    sender,receiver,old,new=BADGES['handler'],tester,'floor','testing'
+                elif action=='complete':
+                    sender,receiver,old,new=tester,BADGES['inspector'],'testing','qa_test_results'
+                elif action=='handoff':
+                    sender,receiver,old,new=BADGES['inspector'],BADGES['handler'],'qa_test_results','floor'
+                else:
+                    sender,receiver,old,new=BADGES['inspector'],tester,'qa_test_results','testing'
+                detail['handoff']={'from':{'location_id':old,'location':old},'to':{'location_id':new,'location':new},
+                    'sender':{'badge':sender,'name':'Saved '+sender},'receiver':{'badge':receiver,'name':'Saved '+receiver},
+                    'sender_badge':sender,'receiver_badge':receiver,'handoff_recorded_by':BADGES[role]}
+            event=flow.FlowEvent(item_id=parent,sequence=n,action='fail' if action=='review' and result=='FAIL' else 'advance',
+                step=step,actor=BADGES[role],at=at,reference=f'{kind or "DECISION"}-{action}-{attempt}-{result or decision}',
+                notes='Synthetic '+action+' evidence',data=detail)
+            s.add(event);s.flush();ids.append(event.id)
+            if action=='review' and result=='PASS':
+                review_ids[(kind,attempt)]=event.id
+            if action=='complete':
+                reports[(kind,attempt)]={'test_kind':kind,'attempt':attempt,'cycle':1,'result':result,
+                    'reference':event.reference,'notes':event.notes,'actor':event.actor,'at':at.isoformat(),
+                    'event_id':event.id,'basis_sha256':'a'+str(attempt)*63}
+            next_step=rows[n][0] if n<len(rows) else 20
+            next_name=f'Saved {rows[n][3] or "testing"} {rows[n][2]}, attempt {rows[n][4]}' if n<len(rows) else 'Release to paint'
+            s.add(production.SpoolProcessEvent(item_id=parent,sequence=n+3,event='move',process_key=f'clm_{next_step:02}',
+                process_name=next_name,actor=event.actor,at=at,notes='Synthetic saved phase handoff'))
+        state=testing.FlowTestingState(item_id=parent,protocol=testing.PROTOCOL,cycle=1,
+            phase='complete' if decision=='YES' else 'not_required',decision=decision,decision_by=BADGES['handler'],
+            decision_at=hour(10),test_kind='pressure' if decision=='YES' else None,attempt=1,
+            phase_entered_at=hour(9+len(rows)),created_at=hour(9),updated_at=hour(9+len(rows)))
+        if decision=='YES':
+            report=reports[('pressure',1)]
+            state.report_result=report['result'];state.report_reference=report['reference']
+            state.reported_by=report['actor'];state.reported_at=_date_from_iso(report['at']);state.report_event_id=report['event_id']
+            state.report_basis=report['basis_sha256']
+            state.ndt_basis='b'*64
+            state.ndt_report_event_id=reports[('ndt',2)]['event_id']
+            state.ndt_review_event_id=review_ids[('ndt',2)]
+            state.qa_result='PASS';state.qa_reference='pressure-review-1-PASS'
+            state.reviewed_by=BADGES['inspector'];state.reviewed_at=hour(21)
+        s.add(state);s.commit()
+    return {'event_ids':ids,'reports':reports,'review_ids':review_ids,'exception_id':exception_id}
+
+
+def _date_from_iso(value):
+    return dt.datetime.fromisoformat(value)
+
+
+def test_phased_testing_export_retains_failed_attempt_sender_correction_and_distinct_qa(api,public_qr_url,tmp_path):
+    data=seed(api)
+    history=seed_testing_history(api,data)
+    before=snapshot(api)
+    response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
+    assert response.status_code==200,response.text
+    book=Workbook(response.content)
+    assert len(book.sheets)==7
+    reports=table_rows(book,'Inspection History','Test report event ID')
+    assert [(row['Test'],row['Attempt'],row['Test result']) for row in reports]==[
+        ('NDT',1,'FAIL'),('NDT',2,'PASS'),('Pressure test',1,'PASS')]
+    assert [row['Report recorded by badge'] for row in reports]==[BADGES['admin'],BADGES['ndt'],BADGES['pressure_testing_technician']]
+    assert [row['Testing sender badge'] for row in reports]==[BADGES['ndt'],BADGES['ndt'],BADGES['pressure_testing_technician']]
+    reviews=table_rows(book,'Inspection History','Test QA event ID')
+    assert [row['QA result'] for row in reviews]==['FAIL','PASS','PASS']
+    assert [row['Linked test report event ID'] for row in reviews]==[row['Test report event ID'] for row in reports]
+    assert [row['Linked report basis SHA-256'] for row in reviews]==[row['Report basis SHA-256'] for row in reports]
+    assert all(row['QA badge']==BADGES['inspector'] for row in reviews)
+    assert reviews[1]['Closed exception IDs']==str(history['exception_id'])
+    assert reviews[2]['Closed exception IDs'] in ('',None)
+    ndt=table_rows(book,'Inspection History','NDT acceptance event ID')
+    assert len(ndt)==1 and ndt[0]['Construction basis SHA-256']=='b'*64
+    assert ndt[0]['NDT acceptance event ID']==str(history['review_ids'][('ndt',2)])
+    assert ndt[0]['Bound NDT report event ID']==reports[1]['Test report event ID']
+    returns=table_rows(book,'Work and Rework','Failed test event ID')
+    assert len(returns)==1
+    assert returns[0]['Return station ID']=='testing'
+    assert returns[0]['Required return badge']==returns[0]['Recorded receiving badge']==BADGES['ndt']
+    assert returns[0]['Saved return employee name']=='Saved original NDT employee'
+    corrections=table_rows(book,'Work and Rework','Testing correction event ID')
+    assert corrections[0]['Recorded by badge']==BADGES['ndt']
+    assert corrections[0]['Exception ID']==str(history['exception_id'])
+    assert corrections[0]['Corrective work']=='Removed defect and completed required correction'
+    route=table_rows(book,'24-step Route','Step')
+    qa=[row for row in route if row['Step']==18]
+    assert [row['Status'] for row in qa]==['QA FAIL','QA PASS','QA PASS']
+    assert all(row['Record scope']=='Shared parent assembly: '+data['parent'] for row in qa)
+    assert all(row['Elapsed HH:MM:SS']==pytest.approx(1/24) for row in qa)
+    assert all(row['Status']!='Completed' for row in route if row['Step'] in (17,18,19))
+    events=table_rows(book,'24-step Route','Testing event ID')
+    assert [row['Testing event ID'] for row in events]==list(map(str,history['event_ids']))
+    assert len(table_rows(book,'24-step Route','Testing handoff event ID'))==9
+    (tmp_path/'synthetic-testing-spool-record.xlsx').write_bytes(response.content)
+    assert snapshot(api)==before
+
+
+def test_explicit_no_is_not_required_without_inventing_test_times_or_passes(api,public_qr_url):
+    data=seed(api)
+    seed_testing_history(api,data,decision='NO')
+    before=snapshot(api)
+    response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
+    assert response.status_code==200,response.text
+    book=Workbook(response.content)
+    route=table_rows(book,'24-step Route','Step')
+    skipped=[row for row in route if row['Step'] in (18,19)]
+    assert [row['Status'] for row in skipped]==['Not required — recorded NO']*2
+    assert all(row['Entered (UTC)'] is None and row['Departed (UTC)'] is None and row['Elapsed HH:MM:SS'] is None for row in skipped)
+    assert all(row['Employee badge'] is None for row in skipped)
+    decision=table_rows(book,'24-step Route','Testing event ID')[0]
+    assert decision['Decision / result']=='NO' and decision['Employee badge']==BADGES['handler']
+    assert table_rows(book,'Inspection History','Test report event ID')==[]
+    assert table_rows(book,'Inspection History','Test QA event ID')==[]
+    assert snapshot(api)==before
+
+
+def test_full_export_preserves_testing_cursor_and_exact_report_link(api,public_qr_url):
+    data=seed(api)
+    history=seed_testing_history(api,data)
+    before=snapshot(api)
+    response=api.get('/api/exports/excel')
+    assert response.status_code==200,response.text
+    book=Workbook(response.content)
+    states=book.records('Assembly testing states')
+    assert len(states)==1
+    current=states[0]
+    report=history['reports'][('pressure',1)]
+    assert current['item_id'].value==data['parent']
+    assert current['protocol'].value=='CLM-TEST-v1'
+    assert current['decision'].value=='YES'
+    assert current['phase'].value=='complete'
+    assert current['report_event_id'].value==str(report['event_id'])
+    assert current['report_basis'].value==report['basis_sha256']
+    assert current['ndt_basis'].value=='b'*64
+    assert current['ndt_report_event_id'].value==str(history['reports'][('ndt',2)]['event_id'])
+    assert current['ndt_review_event_id'].value==str(history['review_ids'][('ndt',2)])
+    assert current['qa_result'].value=='PASS'
+    assert current['reported_at'].style in book.date_styles
+    assert snapshot(api)==before
+
+
+@pytest.mark.parametrize('restart_action,traveler_step',[('reopen',20),('fail',22)])
+def test_controlled_testing_restart_remains_visible_without_erasing_prior_results(api,public_qr_url,restart_action,traveler_step):
+    data=seed(api)
+    history=seed_testing_history(api,data)
+    flow=importlib.import_module('flow')
+    testing=importlib.import_module('flow_testing')
+    restart_actor=BADGES['inspector' if restart_action=='fail' else 'supervisor']
+    with api.session_factory() as s:
+        state=s.get(testing.FlowTestingState,data['parent'])
+        pressure=flow.FlowException(item_id=data['parent'],step=18,return_step=17,
+            reason='Retained pressure exception requires fresh pressure QA after restart',
+            reference='TEST-OPEN-PRESSURE-EXCEPTION',opened_by=BADGES['inspector'],
+            opened_at=WHEN+dt.timedelta(hours=23),resolution='Recorded correction; QA closure still pending')
+        s.add(pressure);s.flush();pressure_id=pressure.id
+        detail={**testing.event_context(state,action='restart'),'return_step':17,'next_step':17,
+            'next_phase':'decision','next_cycle':2,'testing_required_preserved':True,
+            'carried_exception_ids':[pressure_id],'carried_exception_kinds':{str(pressure_id):'pressure'}}
+        s.add(flow.FlowEvent(item_id=data['parent'],sequence=len(history['event_ids'])+1,
+            action=restart_action,step=traveler_step,actor=restart_actor,at=WHEN+dt.timedelta(hours=24),
+            reference='TEST-CONTROLLED-RETEST',notes='Changed evidence requires a new controlled testing cycle',data=detail))
+        state.cycle=2;state.phase='decision';state.decision='YES';state.decision_by=None;state.decision_at=None
+        state.phase_entered_at=WHEN+dt.timedelta(hours=24)
+        state.ndt_basis='';state.ndt_report_event_id=None;state.ndt_review_event_id=None
+        state.pending_exception_ids=[pressure_id];state.pending_exception_kinds={str(pressure_id):'pressure'}
+        testing.clear_attempt(state,None)
+        plan=s.get(flow.FlowPlan,data['parent']);plan.current_step=17;plan.version+=1
+        s.commit()
+    response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
+    assert response.status_code==200,response.text
+    book=Workbook(response.content)
+    events=table_rows(book,'24-step Route','Testing event ID')
+    restarted=events[-1]
+    assert restarted['Testing action']=='restart' and restarted['Testing cycle']==1
+    assert restarted['Traveler step']==traveler_step
+    assert restarted['Employee badge']==restart_actor
+    assert restarted['Next phase']=='decision'
+    assert 'Next testing cycle: 2.' in restarted['Notes']
+    assert 'Return step: 17.' in restarted['Notes']
+    assert 'Required testing remains YES.' in restarted['Notes']
+    if restart_action=='fail':
+        assert restarted['Decision / result']=='FAIL'
+        route=table_rows(book,'24-step Route','Step')
+        final_qa=next(row for row in route if row['Step']==22)
+        assert final_qa['Status']=='Failed; testing restart required'
+    carryovers=table_rows(book,'Work and Rework','Testing carryover event ID')
+    carry=next(row for row in carryovers if row['Testing action']=='restart')
+    assert carry['Carried exception IDs']==str(pressure_id)
+    assert carry['Recorded exception types']==f'{pressure_id}: Pressure test'
+    assert carry['Closed exception IDs'] in ('',None)
+    assert len(table_rows(book,'Inspection History','Test report event ID'))==3
+    assert len(table_rows(book,'Inspection History','Test QA event ID'))==3
+    with api.session_factory() as s:
+        assert s.get(flow.FlowException,pressure_id).closed_at is None
+
+
+def test_legacy_hydro_history_is_not_reinterpreted_as_phased_testing(api,public_qr_url):
+    data=seed(api)
+    flow=importlib.import_module('flow')
+    with api.session_factory() as s:
+        s.add(flow.FlowEvent(item_id=data['parent'],sequence=1,action='advance',step=18,
+            actor=BADGES['inspector'],at=WHEN+dt.timedelta(hours=7),reference='LEGACY-HYDRO-REFERENCE',
+            notes='The saved legacy acceptance remains a single combined check',
+            data={'step_definition':{'title':'Legacy Verify Test Results (Hydro/UT)'}}))
+        s.commit()
+    response=api.get('/api/spool-records/spools/'+data['a']+'/record.xlsx')
+    assert response.status_code==200,response.text
+    book=Workbook(response.content)
+    route=table_rows(book,'24-step Route','Step')
+    qa=[row for row in route if row['Step']==18]
+    assert len(qa)==1 and qa[0]['Status']=='Completed'
+    assert qa[0]['Activity']=='Legacy Verify Test Results (Hydro/UT)'
+    assert qa[0]['Entered (UTC)'] is None and qa[0]['Elapsed HH:MM:SS'] is None
+    assert not any(row.get(1) and row[1].value=='Test report event ID' for row in book.sheets['Inspection History'])

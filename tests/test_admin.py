@@ -277,7 +277,7 @@ def test_admin_custody_correction_can_resolve_released_item_with_inactive_custod
     body = disposition_body(api, item_id, handler=BADGES["handler"], location_id="welding", operational_status="waiting_material")
     result = ok(api.post(f"{ROOT}/items/{item_id}/custody", body))
     assert result["item"]["handler"] == BADGES["handler"]
-    assert result["item"]["location"] == "Welding" and result["item"]["released"] is True
+    assert result["item"]["location"] == "Process Welder" and result["item"]["released"] is True
     assert result["release"]["mode"] == "admin_override"
     ordinary = ok(api.get(f"/api/items/{item_id}"))
     assert ordinary["transfer"]["operational_status"] == "waiting_material"
@@ -488,3 +488,4 @@ def test_admin_can_transfer_authority_then_demote_self_with_current_session_revo
         assert signed_in.get(ROOT + "/overview").status_code == 403
         ok(signed_in.post("/api/login", json={"badge": BADGES["supervisor"], "pin": TEST_PIN}))
         assert ok(signed_in.get(ROOT + "/employees"))["active_admins"] == 1
+
