@@ -2,7 +2,11 @@
 
 This guide describes the implemented tracking extension and the constraints that future changes must preserve. Start with [README.md](README.md) for setup and [TRACKING_GUIDE.md](TRACKING_GUIDE.md) for the user workflow.
 
-## Current application revision: testing branches and shipment floor handoff
+## Current application revision: testing branches inside the numbered chart
+
+Release `2026.11.03-inline-testing-chart.1` embeds the step 17 YES/NO branch directly in the numbered fabrication chart and selected assembly route. The decision node leads to the actual NDT, QA/QC-004, Floor, pressure testing, QA/QC-005 and Floor nodes; NO joins the existing step 20 continuation. The previous separate branch panel is removed. The current, unstarted and selected traveler maps use the same inline rendering. New-catalog baselines without recorded testing remain unrecorded; retained travelers without the phased testing protocol retain their saved linear definitions. Phase highlighting follows saved server state, and the existing action forms and transition rules are unchanged.
+
+## Previous application revision: testing branches and shipment floor handoff
 
 Release `2026.11.03-testing-branches.1` introduces catalog `CLM-25-v1`. Step 17 shows the explicit testing branches: **YES → NDT → QA/QC-004 → Floor → Pressure Testing → QA/QC-005 → Floor → Paint/finishing** and **NO → Paint/finishing**. The visible branch actions retain the existing versioned testing phases, separate technician reports, mandatory QA PASS/FAIL, real custody handoffs, and failure/correction/retest gates. They do not create extra inspection passes from position or a previewed choice.
 
