@@ -1,5 +1,13 @@
 # FabTrace administrator controls
 
+## Employee tasks and position requirements
+
+**My work** gives the signed-in employee current tasks from the recorded component, spool and assembly travelers. **For my position** shows current steps owned by that position; **In my custody** shows active work currently held by that employee. A task card identifies required checks, scans, report references, handoffs, current completion blockers and any specific employee restriction.
+
+Employee position controls which work can be recorded. Custody is separately established by the recorded handoff. A testing report or mandatory correction can require the exact technician shown, even when another employee has the same position. Open **My tasks & requirements** from an item/QR record or **Open tasks & requirements** from My work to use the existing completion form. Current actions and a summary of steps for the employee's position appear before the route chart.
+
+Trade, material coordination and QA employees land on My work when signing in without a specific record link. Administrators and Shop Foremen keep the Orders home screen and can open My work from the main navigation. Current tasks follow saved route definitions and actual testing phases. Reading the work list does not start routes, assign custody, create requirements or record completion. Unstarted inventory remains available in All production records; existing weld, material and Job Packet controls retain their own required evidence.
+
 ## Change an employee's position
 
 1. Sign in as an **Administrator** and open **Employees**.

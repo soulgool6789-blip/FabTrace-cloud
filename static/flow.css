@@ -36,6 +36,28 @@
 #flowPage .ff-empty strong{display:block;font-size:16px;color:var(--ff-ink);margin-bottom:5px}
 #flowPage .ff-empty p{max-width:660px;margin:7px auto 14px}
 #flowPage .ff-error,#flowDialog .ff-error{padding:13px;border:1px solid #edc8bb;border-radius:9px;background:#fff2ed;color:#8d3c29;white-space:pre-wrap;overflow-wrap:anywhere}
+#flowPage .ff-work-intro .field{max-width:420px}
+#flowPage .ff-work-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}
+#flowPage .ff-work-card{min-width:0;margin:0;display:flex;flex-direction:column;overflow-wrap:anywhere}
+#flowPage .ff-work-card h2{font-size:18px;margin:0}
+#flowPage .ff-work-card h3{font-size:16px;margin:0 0 8px}
+#flowPage .ff-work-owner{font-size:12px;color:var(--ff-muted)}
+#flowPage .ff-work-checks{margin:8px 0 12px;padding-left:22px;font-size:14px}
+#flowPage .ff-work-checks li{margin:6px 0}
+#flowPage .ff-work-records{font-size:13px;color:#3c566a;overflow-wrap:anywhere}
+#flowPage .ff-work-restriction{padding:10px;background:#fff4e6;border-radius:7px;color:#805021;font-size:13px}
+#flowPage .ff-work-attention{font-size:13px;margin:8px 0 12px;color:#805021}
+#flowPage .ff-work-attention summary{cursor:pointer;font-weight:700}
+#flowPage .ff-work-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:auto;padding-top:12px}
+#flowPage .ff-work-bottom button{font-size:13px}
+#flowPage .ff-work-count{color:var(--ff-muted);font-size:13px}
+#flowPage .ff-work-pages{display:flex;align-items:center;justify-content:center;gap:15px;flex-wrap:wrap;margin:18px 0}
+#flowPage .ff-position-work{border-left:4px solid #146291}
+#flowPage .ff-position-steps{list-style:none;padding:0;margin:12px 0 0}
+#flowPage .ff-position-steps>li{padding:12px 0;border-top:1px solid var(--ff-line)}
+#flowPage .ff-position-steps>li>div{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#flowPage .ff-position-steps ul{padding-left:22px;font-size:13px;margin:10px 0}
+@media(max-width:760px){#flowPage .ff-work-list{grid-template-columns:1fr}}
 #flowPage .ff-state{padding:25px;background:white;border:1px solid var(--ff-line);border-radius:11px}
 #flowPage .ff-current{border-top:4px solid #1e76a9}
 #flowPage .ff-current h2{font-size:21px;margin:5px 0}

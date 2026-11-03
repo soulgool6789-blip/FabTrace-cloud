@@ -9,7 +9,7 @@
   const stageBadge=value=>flowStatus()?.badge(value)||'';
   const isSpool=value=>value?.route?value.route==='spool':value?.kind==='Spool';
   const spoolNumber=value=>flowStatus()?.spoolNumber?.(value)||value.qr_alias||value.spool_number||value.google_part_number||value.item_id||value.id;
-  const itemLabel=value=>isSpool(value)?spoolNumber(value):value.item_id||value.id;
+  const itemLabel=value=>isSpool(value)?spoolNumber(value):(value.route==='assembly'||value.kind==='Assembly')&&value.assembly_number?'Assembly '+value.assembly_number:value.item_id||value.id;
   const spoolText=(value,label=spoolNumber(value))=>flowStatus()?.spoolText?.(value,label)||esc(label);
   const routeNames={component:'Component',spool:'Spool',assembly:'Assembly'};
   const statusNames={admin_released:'Administrative release',not_started:'Not started',active:'In progress',completed:'Route complete',shipped:'Shipped',delivered:'Delivered',rework:'Needs rework'};
@@ -22,12 +22,12 @@
     {id:'paint',label:'Sandblast & paint',first:20,last:22},
     {id:'shipping',label:'Shipment',first:23,last:Infinity},
   ];
-  const state={catalog:null,handoffOptions:null,handoffControl:null,board:[],spools:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,read:null,saving:false,dialogAction:null,dialogStale:false,notice:''};
+  const state={view:'board',workScope:'position',workPage:0,catalog:null,handoffOptions:null,handoffControl:null,board:[],spools:[],detail:null,item:'',project:'',subproject:'',query:'',status:'',step:'',sequence:0,read:null,saving:false,dialogAction:null,dialogStale:false,notice:''};
   const clocks=new WeakMap();
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
   const removed=()=>state.detail?.removal?.removed===true||state.detail?.item?.removal?.removed===true;
-  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action)&&(!['scope','link-spool'].includes(action)||!testingScopeFrozen())&&(action!=='advance'||!testingActorRestriction())&&(action!=='restart-testing'||canRestartTesting());
+  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action)&&(!['scope','link-spool'].includes(action)||!testingScopeFrozen())&&(action!=='advance'||!testingActorRestriction()&&state.detail?.work?.can_record!==false)&&(action!=='restart-testing'||canRestartTesting());
   const action=(name,label,id='',className='',spool=null)=>`<button type="button" class="${esc(className)}" data-flow-action="${esc(name)}"${id?` data-flow-id="${esc(id)}"`:''}>${spool?spoolText(spool,label):esc(label)}</button>`;
   const option=(value,label,selected='')=>`<option value="${esc(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
   const secondary=text=>`<span class="ff-secondary">${esc(text)}</span>`;
@@ -215,19 +215,25 @@
   function empty(title,copy,controls=''){return `<div class="ff-empty"><strong>${esc(title)}</strong><p>${esc(copy)}</p>${controls}</div>`}
   function metadata(pairs){return `<div class="ff-meta">${pairs.map(([label,value])=>`<dl><dt>${esc(label)}</dt><dd>${esc(value||'—')}</dd></dl>`).join('')}</div>`}
   function updateUrl(){
-    const query=new URLSearchParams({flow:'1'});if(state.item)query.set('item',state.item);if(state.project)query.set('project',state.project);
+    const query=new URLSearchParams({flow:'1'});if(state.item)query.set('item',state.item);if(state.project)query.set('project',state.project);if(state.view==='work'){query.set('view','work');query.set('work_scope',state.workScope);}
     history.replaceState(null,'','/?'+query.toString());
   }
   async function open(options={}){
     if(!me)return;
     show('flowPage');if(typeof stopCloudCamera==='function')stopCloudCamera();current=null;
+    const previousScope=state.workScope;
     state.item=options.item||'';state.detail=null;state.notice='';
+    if(Object.prototype.hasOwnProperty.call(options,'view'))state.view=options.view==='work'?'work':'board';else if(!options.item)state.view='board';
+    if(Object.prototype.hasOwnProperty.call(options,'workScope'))state.workScope=options.workScope==='custody'?'custody':'position';
+    for(const key of ['subproject','query','status','step'])if(Object.prototype.hasOwnProperty.call(options,key))state[key]=options[key]||'';
+    if(Object.prototype.hasOwnProperty.call(options,'workPage'))state.workPage=Number.isSafeInteger(options.workPage)&&options.workPage>=0?options.workPage:0;
+    else if(options.resetFilters===true||state.workScope!==previousScope)state.workPage=0;
     if(Object.prototype.hasOwnProperty.call(options,'project'))state.project=options.project||'';
     if(options.resetFilters===true){state.subproject='';state.query='';state.status='';state.step='';}
     await load();
   }
   async function load(){
-    const sequence=++state.sequence,item=state.item;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null;
+    const sequence=++state.sequence,item=state.item,view=state.view;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null;
     const pending={controller:new AbortController(),timer:null,timedOut:false};state.read=pending;
     pending.timer=setTimeout(()=>{pending.timedOut=true;pending.controller.abort();},30000);
     const read=url=>api(url,{signal:pending.controller.signal});
@@ -239,12 +245,13 @@
         item?Promise.resolve(null):read(ROOT+'/items'),
         item?read(ROOT+'/items/'+encode(item)):Promise.resolve(null),
         item?read('/api/transfers/options'):Promise.resolve(null),
-        item?Promise.resolve(null):read(ROOT+'/board'),
+        item||view==='work'?Promise.resolve(null):read(ROOT+'/board'),
       ]);
       if(sequence!==state.sequence)return;
       if(item&&detail?.item?.id!==item)throw Error('The process record does not match the selected item. Reopen it and try again.');
-      if(!item&&(!Array.isArray(board?.items)||!Array.isArray(spools?.items)))throw Error('The individual spool board could not be verified. Refresh to load the current process positions.');
-      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=item?[]:board.items;if(!item)state.spools=spools.items;state.detail=markTimes(detail);
+      if(!item&&(!Array.isArray(board?.items)||view==='board'&&!Array.isArray(spools?.items)))throw Error('The process records could not be verified. Refresh to load the current work.');
+      if(!item&&view==='work'&&board.items.some(row=>!row.work||typeof row.work.pending!=='boolean'||typeof row.work.for_position!=='boolean'||typeof row.work.in_custody!=='boolean'))throw Error('Your work requirements could not be verified. Refresh to load the current assignments.');
+      state.catalog=catalog;state.handoffOptions=handoffOptions;state.board=item?[]:board.items;if(!item)state.spools=spools?.items||[];state.detail=markTimes(detail);
       for(const row of state.board)markTimes(row);
       render();updateUrl();
     }catch(error){
@@ -263,7 +270,7 @@
   }
   function visibleItems(ignoreStep=false,source=state.board){
     const query=state.query.trim().toLowerCase();
-    return source.filter(row=>(!state.project||row.project_id===state.project)&&(!state.subproject||row.subproject_id===state.subproject)&&(!state.status||displayStatus(row)===state.status)&&(ignoreStep||!state.step||matchesChartStep(row,state.step))&&(!query||[row.item_id,row.spool_number,row.google_part_number,row.qr_alias,row.display_code,row.current_title,row.flow_stage?.label,row.project_id,row.subproject_id,row.purchase_order,row.assembly_id,row.assembly_number].some(value=>String(value||'').toLowerCase().includes(query))));
+    return source.filter(row=>(!state.project||row.project_id===state.project)&&(!state.subproject||row.subproject_id===state.subproject)&&(!state.status||displayStatus(row)===state.status)&&(ignoreStep||!state.step||matchesChartStep(row,state.step))&&(!query||[row.item_id,row.spool_number,row.google_part_number,row.qr_alias,row.display_code,row.current_title,row.flow_stage?.label,row.project_id,row.subproject_id,row.purchase_order,row.assembly_id,row.assembly_number,row.work?.title,row.work?.custodian_badge].some(value=>String(value||'').toLowerCase().includes(query))));
   }
   function filters(){
     const records=[...state.spools,...state.board];
@@ -280,9 +287,40 @@
     if(!current)return '<span class="muted">—</span>';
     return clock(process,current.elapsed_seconds,['running','paused'].includes(process.status))+secondary(process.status==='paused'?'Paused':'Running');
   }
+  function workRecords(work){
+    return arr(work?.requirements).length?`<p class="ff-work-records"><strong>Required records:</strong> ${arr(work.requirements).map(value=>esc(value)).join(' · ')}</p>`:'';
+  }
+  function workCard(row){
+    const work=row.work,attention=arr(row.blockers),restricted=work.for_position&&!work.can_record;
+    const title=work.title||row.current_title||'Review current work';
+    return `<article class="card ff-work-card" data-work-item="${esc(row.item_id)}" data-work-route="${esc(row.route)}"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(routeNames[row.route]||row.kind||'Item')}${work.display_step!=null?` · Step ${esc(work.display_step)}`:''}</div><h2>${action('item',itemLabel(row),row.item_id,'ff-link',isSpool(row)?row:null)}</h2>${row.route==='assembly'&&row.assembly_number?`<p class="ff-secondary">Record ${esc(row.item_id)}</p>`:''}${row.description?`<p class="ff-secondary">${esc(row.description)}</p>`:''}</div>${tag(restricted||attention.length?'rework':'active',restricted?'Employee restriction':attention.length?'Checks need attention':'Current work')}</div><h3>${esc(title)}</h3><p class="ff-work-owner">Recorded by ${arr(work.responsible_roles).map(role=>esc(roleLabel(role))).join(' · ')||'the responsible position'}<br>Current custody: ${work.in_custody?'You':esc(work.custodian_badge||'Not recorded')}${work.required_employee_badge?` · Required employee: ${work.required_employee_badge===me?.badge?'You':esc(work.required_employee_badge)}`:''}</p>${arr(work.current_checks).length?`<ul class="ff-work-checks">${work.current_checks.map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>`:''}${workRecords(work)}${work.restriction?`<p class="ff-work-restriction">${esc(work.restriction)}</p>`:''}${attention.length?`<details class="ff-work-attention"><summary>${attention.length} current completion ${attention.length===1?'blocker':'blockers'}</summary><ul>${attention.map(message=>`<li>${esc(message)}</li>`).join('')}</ul></details>`:''}<div class="ff-work-bottom"><span class="ff-secondary">${esc(row.purchase_order||row.project_id||'Project not recorded')}${row.assembly_number?` · Assembly ${esc(row.assembly_number)}`:''}</span><div class="actions">${row.route==='component'&&row.parent_item_id?action('item','Parent spool',row.parent_item_id):''}${action('item','Open tasks & requirements',row.item_id,'primary')}</div></div></article>`;
+  }
+  function renderWork(){
+    const pending=visibleItems().filter(row=>row.work?.pending===true);
+    const position=pending.filter(row=>row.work.for_position===true),custody=pending.filter(row=>row.work.in_custody===true);
+    const rows=state.workScope==='custody'?custody:position,limit=25,pages=Math.max(1,Math.ceil(rows.length/limit));
+    state.workPage=Math.min(state.workPage,pages-1);
+    const shown=rows.slice(state.workPage*limit,(state.workPage+1)*limit);
+    const description=window.FabPermissions?.description?.(me?.role)||'';
+    let html=heading('My work',`${me?.name||me?.badge||'Employee'} · ${roleLabel(me?.role)}`,action('board','All production records'));
+    html+=`<section class="card ff-work-intro"><div class="ff-section-head"><div><h2>Your position: ${esc(roleLabel(me?.role))}</h2>${description?`<p class="muted">${esc(description)}</p>`:''}</div>${action('refresh','Refresh work')}</div><div class="field"><label for="flowWorkScope">Show work</label><select id="flowWorkScope">${option('position',`For my position (${position.length})`,state.workScope)}${option('custody',`In my custody (${custody.length})`,state.workScope)}</select></div><p class="ff-footer-note">${state.workScope==='custody'?'Active travelers currently in your custody. The required position and employee are shown for each action.':'Current tasks for your position. A task can require a specific employee; custody and employee restrictions are shown on its card.'} Component preparation, spool fabrication and assembly work are listed on their own records. Open a task to review its checks and record the work.</p></section>`;
+    html+=filters()+`<p class="ff-work-count" role="status">${rows.length} current ${rows.length===1?'task':'tasks'}${rows.length?` · Showing ${state.workPage*limit+1}–${Math.min((state.workPage+1)*limit,rows.length)}`:''}</p>`;
+    html+=shown.length?`<div class="ff-work-list">${shown.map(workCard).join('')}</div>`:empty('No current tasks match',state.workScope==='custody'?'No active traveler in this view is currently in your custody. Check For my position or open a spool directly.':'There are no current traveler steps for your position in this view. Later tasks appear when the item reaches that step. Clear the filters or open an item to review its route.',action('board','All production records'));
+    if(pages>1)html+=`<div class="ff-work-pages"><button type="button" data-flow-action="work-previous"${state.workPage===0?' disabled':''}>Previous tasks</button><span>Page ${state.workPage+1} of ${pages}</span><button type="button" data-flow-action="work-next"${state.workPage>=pages-1?' disabled':''}>Next tasks</button></div>`;
+    return html+lookup()+`<p class="ff-footer-note">This list uses recorded, started process routes. Inventory awaiting route setup remains in All production records. Required weld evidence, material records and Job Packet checks are available from each item's existing controls.</p>`;
+  }
+  function positionWork(){
+    const detail=state.detail,flow=detail.flow,work=detail.work;
+    if(!flow)return '';
+    const steps=arr(flow.steps).filter(step=>arr(step.roles).includes(me?.role));
+    const own=work?.for_position===true,waiting=work?.pending===true&&!own;
+    let message=removed()?'This removed record is available for history only.':work?.restriction||
+      (waiting?`The current step belongs to ${arr(work.responsible_roles).map(roleLabel).join(' / ')}.`:own?'Review the required checks below and complete the work using the current-step form.':'Review the recorded and upcoming steps for your position on this route.');
+    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · ${esc(roleLabel(me?.role))}</div><h2>Your tasks & requirements</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${workRecords(work)}<details class="ff-fold"><summary>Steps for your position on this ${esc(routeNames[flow.route]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?`<ol class="ff-position-steps">${steps.map(step=>`<li><div><strong>${esc(chartStepNumber(step.number,flow.catalog_version,step.testing_phase||''))} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div><ul>${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.completed_at?` · ${esc(stamp(step.completed_at))}`:''}</p>`:''}</li>`).join('')}</ol>`:'<p class="ff-footer-note">This route currently has no numbered steps for your position. Related component and assembly work stays on its own record; testing duties appear when the required testing phase is reached.</p>'}</details></section>`;
+  }
   function renderBoard(){
     const rows=visibleItems(),spools=visibleItems(false,state.spools);
-    let html=heading('Fabrication process flow','Each individual spool appears under its current process. Select its spool number to open the physical record and its production steps.')+filters();
+    let html=heading('Fabrication process flow','Each individual spool appears under its current process. Select its spool number to open the physical record and its production steps.',action('my-work','My work','','primary'))+filters();
     html+=flowStatus()?.processBoard?.(spools,{attribute:'data-flow-spool',title:'Individual spools by process',catalog:state.catalog.stage_catalog})||empty('Individual spool board unavailable','Refresh to load the current spool positions.');
     html+=(flowStatus()?.legend(state.catalog.stage_catalog)||'')+lookup();
     html+=`<section class="card"><details class="ff-fold"><summary>Traveler records · ${rows.length} matching records</summary>${counts(rows)}<div class="ff-section-head"><h2>Numbered route records</h2></div>`;
@@ -417,7 +455,7 @@
   }
   function renderDetail(){
     const detail=state.detail,item=detail.item,flow=detail.flow;
-    let controls=action('board','Process board')+action('item-record','Item & QR record',item.id);
+    let controls=action('my-work',state.view==='work'?'Back to My work':'My work')+action('board','Process board')+action('item-record','Item & QR record',item.id);
     if(me?.role==='admin'&&!removed())controls+=action('admin-controls','Admin controls',item.id);
     if(['spool','assembly'].includes(flow?.route||detail.suggested_route)||['Spool','Assembly'].includes(item.kind))controls+=action('weld-record','Individual welds',item.id);
     if((flow?.route||detail.suggested_route)==='spool'||item.kind==='Spool')controls+=action('spool-parts','Spool parts',item.id);
@@ -429,25 +467,28 @@
       html+=`<section class="card"><h2>Start a numbered process route</h2>${metadata([['Item type',item.kind],['Project',item.project],['Location',item.location],['Current handler',item.handler]])}<p>Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–${catalogLast()}. Begin at the first step, or record a documented starting point for existing work.</p>${can('start')?action('start','Set up process route','','primary'):'<p class="muted">A Shop Foreman or administrator can start this item’s route.</p>'}</section>`;
       return html+'<section class="card"><h2>The fabrication flow</h2>'+renderMap(false)+'</section>';
     }
-    html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${chartStepNumber(route(flow.route)?.first_step)}–${chartStepNumber(route(flow.route)?.last_step)}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
+
     if(detail.parts?.configured){const t=detail.parts.totals||{},required=num(t.required_qty),prepared=num(t.prepared_qty);html+=`<section class="card"><div class="ff-section-head"><h2>Required component pieces</h2>${action('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${num(t.assigned_qty)} assigned · ${num(t.received_qty)} receipt recorded · ${num(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}</section>`;}
-    html+=`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',detail.project_id||item.project],['Subproject',detail.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
+    html+=positionWork()+`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',detail.project_id||item.project],['Subproject',detail.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
+
+    html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${chartStepNumber(route(flow.route)?.first_step)}–${chartStepNumber(route(flow.route)?.last_step)}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
     html+=`<section class="card"><details class="ff-fold"><summary>View this traveler’s numbered route</summary><p class="ff-footer-note">These are the saved definitions for this ${esc(routeNames[flow.route].toLowerCase())} traveler. Linked components, spools and assemblies retain their own routes.</p>${renderMap(true)}</details></section>`;
     return html+timingHistory()+eventHistory();
   }
   function render(){
     if(!state.catalog)return;
     state.handoffControl?.destroy();state.handoffControl=null;
-    node('flowContent').innerHTML=state.detail?renderDetail():renderBoard();
+    node('flowContent').innerHTML=state.detail?renderDetail():state.view==='work'?renderWork():renderBoard();
     node('flowContent').setAttribute('aria-busy','false');wire();startClocks();
   }
   function wire(){
     const lookupForm=node('flowLookupForm');
     if(lookupForm)lookupForm.onsubmit=async event=>{event.preventDefault();const sequence=state.sequence,lookup=state.lookup=(state.lookup||0)+1;try{const item=await readId(node('flowLookup').value);if(sequence!==state.sequence||lookup!==state.lookup)return;await open({item})}catch(error){if(sequence===state.sequence&&lookup===state.lookup)notify(errorText(error))}};
     for(const [id,key] of [['flowProject','project'],['flowSubproject','subproject'],['flowStatus','status']]){
-      const element=node(id);if(element)element.onchange=()=>{state[key]=element.value;if(key==='project')state.subproject='';render();updateUrl()};
+      const element=node(id);if(element)element.onchange=()=>{state[key]=element.value;state.workPage=0;if(key==='project')state.subproject='';render();updateUrl()};
     }
-    const search=node('flowSearch');if(search)search.oninput=()=>{state.query=search.value;const start=search.selectionStart,end=search.selectionEnd;render();node('flowSearch').focus();node('flowSearch').setSelectionRange(start,end)};
+    const search=node('flowSearch');if(search)search.oninput=()=>{state.query=search.value;state.workPage=0;const start=search.selectionStart,end=search.selectionEnd;render();node('flowSearch').focus();node('flowSearch').setSelectionRange(start,end)};
+    const workScope=node('flowWorkScope');if(workScope)workScope.onchange=()=>{state.workScope=workScope.value==='custody'?'custody':'position';state.workPage=0;render();updateUrl()};
     const form=node('flowStepForm');if(form)form.onsubmit=submitStep;
     for(const name of ['testing_decision','test_result'])for(const choice of ['YES','NO','PASS','FAIL'])if(node('ff-'+name+'-'+choice))node('ff-'+name+'-'+choice).onchange=updateTestingChoice;
     if(node('flowHandoffSender')){
@@ -624,7 +665,9 @@
     },actionName==='pause'?'Pause process':'Resume process');
   }
   async function act(name,id){
-    if(name==='board')return open({project:state.project});
+    if(name==='board')return open({view:'board',project:state.project});
+    if(name==='my-work')return open({view:'work',workScope:state.workScope,project:state.project});
+    if(name==='work-next'||name==='work-previous'){state.workPage=Math.max(0,state.workPage+(name==='work-next'?1:-1));render();return;}
     if(name==='refresh')return refresh();
     if(name==='item')return open({item:id});
     if(name==='item-record')return openItem(id);
@@ -655,9 +698,10 @@
   });
   node('flowDialogClose').onclick=()=>node('flowDialog').close();
   node('flowDialogCancel').onclick=()=>node('flowDialog').close();
-  node('navFlow').onclick=()=>open();
+  node('navFlow').onclick=()=>open({view:'board',resetFilters:true});
+  if(node('navMyWork'))node('navMyWork').onclick=()=>open({view:'work',workScope:'position',project:'',resetFilters:true});
   node('itemFlowBtn').onclick=()=>{if(current)open({item:current.id})};
-  window.FabFlow={open,refresh,cancelPending(){state.sequence++;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
+  window.FabFlow={open,refresh,navigationState(){return {view:state.view,workScope:state.workScope,workPage:state.workPage,project:state.project,subproject:state.subproject,query:state.query,status:state.status,step:state.step}},cancelPending(){state.sequence++;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
 })();
 
 

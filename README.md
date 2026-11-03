@@ -1,5 +1,9 @@
 # FabTrace Cloud
 
+## Employee work and position requirements
+
+Release `2026.11.03-employee-work.1` adds **My work** with current tasks for the employee's position and a separate current-custody view. Cards use saved traveler checks and actual testing phases, including specific technician restrictions, required records and current completion blockers. Component, spool and assembly work remain attached to their own records. Opening an item places current required work and position steps before its route diagram. The item/QR screen provides **My tasks & requirements**. The overview is read-only and does not start routes or create completion evidence. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for employee navigation and scope.
+
 ## Required Assembly Number
 
 Creating or editing a P.O. assembly requires its actual **Assembly Number** as well as its separate **GPN**. Enter the independent assembly identifier from the job records. FabTrace does not substitute the GPN, copy an internal `ASM-…` tracking ID, or invent a number when it is missing.

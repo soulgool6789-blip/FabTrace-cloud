@@ -18,6 +18,7 @@ from read_projection import (PROJECTION_MISSING, prime_projection, prime_rows, p
 
 from main import Base, Employee, Item, Rework, asdict, audit, auth, db, lock_item, permit, utcnow
 from permissions import flow_step_roles
+from employee_work import work_projection
 from tracking import (SpoolPlan, Weld, WeldRequirement, WeldWork, _after,
     _production_complete, _requirement_satisfied, _reset_requirements,
     tracking_release_errors, post_fabrication_heat_errors)
@@ -835,19 +836,41 @@ def flow_stage_for_item(s, item, *, plan=None, receiving=None, seen=None, statio
     return own
 
 
-def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cache=None):
+def _work_context(s, item, project_id):
+    """Use the already primed family/PO rows; never infer an assembly number."""
+    from order_spools import effective_parent_id
+    from orders import OrderAssembly, OrderGpn, PurchaseOrder
+    link = read_get(s, ComponentLink, item.id)
+    parent_id = link.spool_id if link else effective_parent_id(s, item.id)
+    assembly_id = item.id if item.kind == 'Assembly' else (
+        effective_parent_id(s, parent_id) if link else parent_id)
+    mapping = read_get(s, OrderAssembly, assembly_id) if assembly_id else None
+    group = read_get(s, OrderGpn, mapping.gpn_id) if mapping else None
+    order = read_get(s, PurchaseOrder, group.project_id if group else project_id) if group or project_id else None
+    return {'parent_item_id': parent_id, 'assembly_id': mapping.item_id if mapping else None,
+            'assembly_number': group.assembly_number or None if group else None,
+            'purchase_order': order.purchase_order if order else None}
+
+
+def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cache=None, user=None):
     from production import compact_process_summary, process_snapshot
     from spool_presentation import item_presentation
     plan = plan if plan is not None else read_get(s, FlowPlan, item.id)
     project_id, subproject_id = _project(s, item)
     version = catalog_version(plan)
     current = current_step_definition(s, plan) if plan and plan.current_step else None
+    display_step = chart_step_number(plan.current_step, version, current.get('testing_phase')) if current else None
+    from flow_testing import summary as testing_summary
+    testing = testing_summary(s, plan) if user is not None and current and current.get('testing_phase') else None
     return {
-        'item_id': item.id, 'description': item.description, 'route': plan.route if plan else None,
+        'item_id': item.id, 'description': item.description, 'kind': item.kind, 'route': plan.route if plan else None,
+        **(_work_context(s, item, project_id) if user is not None else {}),
         'status': plan.status if plan else 'not_started', 'current_step': plan.current_step if plan else None,
         'catalog_version': version,
-        'current_display_step': chart_step_number(plan.current_step, version, current.get('testing_phase')) if current else None,
+        'current_display_step': display_step,
         'current_title': current['title'] if current else '',
+        'work': work_projection(item, plan, user, current, display_step=display_step,
+                                testing=testing, handoff_roles=HANDOFF),
         **(presentation if presentation is not None else item_presentation(
             s, item, plan=plan, stations=stations, stage_cache=stage_cache)),
         'step_entered_at': _utc(plan.step_entered_at).isoformat() if plan and plan.step_entered_at else None,
@@ -923,6 +946,9 @@ def detail(s, item, user):
         stage_versions.add(VERSION)
     from flow_testing import summary as testing_summary
     current = current_step_definition(s, plan)
+    display_step = chart_step_number(plan.current_step, catalog_version(plan), current.get('testing_phase')) if current else None
+    testing = testing_summary(s, plan)
+    work_context = _work_context(s, item, project_id)
     return {
         'project_id': project_id, 'subproject_id': subproject_id,
         'stage_catalog': stages_for_versions(stage_versions),
@@ -932,17 +958,19 @@ def detail(s, item, user):
         **({'parts': parts} if parts else {}),
         'order_scope': order_scope(s, item.id),
         'item': {**_dict(item, 'id description kind project drawing location handler released released_at released_by dimensional dimension_at last_work_at on_hold'.split()),
-                 **display,
+                 **display, **work_context,
                  'release_control': release_summary(s, item)},
         'release_control': release_summary(s, item),
         'transfer': transfer_snapshot(s, item, user),
         'suggested_route': 'assembly' if item.kind == 'Assembly' else 'spool' if spool_plan or item.kind == 'Spool' else 'component',
         'flow': {**_dict(plan, PLAN_KEYS), 'catalog_version': catalog_version(plan),
-            'current_display_step': chart_step_number(plan.current_step, catalog_version(plan), current.get('testing_phase')) if current else None,
+            'current_display_step': display_step,
             'route_definition': route_definition(plan), 'ready_to_ship_step': ready_to_ship_step(plan),
             'shipment_step': shipment_step(plan), 'steps': _step_states(s, plan),
-            'current': current, 'testing': testing_summary(s, plan),
+            'current': current, 'testing': testing,
             'blockers': _step_errors(s, item, plan)} if plan else None,
+        'work': work_projection(item, plan, user, current, display_step=display_step,
+                                testing=testing, handoff_roles=HANDOFF, active=active),
         'production_process': process,
         'components': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in component_ids],
         'spools': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in spool_ids],
@@ -976,7 +1004,7 @@ def items(project_id: str = '', subproject_id: str = '', u: Employee = Depends(a
     from production import prime_process_read_events
     prime_process_read_events(s, [item.id for item, _ in selected])
     displays = item_presentations(s, [item for item, _ in selected])
-    return {'items': [_summary(s, item, plan, presentation=displays[item.id]) for item, plan in selected]}
+    return {'items': [_summary(s, item, plan, presentation=displays[item.id], user=u) for item, plan in selected]}
 
 
 @router.get('/board')
