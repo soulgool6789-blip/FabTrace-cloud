@@ -285,13 +285,40 @@
   function workRecords(work){
     return arr(work?.requirements).length?`<p class="ff-work-records"><strong>Required records:</strong> ${arr(work.requirements).map(value=>esc(value)).join(' · ')}</p>`:'';
   }
+  function qaReviewSteps(){
+    const flow=state.detail.flow,current=flow.current,value=testing();
+    return arr(flow.steps).flatMap(step=>{
+      if(Number(step.number)===18&&(value||flow.catalog_version==='CLM-25-v1')){
+        // NDT and pressure share a stored step ID, but each has its own signed
+        // review. Keep both visible and never credit another phase or cycle.
+        return ['ndt_qa','pressure_qa'].map(phase=>{
+          const kind=phase==='ndt_qa'?'ndt':'pressure',code=kind==='pressure'&&flow.catalog_version==='CLM-25-v1'?'QA/QC-005':'QA/QC-004';
+          const reviews=value?arr(state.detail.events).filter(event=>{
+            const data=event.data||{};
+            return ['advance','fail'].includes(event.action)&&data.testing_protocol===value.protocol&&data.testing_action==='review'&&data.testing_phase===phase&&Number(data.testing_cycle)===Number(value.cycle);
+          }):[];
+          const review=reviews[reviews.length-1],result=review?.data?.test_result;
+          const isCurrent=value?.active===true&&value.phase===phase&&current?.qa===true&&Number(current.number)===18;
+          const openIds=new Set(openExceptions().map(row=>String(row.id)));
+          const openFinding=arr(state.detail.events).some(event=>event.action==='fail'&&event.data?.testing_protocol==='CLM-TEST-v1'&&event.data.testing_phase===phase&&event.data.exception_id!=null&&openIds.has(String(event.data.exception_id)));
+          const correcting=value?.phase===kind+'_rework',retesting=value?.phase===(kind==='ndt'?'ndt':'pressure_test');
+          const status=value?.decision==='NO'?'not_required':isCurrent?'current':correcting||openFinding||result==='FAIL'?'rework':result==='PASS'&&!retesting?'completed':step.status==='not_recorded'||!value&&step.status==='completed'?'not_recorded':'pending';
+          const checks=['Review the current test attempt and its controlled report','Verify current passing dimensions and applicable weld / test acceptance','Record an explicit QA/QC PASS or FAIL'].map((label,index)=>({id:'testing_'+phase+'_review_'+(index+1),label}));
+          return {...step,title:code+' - Verify '+(kind==='ndt'?'NDT':'Pressure Test')+' Results',checks,...(isCurrent?current:{}),qa:true,testing_phase:phase,review_key:phase,is_current:isCurrent,status,
+            last_actor:review?.actor||null,completed_at:status==='completed'?review?.at:null,reviewed_at:review?.at||null,review_result:result,review_reference:review?.reference||'',review_attempt:review?.data?.testing_attempt};
+        });
+      }
+      const isCurrent=Number(step.number)===Number(current?.number),row=isCurrent?{...step,...current}:step;
+      return row.qa===true?[{...row,review_key:row.qa_code||String(row.number),is_current:isCurrent}]:[];
+    });
+  }
   function positionWork(){
     const detail=state.detail,flow=detail.flow,work=detail.work;
     if(!flow||me?.role!=='inspector')return '';
     const current=flow.current,currentQa=current?.qa===true;
-    const steps=arr(flow.steps).map(step=>Number(step.number)===Number(current?.number)?{...step,...current}:step).filter(step=>step.qa===true);
+    const steps=qaReviewSteps();
     const message=removed()?'This removed record is available for history only.':currentQa?work?.restriction||'Review this QA/QC hold point and its recorded evidence before recording PASS or FAIL.':current?`The current production step belongs to ${arr(current.roles).map(roleLabel).join(' / ')}. QA/QC review becomes available at the next QA hold point.`:'Review this route’s recorded QA/QC inspections and any unresolved defects.';
-    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · QA/QC</div><h2>QA/QC review tasks</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${currentQa?workRecords(work):''}<details class="ff-fold"><summary>QA/QC hold points on this ${esc(routeNames[flow.route]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?`<ol class="ff-position-steps">${steps.map(step=>`<li><div><strong>${esc(Number(step.number)===Number(current?.number)?currentStepNumber(current):chartStepNumber(step.number,flow.catalog_version,step.testing_phase||''))} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div><ul>${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.completed_at?` · ${esc(stamp(step.completed_at))}`:''}</p>`:''}</li>`).join('')}</ol>`:'<p class="ff-footer-note">This route has no recorded QA/QC hold points. Related components, spools and assemblies keep their own inspection records.</p>'}</details></section>`;
+    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · QA/QC</div><h2>QA/QC review tasks</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${currentQa?workRecords(work):''}<details class="ff-fold" open><summary>QA/QC hold points on this ${esc(routeNames[flow.route]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?`<ol class="ff-position-steps">${steps.map(step=>`<li data-qa-review="${esc(step.review_key)}"${step.is_current?' aria-current="step"':''}><div><strong>${esc(step.is_current?currentStepNumber(current):chartStepNumber(step.number,flow.catalog_version,step.testing_phase||''))} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div><ul>${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>${['PASS','FAIL'].includes(step.review_result)?`<p class="ff-secondary">Latest recorded review: <strong>${esc(step.review_result)}</strong>${step.review_attempt?' · Attempt '+esc(step.review_attempt):''}${step.review_reference?' · '+esc(step.review_reference):''}</p>`:''}${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.reviewed_at||step.completed_at?` · ${esc(stamp(step.reviewed_at||step.completed_at))}`:''}</p>`:''}</li>`).join('')}</ol>`:'<p class="ff-footer-note">This route has no recorded QA/QC hold points. Related components, spools and assemblies keep their own inspection records.</p>'}</details></section>`;
   }
   function reworkSummary(){
     const value=state.detail?.rework,defects=arr(value?.defects);
@@ -692,6 +719,7 @@
   node('itemFlowBtn').onclick=()=>{if(current)open({item:current.id})};
   window.FabFlow={open,refresh,navigationState(){return {project:state.project,subproject:state.subproject,query:state.query,status:state.status,step:state.step}},cancelPending(){state.sequence++;cancelRead();stopClocks();state.handoffControl?.destroy();state.handoffControl=null}};
 })();
+
 
 
 

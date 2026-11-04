@@ -47,7 +47,7 @@ function testingAt(phase,action,extra={},source=catalog){
   const d=detailAt(number,{},source),qaCode=kind==='pressure'&&source.version==='CLM-25-v1'?'QA/QC-005':'QA/QC-004',qaLocation=kind==='pressure'&&source.version==='CLM-25-v1'?'qa_pressure_results':'qa_test_results',tester=kind==='ndt'?'NDT1':'PRESS1',title=phase==='decision'?'Determine if Spool Needs to Be Sent to Testing':qa?qaCode+' - Verify '+(kind==='ndt'?'NDT':'Pressure Test')+' Results':action==='correct'?'Mandatory '+kind+' rework':(kind==='ndt'?'NDT':'Pressure Test')+' · '+action;
   const roles=qa?['admin','inspector']:work||action==='correct'?['admin',kind==='ndt'?'ndt':'pressure_testing_technician']:['admin','supervisor','handler'];
   d.flow.testing={protocol:'CLM-TEST-v1',phase,decision:phase==='decision'?null:phase==='not_required'?'NO':'YES',test_kind:kind,attempt:2,cycle:1,action:action||null,active:Boolean(action),requires_decision:phase==='decision',requires_result:action==='complete'||qa,requires_child_scans:phase==='decision',review_exception_ids:[],test_started_by:action==='complete'||qa?tester:null,return_to:{sender_badge:tester,sender_name:kind==='ndt'?'NDT <Technician>':'Pressure technician',location_id:'testing',location_label:'Testing & inspection bay'},report:qa||action==='handoff'?{test_kind:kind,attempt:2,cycle:1,result:'PASS',reference:'REPORT-002',notes:'Actual test evidence',actor:tester,at:'2026-10-28T12:00:00Z',event_id:42}:null,qa:action==='handoff'?{result:'PASS',reference:'QA-002',actor:'QA1',at:'2026-10-28T12:04:00Z'}:null,rework_required:action==='correct',...extra};
-  d.flow.current={...d.flow.current,title,roles,qa,display_qa_code:qa?qaCode:null,qa_stage:qa?qaLocation:null,requires_scan:true,requires_reference:['complete','review','correct'].includes(action),requires_handoff:work||action==='handoff',requires_location:work||action==='handoff',requires_child_scans:phase==='decision',requires_resolution:action==='correct',return_steps:[],handoff_target_role:action==='start'?kind==='ndt'?'ndt':'pressure_testing_technician':action==='complete'?'inspector':action==='handoff'?'handler':null,handoff_location_id:action==='start'?'testing':action==='complete'?qaLocation:action==='handoff'?'floor':null,checks:[{id:'testing_'+phase+'_'+action+'_1',label:'Verify the physical testing phase'}]};
+  d.flow.current={...d.flow.current,title,roles,qa,testing_phase:phase,testing_action:action,qa_code:qa?qaCode.replace('QA/QC-','QA-'):null,display_qa_code:qa?qaCode:null,qa_stage:qa?qaLocation:null,requires_scan:true,requires_reference:['complete','review','correct'].includes(action),requires_handoff:work||action==='handoff',requires_location:work||action==='handoff',requires_child_scans:phase==='decision',requires_resolution:action==='correct',return_steps:[],handoff_target_role:action==='start'?kind==='ndt'?'ndt':'pressure_testing_technician':action==='complete'?'inspector':action==='handoff'?'handler':null,handoff_location_id:action==='start'?'testing':action==='complete'?qaLocation:action==='handoff'?'floor':null,checks:[{id:'testing_'+phase+'_'+action+'_1',label:'Verify the physical testing phase'}]};
   if(source.version==='CLM-25-v1')d.flow.current_display_step=({decision:17,ndt:18,ndt_rework:18,ndt_qa:19,floor_before_pressure:20,pressure_test:21,pressure_rework:21,pressure_qa:22,floor_before_paint:23,complete:24,not_required:24})[phase];
   d.flow.steps=d.flow.steps.map(s=>s.number===number?{...d.flow.current,status:'current'}:s);
   if(phase==='not_required')d.flow.steps=d.flow.steps.map(s=>[18,19].includes(s.number)?{...s,status:'not_required'}:s);
@@ -560,6 +560,124 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
     const panel=elementHtml(html(),/<section class="card ff-position-work">/);assert.ok(panel.includes(display+' · '+code));assert.doesNotMatch(panel,/Determine if Spool|Sandblast &amp; Paint/);
   }
 
+
+  // NDT and pressure reviews share a stored step ID, but remain distinct QA tasks.
+  const qaTaskPanel=()=>elementHtml(html(),/<section class="card ff-position-work">/);
+  const qaTaskRow=key=>elementHtml(qaTaskPanel(),new RegExp('<li\\b[^>]*\\bdata-qa-review="'+key+'"[^>]*>'));
+  const signedQaReview=(phase,result,{cycle=1,attempt=2,id=phase==='ndt_qa'?501:502,actor=phase==='ndt_qa'?'NDT-QA':'PRESSURE-QA',at=phase==='ndt_qa'?'2026-11-04T10:10:00Z':'2026-11-04T10:20:00Z'}={})=>({
+    id,action:result==='PASS'?'advance':'fail',step:18,actor,at,reference:'SIGNED-'+phase+'-'+cycle+'-'+attempt,
+    data:{testing_protocol:'CLM-TEST-v1',testing_phase:phase,testing_action:'review',test_kind:phase==='ndt_qa'?'ndt':'pressure',testing_cycle:cycle,testing_attempt:attempt,test_result:result,
+      ...(result==='FAIL'?{exception_id:id+1000}:{}),
+      step_definition:{number:18,title:(phase==='ndt_qa'?'QA/QC-004 - Verify NDT Results':'QA/QC-005 - Verify Pressure Test Results'),qa:true,qa_code:phase==='ndt_qa'?'QA-004':'QA-005',display_qa_code:phase==='ndt_qa'?'QA/QC-004':'QA/QC-005',testing_phase:phase,checks:[{id:'testing_'+phase+'_review_1',label:'Verify the physical testing phase'}]}}
+  });
+  const ndtTaskPass=signedQaReview('ndt_qa','PASS'),pressureTaskPass=signedQaReview('pressure_qa','PASS');
+  const assertQaTasks=(ndtStatus,pressureStatus)=>{
+    const panel=qaTaskPanel();assert.ok(panel,'QA reviewers have a hold-point task list');
+    assert.deepEqual([...panel.matchAll(/<li\b[^>]*\bdata-qa-review="([^"]+)"/g)].map(match=>match[1]),['ndt_qa','pressure_qa','QA-006'],'both test reviews and final QA remain visible in sequence');
+    assert.match(panel,/QA\/QC hold points on this assembly \(3\)/);
+    for(const [key,number,code,status] of [['ndt_qa',19,'004',ndtStatus],['pressure_qa',22,'005',pressureStatus]]){
+      const row=qaTaskRow(key);assert.match(row,new RegExp(number+' · QA/QC-'+code),'review labels retain their own display step');
+      assert.match(row,new RegExp('<span class="ff-tag '+status+'">'),'each review retains its own status');
+    }
+    assert.match(qaTaskRow('QA-006'),/26 · QA\/QC-006/);
+  };
+  const taskReadWrites=posts().length;
+  await catalogContract('QA task list keeps NDT, pressure and final reviews visible across every testing phase',async()=>{
+    const states=[
+      ['decision','decision',[], 'pending','pending'],
+      ['ndt','start',[], 'pending','pending'],
+      ['ndt_qa','review',[], 'current','pending'],
+      ['floor_before_pressure','handoff',[ndtTaskPass], 'completed','pending'],
+      ['pressure_test','start',[ndtTaskPass], 'completed','pending'],
+      ['pressure_qa','review',[ndtTaskPass], 'completed','current'],
+      ['floor_before_paint','handoff',[ndtTaskPass,pressureTaskPass], 'completed','completed'],
+      ['complete',null,[ndtTaskPass,pressureTaskPass], 'completed','completed'],
+    ];
+    for(const [phase,action,events,ndtStatus,pressureStatus] of states){
+      record=testingAt(phase,action,{},modernCatalog);record.events=structuredClone(events);context.me={role:'inspector',badge:'QA1'};
+      await context.FabFlow.open({item:'ITM-001'});assertQaTasks(ndtStatus,pressureStatus);
+      if(events.length)assert.match(qaTaskRow('ndt_qa'),/Last recorded by NDT-QA/,'accepted NDT evidence stays visible after the pressure phase starts');
+      if(pressureStatus==='completed')assert.match(qaTaskRow('pressure_qa'),/Last recorded by PRESSURE-QA/);
+    }
+  });
+  await catalogContract('QA tasks require signed review evidence instead of technician reports or combined-step completion',async()=>{
+    record=testingAt('pressure_qa','review',{},modernCatalog);
+    record.flow.steps=record.flow.steps.map(step=>step.number===18?{...step,status:'completed',last_actor:'COMBINED-STEP',completed_at:'2026-11-04T10:00:00Z'}:step);
+    record.events=[{...structuredClone(ndtTaskPass),data:{...ndtTaskPass.data,testing_phase:'ndt',testing_action:'complete'}}];
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('pending','current');
+    assert.doesNotMatch(qaTaskRow('ndt_qa'),/Last recorded by (NDT-QA|COMBINED-STEP)/,'a test report or reused step status cannot invent QA acceptance');
+  });
+  await catalogContract('each failed testing review keeps its own reinspection status during correction and retesting',async()=>{
+    const ndtFailure=signedQaReview('ndt_qa','FAIL'),pressureFailure=signedQaReview('pressure_qa','FAIL');
+    for(const [phase,action,events,ndtStatus,pressureStatus] of [
+      ['ndt_rework','correct',[ndtFailure],'rework','pending'],
+      ['ndt','start',[ndtFailure],'rework','pending'],
+      ['pressure_rework','correct',[ndtTaskPass,pressureFailure],'completed','rework'],
+      ['pressure_test','start',[ndtTaskPass,pressureFailure],'completed','rework'],
+    ]){
+      record=testingAt(phase,action,{attempt:3},modernCatalog);record.events=structuredClone(events);
+      await context.FabFlow.open({item:'ITM-001'});assertQaTasks(ndtStatus,pressureStatus);
+      assert.match(qaTaskRow(phase.startsWith('ndt')?'ndt_qa':'pressure_qa'),/Needs reinspection/);
+    }
+  });
+  await catalogContract('fresh QA reinspection is current and its own later PASS replaces the earlier failure',async()=>{
+    const pressureFailure=signedQaReview('pressure_qa','FAIL'),pressureRetestPass=signedQaReview('pressure_qa','PASS',{attempt:3,id:503,actor:'REINSPECT-QA',at:'2026-11-04T10:30:00Z'});
+    record=testingAt('pressure_qa','review',{attempt:3},modernCatalog);record.events=[structuredClone(ndtTaskPass),pressureFailure];
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('completed','current');
+    assert.doesNotMatch(qaTaskRow('pressure_qa'),/<span class="ff-tag (completed|rework)">/,'the new active inspection cannot be mistaken for its earlier disposition');
+    record=testingAt('floor_before_paint','handoff',{attempt:3},modernCatalog);record.events=[structuredClone(ndtTaskPass),pressureFailure,pressureRetestPass];
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('completed','completed');assert.match(qaTaskRow('pressure_qa'),/Last recorded by REINSPECT-QA/);
+  });
+  await catalogContract('a restarted test cycle cannot reuse either QA PASS from the prior cycle',async()=>{
+    record=testingAt('decision','decision',{cycle:2,attempt:1,decision:'YES'},modernCatalog);record.events=[structuredClone(ndtTaskPass),structuredClone(pressureTaskPass)];
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('pending','pending');assert.doesNotMatch(qaTaskPanel(),/Last recorded by (NDT-QA|PRESSURE-QA)/);
+    record=testingAt('ndt_qa','review',{cycle:2,attempt:1},modernCatalog);record.events=[structuredClone(ndtTaskPass),structuredClone(pressureTaskPass)];
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('current','pending');
+    record=testingAt('pressure_qa','review',{cycle:2,attempt:1},modernCatalog);record.events=[structuredClone(ndtTaskPass),structuredClone(pressureTaskPass),signedQaReview('ndt_qa','PASS',{cycle:2,attempt:1,id:504,actor:'CYCLE-TWO-QA',at:'2026-11-04T11:00:00Z'})];
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('completed','current');assert.match(qaTaskRow('ndt_qa'),/Last recorded by CYCLE-TWO-QA/);assert.doesNotMatch(qaTaskRow('pressure_qa'),/Last recorded by PRESSURE-QA/);
+  });
+  await catalogContract('testing NO keeps both review rows marked Not required while retaining final QA',async()=>{
+    record=testingAt('not_required',null,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assertQaTasks('not_required','not_required');
+    assert.match(qaTaskRow('ndt_qa'),/>Not required<\/span>/);assert.match(qaTaskRow('pressure_qa'),/>Not required<\/span>/);assert.match(qaTaskRow('QA-006'),/<span class="ff-tag pending">/);
+  });
+  await catalogContract('retained combined testing and component or spool QA scopes are not expanded',async()=>{
+    record=detailAt(18);await context.FabFlow.open({item:'ITM-001'});
+    assert.match(qaTaskPanel(),/QA\/QC hold points on this assembly \(2\)/);assert.match(qaTaskPanel(),/QA\/QC-004 - Verify Test Results/);assert.match(qaTaskPanel(),/QA\/QC-005 - Final Inspection/);assert.doesNotMatch(qaTaskPanel(),/data-qa-review="(?:ndt_qa|pressure_qa)"|QA\/QC-006/);
+    record=detailAt(2,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assert.match(qaTaskPanel(),/QA\/QC hold points on this component \(1\)/);assert.match(qaTaskPanel(),/QA\/QC-001/);assert.doesNotMatch(qaTaskPanel(),/QA\/QC-00[2-6]/);
+    record=detailAt(11,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});assert.match(qaTaskPanel(),/QA\/QC hold points on this spool \(2\)/);assert.match(qaTaskPanel(),/QA\/QC-002/);assert.match(qaTaskPanel(),/QA\/QC-003/);assert.doesNotMatch(qaTaskPanel(),/QA\/QC-00[1456]/);
+  });
+  await catalogContract('modern late baselines retain both unrecorded test reviews without inventing testing history',async()=>{
+    for(const baseline of [20,22]){
+      record=detailAt(baseline,{},modernCatalog);record.flow.baseline_step=baseline;
+      record.flow.steps=record.flow.steps.map(step=>step.number<baseline?{...step,status:'not_recorded',last_actor:null,completed_at:null}:step);
+      assert.equal(record.flow.testing,undefined,'late adopted routes have no explicit testing state');
+      await context.FabFlow.open({item:'ITM-001'});assertQaTasks('not_recorded','not_recorded');
+      assert.match(qaTaskRow('QA-006'),new RegExp('<span class="ff-tag '+(baseline===22?'current':'pending')+'">'));
+      assert.doesNotMatch(qaTaskRow('ndt_qa')+qaTaskRow('pressure_qa'),/Latest recorded review:|Last recorded by|<span class="ff-tag completed">/);
+    }
+    // Even a generic combined-step status cannot establish two distinct approvals.
+    record.flow.steps=record.flow.steps.map(step=>step.number===18?{...step,status:'completed',last_actor:'COMBINED-QA',completed_at:'2026-11-04T09:00:00Z'}:step);
+    await context.FabFlow.open({item:'ITM-001'});assertQaTasks('not_recorded','not_recorded');assert.doesNotMatch(qaTaskRow('ndt_qa')+qaTaskRow('pressure_qa'),/COMBINED-QA/);
+  });
+  await catalogContract('open failures carried into a new cycle retain only their matching phase reinspection requirement',async()=>{
+    for(const phase of ['ndt_qa','pressure_qa']){
+      const failure=signedQaReview(phase,'FAIL'),exceptionId=failure.data.exception_id;
+      const finding={id:exceptionId,step:18,return_step:17,reason:'Carried '+phase+' failure requires fresh acceptance',reference:failure.reference,opened_by:failure.actor,opened_at:failure.at,closed_at:null};
+      const priorEvents=phase==='pressure_qa'?[structuredClone(ndtTaskPass),failure]:[failure];
+      record=testingAt('decision','decision',{cycle:2,attempt:1,decision:'YES',pending_exception_ids:[exceptionId],review_exception_ids:[]},modernCatalog);record.events=structuredClone(priorEvents);record.exceptions=[structuredClone(finding)];
+      await context.FabFlow.open({item:'ITM-001'});assertQaTasks(phase==='ndt_qa'?'rework':'pending',phase==='pressure_qa'?'rework':'pending');
+      assert.match(qaTaskRow(phase),/Needs reinspection/);assert.doesNotMatch(qaTaskPanel(),/<span class="ff-tag completed">/,'prior-cycle acceptance is not reused while the carried defect stays open');
+      const newNdtPass=signedQaReview('ndt_qa','PASS',{cycle:2,attempt:1,id:505,actor:'NEW-CYCLE-NDT-QA',at:'2026-11-04T11:00:00Z'});
+      const reviewEvents=phase==='pressure_qa'?[...structuredClone(priorEvents),newNdtPass]:structuredClone(priorEvents);
+      record=testingAt(phase,'review',{cycle:2,attempt:1,pending_exception_ids:[exceptionId],review_exception_ids:[exceptionId]},modernCatalog);record.events=reviewEvents;record.exceptions=[structuredClone(finding)];
+      await context.FabFlow.open({item:'ITM-001'});assertQaTasks(phase==='ndt_qa'?'current':'completed',phase==='pressure_qa'?'current':'pending');
+      const freshPass=signedQaReview(phase,'PASS',{cycle:2,attempt:1,id:506,actor:'FRESH-ACCEPTANCE-QA',at:'2026-11-04T11:10:00Z'});
+      record=testingAt(phase==='ndt_qa'?'floor_before_pressure':'floor_before_paint','handoff',{cycle:2,attempt:1,pending_exception_ids:[],review_exception_ids:[]},modernCatalog);record.events=[...reviewEvents,freshPass];record.exceptions=[{...finding,closed_at:freshPass.at}];
+      await context.FabFlow.open({item:'ITM-001'});assertQaTasks('completed',phase==='pressure_qa'?'completed':'pending');assert.match(qaTaskRow(phase),/Last recorded by FRESH-ACCEPTANCE-QA/);
+    }
+  });
+  assert.equal(posts().length,taskReadWrites,'review-list projections never create QA records or mutate the live workflow');
+
   // Every ordinary QA failure returns to the one server-selected preceding production step.
   context.me={role:'inspector',badge:'QA1'};
   for(const [qaStep,productionStep] of [[2,1],[11,10],[15,14],[18,17],[22,21]]){
@@ -637,6 +755,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   console.log('PASS: neutral station labels, colored physical spool numbers, escaped unknown-station notices, retained blocked Ready To Ship, current 29-step map and retained traveler maps, entity-specific routes, filters, QR/manual IDs, location/handoff payloads, catalog checks and roles, QA failure/reinspection, hierarchy links, child verification, shipment/delivery, documented baselines, clocks, duplicate writes, conflicts, focused record reads, cancellation, bounded loading, navigation, required YES/NO testing, separate technician and QA results, fixed failure custody, mandatory rework/retest phases, Floor handoffs, pressure testing permissions, Not required bypasses, original testing custodian, inactive testing history, controlled restarts, cycle/attempt history and stale testing decisions.');
   console.log('PASS: '+catalogContracts.length+' current/retained traveler contracts: '+catalogContracts.join('; ')+'.');
 })().catch(error=>{console.error(error);process.exitCode=1});
+
 
 
 
