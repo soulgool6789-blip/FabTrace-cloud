@@ -23,8 +23,8 @@
   const inspectionNotesLabel=result=>result==='Fail'?'Failure reason (required)':'Inspection notes (optional)';
   const heatDeferred=()=>state.data?.traceability?.heat_required_for_receiving===false;
   const mtrDeferred=()=>state.data?.traceability?.mtr_required_for_receiving===false;
-  const heatDueLabel=()=>text(state.data?.traceability?.heat_required_at_label||'QA/QC-003 - Inspect Welds');
-  const mtrDueLabel=()=>text(state.data?.traceability?.mtr_required_at_label||'QA/QC-003 - Inspect Welds');
+  const heatDueLabel=()=>text(state.data?.traceability?.heat_required_at_label||'QA/QC-003 - Weld Inspection');
+  const mtrDueLabel=()=>text(state.data?.traceability?.mtr_required_at_label||'QA/QC-003 - Weld Inspection');
   function materialPolicyText(){
     if(heatDeferred()&&mtrDeferred())return 'Heat numbers and MTR references are optional through step 14 — Complete Welds. Enter both before step '+(state.data.traceability.heat_required_from_step||15)+' — '+heatDueLabel()+'.';
     if(heatDeferred())return 'Heat numbers are optional through step 14 — Complete Welds. Enter them before step '+(state.data.traceability.heat_required_from_step||15)+' — '+heatDueLabel()+'. MTR references remain required for arrival.';
@@ -523,5 +523,6 @@
   document.addEventListener('click',event=>{const target=event.target.closest?.('[data-spool-bom-url]');if(!target||target.disabled)return;event.preventDefault();open({api_url:target.dataset.spoolBomUrl,spool_number:target.dataset.spoolBomNumber,revision:target.dataset.spoolBomRevision,line_count:Number(target.dataset.spoolBomLines)},target);});
   window.FabSpoolBom={link,spoolLink,open,navigationState,restoreNavigation,back,canNavigateAway:()=>!state.saving,cancelPending:()=>close(false,true)};
 })();
+
 
 

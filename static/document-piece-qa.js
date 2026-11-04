@@ -30,8 +30,8 @@
   const inspectionNotesLabel=result=>result==='Fail'?'Failure reason (required)':'Inspection notes (optional)';
   const heatDeferred=()=>record()?.traceability?.heat_required_for_receiving===false;
   const mtrDeferred=()=>record()?.traceability?.mtr_required_for_receiving===false;
-  const heatDueLabel=()=>str(record()?.traceability?.heat_required_at_label||'QA/QC-003 - Inspect Welds');
-  const mtrDueLabel=()=>str(record()?.traceability?.mtr_required_at_label||'QA/QC-003 - Inspect Welds');
+  const heatDueLabel=()=>str(record()?.traceability?.heat_required_at_label||'QA/QC-003 - Weld Inspection');
+  const mtrDueLabel=()=>str(record()?.traceability?.mtr_required_at_label||'QA/QC-003 - Weld Inspection');
   function materialPolicyText(){
     if(heatDeferred()&&mtrDeferred())return 'Heat numbers and MTR references are optional through step 14 — Complete Welds. Enter both before step '+(record().traceability.heat_required_from_step||15)+' — '+heatDueLabel()+'.';
     if(heatDeferred())return 'Heat numbers are optional through step 14 — Complete Welds. Enter them before step '+(record().traceability.heat_required_from_step||15)+' — '+heatDueLabel()+'. MTR references remain required for arrival.';
@@ -274,4 +274,5 @@
   document.addEventListener('fabtrace:spool-materials-saved',event=>{if(state.saving||!state.wrapper||event.detail?.item_id!==state.selected)return;try{updateRecord(event.detail.data);state.history={};render();}catch(_){state.needsRefresh=true;if(state.host)load(state.selected);}});
   window.FabDocumentPieceQa={mount,unmount,snapshot,restore,reset,refresh:()=>load(state.selected),isSaving:()=>state.saving,canNavigateAway:()=>!state.saving};
 })();
+
 

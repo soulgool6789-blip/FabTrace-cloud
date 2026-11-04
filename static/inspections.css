@@ -1,0 +1,40 @@
+/* Six inspection entry points, scoped to the existing FabTrace workspace. */
+#inspectionsPage .fi-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:4px 0 22px}
+#inspectionsPage .fi-head h1{margin:5px 0 7px}
+#inspectionsPage .fi-head p{margin:0;color:#526477;line-height:1.5}
+#inspectionsPage .fi-eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:#526477}
+#inspectionsPage .fi-filters{display:grid;grid-template-columns:minmax(150px,1fr) minmax(170px,1fr) minmax(260px,2fr);gap:14px;margin-bottom:18px}
+#inspectionsPage .fi-filters .field{margin:0;min-width:0}
+#inspectionsPage .fi-filters input,#inspectionsPage .fi-filters select{width:100%}
+#inspectionsPage .fi-menu{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:22px}
+#inspectionsPage .fi-menu-item{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:0;padding:17px 18px;text-align:left;border:1px solid #c9d4df;border-radius:12px;background:#fff;color:#17334c;line-height:1.4;white-space:normal}
+#inspectionsPage .fi-menu-item:hover{background:#f4f8fc;border-color:#809bb4}
+#inspectionsPage .fi-menu-item.selected{background:#eaf3fc;border-color:#245f94;box-shadow:inset 0 0 0 1px #245f94}
+#inspectionsPage .fi-menu-item:focus-visible{outline:3px solid #6ca2ce;outline-offset:3px}
+#inspectionsPage .fi-code{font-size:12px;font-weight:800;letter-spacing:.04em;color:#385d80}
+#inspectionsPage .fi-menu-item strong{font-size:17px;line-height:1.3}
+#inspectionsPage .fi-menu-description{font-size:13px;font-weight:400;color:#526477}
+#inspectionsPage .fi-menu-count{font-size:12px;font-weight:700;color:#385d80;margin-top:auto;padding-top:3px}
+#inspectionsPage .fi-section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+#inspectionsPage .fi-section-head h2{margin:0 0 8px;font-size:21px}
+#inspectionsPage .fi-section-head p{margin:0;color:#526477;line-height:1.5;max-width:850px}
+#inspectionsPage .fi-record-count{white-space:nowrap;font-size:13px;color:#526477;padding-top:4px}
+#inspectionsPage .fi-note{color:#53687a;font-size:13px;line-height:1.5;background:#f4f7fa;border-radius:7px;padding:10px 12px;margin:15px 0}
+#inspectionsPage .fi-table{width:100%;border-collapse:collapse}
+#inspectionsPage .fi-table th{font-size:12px;color:#4c6278;text-align:left;white-space:nowrap}
+#inspectionsPage .fi-table th,#inspectionsPage .fi-table td{padding:12px 10px;border-bottom:1px solid #dce4eb;vertical-align:top}
+#inspectionsPage .fi-table td:first-child{min-width:200px}
+#inspectionsPage .fi-table td:nth-child(2){min-width:170px;max-width:300px}
+#inspectionsPage .fi-table td:nth-child(4){min-width:170px;max-width:320px}
+#inspectionsPage .fi-table strong{overflow-wrap:anywhere}
+#inspectionsPage .fi-table small{display:block;font-size:12px;line-height:1.5;color:#526477;margin-top:5px;overflow-wrap:anywhere}
+#inspectionsPage .fi-table td:last-child button{white-space:nowrap}
+#inspectionsPage .fi-tag{display:inline-block;font-size:12px;font-weight:600;line-height:1.4;border-radius:6px;background:#edf1f5;color:#40576c;padding:5px 8px}
+#inspectionsPage .fi-tag.current{background:#deedf9;color:#134c7b}
+#inspectionsPage .fi-tag.attention{background:#fff0d6;color:#755000}
+#inspectionsPage tr[data-inspection-current="true"]{background:#f5faff}
+#inspectionsPage .fi-state{padding:24px;text-align:center;border:1px solid #d6e1ea;border-radius:10px;color:#526477;background:#fff;line-height:1.5}
+#inspectionsPage .fi-state strong{display:block;color:#233f57}
+#inspectionsPage .fi-error{border-color:#e6b0b0;background:#fff7f7;color:#883838}
+@media(max-width:900px){#inspectionsPage .fi-menu{grid-template-columns:repeat(2,minmax(0,1fr))}#inspectionsPage .fi-filters{grid-template-columns:repeat(2,minmax(0,1fr))}#inspectionsPage .fi-search{grid-column:1/-1}#inspectionsPage .fi-section-head{flex-direction:column;gap:8px}}
+@media(max-width:520px){#inspectionsPage .fi-menu{grid-template-columns:1fr}#inspectionsPage .fi-filters{grid-template-columns:1fr}#inspectionsPage .fi-search{grid-column:auto}#inspectionsPage .fi-head{gap:12px}#inspectionsPage .fi-menu-item{padding:14px 15px}#inspectionsPage .fi-menu-description{max-width:none}#inspectionsPage .fi-record-count{white-space:normal}}

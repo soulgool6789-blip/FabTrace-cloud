@@ -1,0 +1,47 @@
+/* Recorded failures and return instructions, scoped to the failure workspace. */
+#inspectionFailuresPage .fif-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:4px 0 22px}
+#inspectionFailuresPage .fif-head h1{margin:5px 0 7px}
+#inspectionFailuresPage .fif-head p{margin:0;color:#526477;line-height:1.5}
+#inspectionFailuresPage .fif-eyebrow{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:#526477}
+#inspectionFailuresPage .fif-filters{display:grid;grid-template-columns:minmax(210px,1.1fr) minmax(140px,.8fr) minmax(210px,1fr) minmax(240px,1.3fr);gap:12px;margin-bottom:18px}
+#inspectionFailuresPage .fif-filters .field{margin:0;min-width:0}
+#inspectionFailuresPage .fif-filters input,#inspectionFailuresPage .fif-filters select{width:100%}
+#inspectionFailuresPage .fif-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 16px}
+#inspectionFailuresPage .fif-metric{border:1px solid #d8e0e8;border-radius:10px;padding:15px 17px;background:#fff;display:flex;flex-direction:column;gap:7px}
+#inspectionFailuresPage .fif-metric span{font-size:12px;line-height:1.4;color:#526477}
+#inspectionFailuresPage .fif-metric strong{font-size:26px;color:#203d54;line-height:1.1}
+#inspectionFailuresPage .fif-note{font-size:13px;line-height:1.5;color:#53687a;background:#f4f7fa;border-radius:7px;padding:10px 12px;margin:14px 0 20px}
+#inspectionFailuresPage .fif-spool{margin-bottom:20px;min-width:0}
+#inspectionFailuresPage .fif-spool-head,#inspectionFailuresPage .fif-failure-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
+#inspectionFailuresPage .fif-spool-head{padding-bottom:15px;border-bottom:1px solid #dbe4ec}
+#inspectionFailuresPage .fif-spool-head h2{font-size:21px;line-height:1.35;overflow-wrap:anywhere;margin:4px 0}
+#inspectionFailuresPage .fif-spool-tags{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;padding-top:3px}
+#inspectionFailuresPage .fif-tag{display:inline-block;font-size:12px;line-height:1.4;font-weight:600;border-radius:6px;padding:5px 8px;background:#edf1f5;color:#40576c}
+#inspectionFailuresPage .fif-tag.needs-work{background:#fbe6e4;color:#8c3027}
+#inspectionFailuresPage .fif-tag.reinspection{background:#fff0d5;color:#735000}
+#inspectionFailuresPage .fif-failure{border:1px solid #e1d6d3;border-left:4px solid #bd5549;border-radius:9px;padding:17px;margin-top:16px;min-width:0}
+#inspectionFailuresPage .fif-failure[data-failure-status="awaiting_reinspection"]{border-left-color:#b28731}
+#inspectionFailuresPage .fif-failure h3{font-size:17px;line-height:1.4;margin:4px 0 0;overflow-wrap:anywhere}
+#inspectionFailuresPage .fif-failure h4{font-size:13px;margin:0 0 7px;color:#3f4f5d}
+#inspectionFailuresPage .fif-defect{margin:17px 0}
+#inspectionFailuresPage .fif-prose{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;margin:5px 0 9px;color:#263f53}
+#inspectionFailuresPage .fif-secondary{font-size:12px;line-height:1.5;color:#617284;margin:5px 0;overflow-wrap:anywhere}
+#inspectionFailuresPage .fif-return{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;background:#f5f7fa;border:1px solid #e1e7ec;border-radius:8px;padding:13px 15px}
+#inspectionFailuresPage .fif-return>div{min-width:0}
+#inspectionFailuresPage .fif-return span{display:block;font-size:12px;color:#637486;margin-bottom:5px}
+#inspectionFailuresPage .fif-return strong{display:block;font-size:15px;color:#263f53;line-height:1.4;overflow-wrap:anywhere}
+#inspectionFailuresPage .fif-return small{display:block;color:#617284;font-size:12px;line-height:1.5;margin-top:5px;overflow-wrap:anywhere}
+#inspectionFailuresPage .fif-return>p{grid-column:1/-1;margin:0}
+#inspectionFailuresPage .fif-routing-warning{font-size:12px;line-height:1.5;color:#8a5420;overflow-wrap:anywhere}
+#inspectionFailuresPage .fif-correction{padding:13px 15px;background:#f7fafc;border:1px solid #dce4ea;border-radius:8px;margin:13px 0}
+#inspectionFailuresPage .fif-reinspection{font-size:13px;line-height:1.5;color:#795719;margin:10px 0 0}
+#inspectionFailuresPage .fif-pending{font-size:13px;line-height:1.5;color:#8c3027;padding:3px 0;margin:12px 0}
+#inspectionFailuresPage .fif-source{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e7ec}
+#inspectionFailuresPage .fif-source p{font-size:12px;line-height:1.5;margin:3px 0;color:#526477;overflow-wrap:anywhere}
+#inspectionFailuresPage .fif-source>button{flex-shrink:0;white-space:nowrap}
+#inspectionFailuresPage .fif-state{padding:26px;border:1px solid #d6e1ea;border-radius:10px;background:#fff;text-align:center;color:#526477;line-height:1.5}
+#inspectionFailuresPage .fif-state strong{display:block;color:#263f53}
+#inspectionFailuresPage .fif-error{background:#fff7f7;border-color:#e6b0b0;color:#883838}
+@media(max-width:1100px){#inspectionFailuresPage .fif-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){#inspectionFailuresPage .fif-head,#inspectionFailuresPage .fif-spool-head,#inspectionFailuresPage .fif-failure-head,#inspectionFailuresPage .fif-source{flex-direction:column;align-items:flex-start;gap:12px}#inspectionFailuresPage .fif-spool-tags{justify-content:flex-start}#inspectionFailuresPage .fif-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#inspectionFailuresPage .fif-return{grid-template-columns:1fr}#inspectionFailuresPage .fif-source>button{white-space:normal}}
+@media(max-width:520px){#inspectionFailuresPage .fif-filters{grid-template-columns:1fr}#inspectionFailuresPage .fif-failure{padding:13px}#inspectionFailuresPage .fif-metric{padding:12px}#inspectionFailuresPage .fif-spool-head h2{font-size:19px}}

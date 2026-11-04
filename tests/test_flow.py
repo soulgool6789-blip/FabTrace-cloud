@@ -197,10 +197,10 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
     assert {row["number"] for row in steps if row["qa"]} == {2, 11, 15, 18, 22}
     assert definition['version'] == 'CLM-25-v1'
     assert [(row['number'], row['qa_code'], row['title']) for row in steps if row['qa']] == [
-        (2, 'QA-001', 'QA/QC-001 · Check Dimensions'),
-        (11, 'QA-002', 'QA/QC-002 · Check Dimensions'),
-        (15, 'QA-003', 'QA/QC-003 · Inspect Welds'),
-        (18, 'QA-004', 'QA/QC-004 - Verify Test Results'),
+        (2, 'QA-001', 'QA/QC-001 - Material'),
+        (11, 'QA-002', 'QA/QC-002 - Isometric Dimensions Test'),
+        (15, 'QA-003', 'QA/QC-003 - Weld Inspection'),
+        (18, 'QA-004', 'QA/QC-004 - NDT Results'),
         (22, 'QA-006', 'QA/QC-006 - Final Inspection'),
     ]
     assert all(row['qa_code'] is None for row in steps if not row['qa'])
@@ -285,7 +285,7 @@ def test_current_qa_catalog_does_not_rewrite_historical_definitions(api, legacy_
     assert definition['version'] == 'CLM-25-v1'
     current = detail(api, item_id)
     assert current['events'] == retained
-    assert current['flow']['current']['title'] == 'QA/QC-001 · Check Dimensions'
+    assert current['flow']['current']['title'] == 'QA/QC-001 - Material'
     assert current['flow']['current']['checks'] == definition['steps'][1]['checks']
     assert current['flow']['current']['checks'] != legacy['checks']
     progressed = advance(api, item_id, role='inspector')
@@ -1173,5 +1173,6 @@ def test_scope_correction_requires_basis_and_keeps_assembly_minimum_one(api):
         response = api.post(route, {**body, **values})
         assert response.status_code in (409, 422), response.text
     assert detail(api, assembly)["events"] == current["events"]
+
 
 

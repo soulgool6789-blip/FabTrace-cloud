@@ -49,7 +49,7 @@
   const currentStepNumber=step=>state.detail?.flow?.current_display_step??chartStepNumber(step.number,currentCatalogVersion(),step.testing_phase||activeTesting()?.phase||'');
   const catalogLast=()=>Math.max(0,...arr(state.catalog?.steps).map(step=>chartStepNumber(step.number,state.catalog?.version)));
   const chartStepLabel=number=>{
-    const labels={18:'NDT',19:'QA/QC-004 - Verify NDT Results',20:'Return to Floor',21:'Pressure Testing',22:'QA/QC-005 - Verify Pressure Test Results',23:'Return to Floor'};
+    const labels={18:'NDT',19:'QA/QC-004 - NDT Results',20:'Return to Floor',21:'Pressure Testing',22:'QA/QC-005 - Verify Pressure Testing',23:'Return to Floor'};
     return state.catalog?.version==='CLM-25-v1'&&labels[number]||arr(state.catalog?.steps).find(step=>chartStepNumber(step.number,state.catalog?.version)===Number(number))?.title||'';
   };
   const route=id=>{
@@ -77,7 +77,7 @@
   function testingPhaseName(phase,version=currentCatalogVersion(),savedDefinition=null){
     if(!['ndt_qa','pressure_qa'].includes(phase))return testingNames[phase]||'Testing phase';
     const code=savedDefinition?.display_qa_code||(phase==='pressure_qa'&&version==='CLM-25-v1'?'QA/QC-005':'QA/QC-004');
-    return code+' · '+(phase==='ndt_qa'?'NDT':'Pressure test')+' result';
+    return code+' - '+(phase==='ndt_qa'?'NDT Results':'Verify Pressure Testing');
   }
   function hasInlineTesting(selected){
     return selected?state.detail?.flow?.route==='assembly'&&(currentCatalogVersion()==='CLM-25-v1'||Boolean(testing())):state.catalog?.version==='CLM-25-v1';
@@ -88,7 +88,7 @@
     const version=selected?currentCatalogVersion():state.catalog.version,pressureQa=version==='CLM-25-v1'?'QA/QC-005':'QA/QC-004';
     const decision=['YES','NO'].includes(value?.decision)?value.decision:'',active=selected&&activeTesting()?value.phase:'';
     const current=({ndt:'ndt',ndt_rework:'ndt',ndt_qa:'ndt_qa',floor_before_pressure:'floor_before_pressure',pressure_test:'pressure_test',pressure_rework:'pressure_test',pressure_qa:'pressure_qa',floor_before_paint:'floor_before_paint'})[active]||'';
-    const nodes=[['ndt',17,'NDT','Perform and record the test'],['ndt_qa',18,'QA/QC-004','Verify NDT Results'],['floor_before_pressure',19,'Return to Floor','Before pressure testing'],['pressure_test',17,'Pressure Testing','Perform and record the test'],['pressure_qa',18,pressureQa,'Verify Pressure Test Results'],['floor_before_paint',19,'Return to Floor','Before Paint and Finishing']];
+    const nodes=[['ndt',17,'NDT','Perform and record the test'],['ndt_qa',18,'QA/QC-004','NDT Results'],['floor_before_pressure',19,'Return to Floor','Before pressure testing'],['pressure_test',17,'Pressure Testing','Perform and record the test'],['pressure_qa',18,pressureQa,'Verify Pressure Testing'],['floor_before_paint',19,'Return to Floor','Before Paint and Finishing']];
     const decisionStatus=active==='decision'?'current':decision?'completed':arr(flow?.steps).find(step=>step.number===17)?.status==='not_recorded'?'not_recorded':'pending';
     const intro=selected?(decision?`Recorded choice: ${decision}${Number.isInteger(value.cycle)&&value.cycle>1?' · Cycle '+value.cycle:''}.`:'No testing decision has been recorded.'):'Choose YES or NO at this step.';
     const badge=number=>selected?`<span class="ff-num">${number}</span>`:action('filter-step',String(number),String(number),'ff-num ff-link');
@@ -311,7 +311,7 @@
           const correcting=value?.phase===kind+'_rework',retesting=value?.phase===(kind==='ndt'?'ndt':'pressure_test');
           const status=value?.decision==='NO'?'not_required':isCurrent?'current':correcting||openFinding||result==='FAIL'?'rework':result==='PASS'&&!retesting?'completed':step.status==='not_recorded'||!value&&step.status==='completed'?'not_recorded':'pending';
           const checks=['Review the current test attempt and its controlled report','Verify current passing dimensions and applicable weld / test acceptance','Record an explicit QA/QC PASS or FAIL'].map((label,index)=>({id:'testing_'+phase+'_review_'+(index+1),label}));
-          return {...step,title:code+' - Verify '+(kind==='ndt'?'NDT':'Pressure Test')+' Results',checks,...(isCurrent?current:{}),qa:true,testing_phase:phase,review_key:phase,is_current:isCurrent,status,
+          return {...step,title:code+' - '+(kind==='ndt'?'NDT Results':'Verify Pressure Testing'),checks,...(isCurrent?current:{}),qa:true,testing_phase:phase,review_key:phase,is_current:isCurrent,status,
             last_actor:review?.actor||null,completed_at:status==='completed'?review?.at:null,reviewed_at:review?.at||null,review_result:result,review_reference:review?.reference||'',review_attempt:review?.data?.testing_attempt};
         });
       }
@@ -339,12 +339,12 @@
   function spoolReviewSummary(){
     const reviews=arr(state.detail.qa_reviews);
     if(me?.role==='inspector'||!reviews.length)return '';
-    return `<section class="card ff-spool-qa-summary"><h2>QA/QC-002 and QA/QC-003 review records</h2><p>Review the spool’s fit-up and weld inspection results, including any required rework.</p>${qaReviewRows(reviews,{own:true,checks:false})}</section>`;
+    return `<section class="card ff-spool-qa-summary"><h2>QA/QC-002 and QA/QC-003 review records</h2><p>Review the spool’s isometric dimensions and weld inspection results, including any required rework.</p>${qaReviewRows(reviews,{own:true,checks:false})}</section>`;
   }
   function linkedSpoolReviews(){
     const groups=arr(state.detail.spool_reviews);if(!groups.length)return '';
     const inspections=groups.flatMap(group=>arr(group.reviews)),attention=inspections.filter(row=>row.status==='rework'||arr(row.defects).length).length;
-    return `<section class="card ff-linked-qa"><div class="ff-section-head"><div><h2>Spool QA/QC-002 and QA/QC-003 reviews</h2><p>${groups.length} linked spool${groups.length===1?'':'s'} · Each spool has its own fit-up and weld inspection records.</p></div>${attention?tag('rework',attention+' review'+(attention===1?'':'s')+' needing reinspection'):''}</div>${groups.map((group,index)=>{
+    return `<section class="card ff-linked-qa"><div class="ff-section-head"><div><h2>Spool QA/QC-002 and QA/QC-003 reviews</h2><p>${groups.length} linked spool${groups.length===1?'':'s'} · Each spool has its own isometric dimensions and weld inspection records.</p></div>${attention?tag('rework',attention+' review'+(attention===1?'':'s')+' needing reinspection'):''}</div>${groups.map((group,index)=>{
       const reviews=arr(group.reviews),identity={...group,route:'spool'},open=index===0||reviews.some(row=>row.is_current||row.status==='rework'||arr(row.defects).length);
       return `<details class="ff-spool-review-group" data-qa-spool="${esc(group.item_id)}"${open?' open':''}><summary><strong>${spoolText(identity)}</strong><span class="ff-spool-review-statuses">${reviews.map(review=>tag(review.status,(review.display_qa_code||review.qa_code||'QA/QC')+' · '+(stepStatusNames[review.status]||'Not recorded'))).join('')}</span></summary><div class="ff-spool-review-body"><div class="ff-section-head"><span>${group.removed?'Removed spool · history only':group.route_status==='not_started'?'Spool production route has not started.':esc(statusNames[group.route_status]||group.route_status||'Production record')}</span>${action('item','Open spool review',group.item_id,'primary')}</div>${qaReviewRows(reviews,{version:group.catalog_version||currentCatalogVersion()})}</div></details>`;
     }).join('')}</section>`;

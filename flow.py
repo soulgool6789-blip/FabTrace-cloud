@@ -68,7 +68,7 @@ def _step(number, title, section, checks, *, catalog_version=LEGACY_VERSION):
     if current:
         handoffs += (23,)
     return {
-        'number': number, 'title': (display_qa_code + (' - ' if number in (18, 22) else ' · ') + title if display_qa_code else title),
+        'number': number, 'title': (display_qa_code + ' - ' + title if display_qa_code else title),
         'qa_code': qa_code, 'display_qa_code': display_qa_code,
         'flow_stage_key': stage, 'qa_stage': stage if qa_code else None,
         'catalog_version': catalog_version, 'route': route, 'section': section,
@@ -89,7 +89,7 @@ def _step(number, title, section, checks, *, catalog_version=LEGACY_VERSION):
 
 LEGACY_STEPS = (
     _step(1, 'Receive Shipment', 'Material receipt', ['Scan the material barcode / ID', 'Verify against purchase order and BOM', 'Inspect material condition']),
-    _step(2, 'Check Dimensions', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Review available material documentation (heat/MTR verification due at QA/QC-003)']),
+    _step(2, 'Material', 'Material receipt', ['Verify dimensions and material type against the isometric', 'Review available material documentation (heat/MTR verification due at QA/QC-003)']),
     _step(3, 'Capture Location', 'Material receipt', ['Scan material into inventory', 'Record its storage location']),
     _step(4, 'Material in Inventory', 'Material receipt', ['Confirm the material is available for production']),
     _step(5, 'Select Components for Spool', 'Component preparation', ['Select components against the BOM / isometric', 'Scan components out of inventory']),
@@ -98,11 +98,11 @@ LEGACY_STEPS = (
     _step(8, 'Return to Floor', 'Component preparation', ['Material coordinator receives prepared components', 'Scan the components back to the floor']),
     _step(9, 'Release to Fit-Up Welder', 'Spool fabrication', ['Issue the required prepared components', 'Record the scanned handoff']),
     _step(10, 'Fit-Up & Tack Weld', 'Spool fabrication', ['Assemble the spool to its isometric', 'Record fit-up / tack work for each configured weld']),
-    _step(11, 'Check Dimensions', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions']),
+    _step(11, 'Isometric Dimensions Test', 'Spool fabrication', ['Verify fit-up and alignment', 'Verify lengths, angles and applicable dimensions']),
     _step(12, 'Return to Floor', 'Spool fabrication', ['Material coordinator receives the tacked spool on the floor', 'Record the scanned handoff']),
     _step(13, 'Release to Process Welder', 'Spool fabrication', ['Issue the tacked spool to the process welder', 'Record the scanned handoff']),
     _step(14, 'Complete Welds', 'Spool fabrication', ['Complete all individual weld operations to the approved WPS']),
-    _step(15, 'Inspect Welds', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
+    _step(15, 'Weld Inspection', 'Spool fabrication', ['Review visual examination and required NDE', 'Verify welding standards / WPS requirements and all release checks']),
     _step(16, 'Return to Floor', 'Spool fabrication', ['Material coordinator receives the completed spool on the floor', 'Record the scanned handoff']),
     _step(17, 'Determine if Spool need to be sent to Testing', 'Testing', ['Verify the assembly ID and every required released child spool', 'Scan each child spool barcode', 'Determine testing requirements against the approved scope']),
     _step(18, 'Verify Test Results', 'Testing', ['Verify applicable Hydro/UT results against the approved requirements', 'Verify current passing dimensions and required weld / test acceptance', 'Record the test report and QA/QC approval reference']),
@@ -114,8 +114,8 @@ LEGACY_STEPS = (
     _step(24, 'Ship to Customer', 'Shipment', ['Scan the assembly at shipping', 'Record shipment and its destination', 'Complete production records / close the work order']),
 )
 LEGACY_STEP_BY_NUMBER = {row['number']: row for row in LEGACY_STEPS}
-STEPS = tuple(_step(row['number'], row['title'].split(' - ', 1)[-1]
-                    if row['number'] == 18 else row['title'].split(' · ', 1)[-1],
+STEPS = tuple(_step(row['number'], 'NDT Results' if row['number'] == 18
+                    else row['title'].split(' - ', 1)[-1],
                     row['section'], [check['label'] for check in row['checks']], catalog_version=VERSION)
               for row in LEGACY_STEPS if row['number'] <= 21) + (
     _step(22, 'Final Inspection', 'Sandblast & paint', ['Inspect coating, dimensions and appearance', 'Verify all required documentation and final release checks'], catalog_version=VERSION),
@@ -465,19 +465,26 @@ def _flow_events(s, item_id):
 
 @read_cached(lambda s, plan: (plan.item_id, plan.version) if plan is not None else None)
 def _rework_defects(s, plan):
-    """Project open findings and actual, linked corrective-work events.
-
-    Retained failure rows keep their original return_step. Their current
-    completion obligation is the preceding production step; no prior work or
-    acceptance is inferred from an old traveler position or free-text note.
-    """
     if plan is None:
         return []
     exceptions = _exceptions(s, plan.item_id, True)
     if not exceptions:
         return []
+    return rework_defects_from_records(plan, exceptions, _flow_events(s, plan.item_id))
+
+
+def rework_defects_from_records(plan, exceptions, events):
+    """Project open findings and actual, linked corrective-work events.
+
+    Retained failure rows keep their original return_step. Their current
+    completion obligation is the preceding production step; no prior work or
+    acceptance is inferred from an old traveler position or free-text note.
+    Inputs are already loaded so boards can share the same rules in batches.
+    """
+    if not exceptions:
+        return []
     from flow_testing import PROTOCOL, TEST_ROLES
-    events, version = _flow_events(s, plan.item_id), catalog_version(plan)
+    version = catalog_version(plan)
     result = []
     for exception in exceptions:
         failed = next((event for event in events if event.action == 'fail' and
@@ -973,6 +980,8 @@ def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cach
         'catalog_version': version,
         'current_display_step': display_step,
         'current_title': current['title'] if current else '',
+        'current_qa_code': current.get('qa_code') if current else None,
+        'current_testing_phase': current.get('testing_phase') if current else None,
         'work': work_projection(item, plan, user, current, display_step=display_step,
                                 testing=testing, handoff_roles=HANDOFF),
         **(presentation if presentation is not None else item_presentation(
@@ -1185,6 +1194,16 @@ def board(project_id: str = Query('', max_length=80), subproject_id: str = Query
     s.rollback()
     with read_snapshot(s) as snapshot:
         return physical_spool_board(snapshot, project_id, subproject_id)
+
+
+@router.get('/inspection-failures')
+def inspection_failures(project_id: str = Query('', max_length=80),
+                        u: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow_failures import inspection_failure_board
+    from orders import read_snapshot
+    s.rollback()
+    with read_snapshot(s) as snapshot:
+        return inspection_failure_board(snapshot, project_id)
 
 
 @router.get('/items/{item_id}')

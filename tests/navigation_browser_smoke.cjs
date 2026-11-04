@@ -26,12 +26,12 @@ let browser,page,stage='initialization';
   await page.goto(BASE+'/');await visible('orderSetupPage');
 
   stage='small primary menu and retained tools';
-  assert.deepEqual(await page.locator('#mainNav>button').evaluateAll(nodes=>nodes.map(el=>el.id)),['navOrders','navProgress','navHandoff','navFlow','navGuide']);
+  assert.deepEqual(await page.locator('#mainNav>button').evaluateAll(nodes=>nodes.map(el=>el.id)),['navOrders','navProgress','navHandoff','navFlow','navInspections','navInspectionFailures','navGuide']);
   assert.equal(await page.locator('#moreTools').getAttribute('open'),null);
   for(const id of ['navItems','navTracking','navParts','navQuality','navDossier','navBulk','navNew','navStaff','navAdmin','navRemoved','navAudit','navExportExcel'])assert.equal(await page.locator('#moreTools #'+id).count(),1);
-  for(const [id,screen] of [['navProgress','productionProgressPage'],['navHandoff','handoffPage'],['navFlow','flowPage'],['navGuide','guidePage']]){await page.locator('#'+id).click();await visible(screen);if(id==='navFlow'){assert.equal(new URL(page.url()).searchParams.get('view'),null);assert.equal(new URL(page.url()).searchParams.get('work_scope'),null);}await back('orderSetupPage');}
+  for(const [id,screen] of [['navProgress','productionProgressPage'],['navHandoff','handoffPage'],['navFlow','flowPage'],['navInspections','inspectionsPage'],['navInspectionFailures','inspectionFailuresPage'],['navGuide','guidePage']]){await page.locator('#'+id).click();await visible(screen);if(id==='navFlow'){assert.equal(new URL(page.url()).searchParams.get('view'),null);assert.equal(new URL(page.url()).searchParams.get('work_scope'),null);}await back('orderSetupPage');}
   for(const [id,screen] of [['navItems','itemsPage'],['navTracking','trackingPage'],['navParts','partsPage'],['navQuality','qualityPage'],['navDossier','dossierPage'],['navBulk','bulkPage'],['navStaff','staffPage'],['navAdmin','adminPage'],['navRemoved','removalsPage'],['navAudit','auditPage']]){await more(id);await visible(screen);assert.equal(await page.locator('#moreTools').getAttribute('open'),null);await back('orderSetupPage');}
-  checks.push('The five primary screens remain without My work; every retained specialist/admin workspace opens from More tools and returns through contextual Back');
+  checks.push('The seven primary screens include Inspections and Failed Inspections without My work; every retained specialist/admin workspace opens from More tools and returns through contextual Back');
 
   stage='wizard draft across tabs and Back';
   await action('new').click();await page.locator('#osPoNumber').fill('NAV-DRAFT-'+run);await action('next').click();
@@ -108,4 +108,5 @@ let browser,page,stage='initialization';
   checks.push('Compact menu fits 390px and keyboard Escape closes it; floor roles land on read-only Orders and retain existing access restrictions');
   assert.deepEqual(errors,[]);fs.writeFileSync(path.join(OUT,'report.json'),JSON.stringify({status:'passed',checks,page_errors:errors,project,spool},null,2));fs.rmSync(path.join(OUT,'failure.json'),{force:true});console.log(JSON.stringify({status:'passed',checks,artifacts:OUT},null,2));await browser.close();
 })().catch(async error=>{console.error('FAILED',stage,error.stack||error);if(page)await page.screenshot({path:path.join(OUT,'failure.png'),fullPage:true}).catch(()=>{});fs.writeFileSync(path.join(OUT,'failure.json'),JSON.stringify({stage,error:error.message,page_errors:errors},null,2));if(browser)await browser.close();process.exitCode=1;});
+
 

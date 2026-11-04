@@ -192,7 +192,8 @@ def phase_definition(state, base):
             requires_location=True, handoff_target_role='inspector',
             handoff_location_id=qa_position['qa_stage'])
     elif action == 'review':
-        title = qa_position['display_qa_code'] + ' - Verify ' + _label(kind) + ' Results'
+        title = qa_position['display_qa_code'] + ' - ' + (
+            'NDT Results' if kind == 'ndt' else 'Verify Pressure Testing')
         checks = ['Review the current test attempt and its controlled report',
                   'Verify current passing dimensions and applicable weld / test acceptance',
                   'Record an explicit QA/QC PASS or FAIL']
@@ -750,4 +751,5 @@ def project_step_states(states, state):
                   state.phase == 'pressure_qa' and number == 19):
                 row.update({status_key: 'pending', 'completed_at': None, 'last_actor': None})
     return rows
+
 

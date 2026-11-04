@@ -38,7 +38,7 @@ _CATALOG_HASH = hashlib.sha256(_CATALOG_BYTES).hexdigest()
 _DEFINITIONS = {_key(row['spool_number']): row for row in _CATALOG['spools']}
 MATERIAL_FIELDS = ('supplier', 'supplier_piece_id', 'heat_number', 'mtr_reference', 'mtr_url', 'notes')
 HEAT_REQUIRED_FROM_STEP = 15
-HEAT_REQUIRED_AT_LABEL = 'QA/QC-003 - Inspect Welds'
+HEAT_REQUIRED_AT_LABEL = 'QA/QC-003 - Weld Inspection'
 MTR_REQUIRED_FROM_STEP = HEAT_REQUIRED_FROM_STEP
 MTR_REQUIRED_AT_LABEL = HEAT_REQUIRED_AT_LABEL
 
@@ -756,5 +756,6 @@ def trace_history(item_id: str, version: int, user: Employee = Depends(auth), s:
         raise HTTPException(404, 'Material history revision not found.')
     return {'spool_id': item_id, 'version': event.version, 'actor': event.actor,
         'at': _stamp(event.at), 'reason': event.reason, 'changes': event.changes}
+
 
 

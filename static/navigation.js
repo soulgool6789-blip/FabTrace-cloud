@@ -6,6 +6,8 @@
     orderSetupPage:['FabOrderSetup','Orders','order-setup'],ordersPage:['FabOrders','Production records','orders'],
     orderLabelsPage:['FabOrderLabels','Spool QR labels','order-labels'],productionProgressPage:['FabProductionProgress','Production progress','production-progress'],
     handoffPage:['FabHandoff','Scan & transfer','handoff'],flowPage:['FabFlow','Process flow','flow'],
+    inspectionsPage:['FabInspections','Inspections','inspections'],
+    inspectionFailuresPage:['FabInspectionFailures','Failed inspections','inspection-failures'],
     guidePage:['FabGuide','Guide & setup','guide'],trackingPage:['FabTracking','Projects & welds','tracking'],
     partsPage:['FabParts','Spool parts','parts'],qualityPage:['FabQuality','Audit readiness','quality'],
     dossierPage:['FabDossier','Job Packets','dossier'],progressPage:['FabProgress','Project detail','progress'],
@@ -13,7 +15,7 @@
     itemsPage:[null,'Items','items'],itemPage:[null,'Item record','item'],bulkPage:[null,'Bulk import & QR labels','bulk'],
     staffPage:[null,'Employees','employees'],auditPage:[null,'Activity log','activity']
   };
-  const primary=new Set(['orderSetupPage','ordersPage','orderLabelsPage','productionProgressPage','progressPage','handoffPage','flowPage','guidePage']);
+  const primary=new Set(['orderSetupPage','ordersPage','orderLabelsPage','productionProgressPage','progressPage','handoffPage','flowPage','inspectionsPage','inspectionFailuresPage','guidePage']);
   const originalReplace=history.replaceState.bind(history),stack=[],lastByPage=new Map();
   let active=null,prepared=null,restoring=0,busy=false,observing=false;
   const home=()=>({page:'orderSetupPage',url:'/?order-setup=1',label:'Orders'});
@@ -112,6 +114,12 @@
       if(q.get('view')||q.get('subproject'))return set('trackingPage',{project:q.get('project')});
     }
     if(frame.page==='partsPage'&&q.get('spool'))return set('partsPage',{project:q.get('project')});
+    if(frame.page==='inspectionsPage'&&(q.get('project')||q.get('q')||q.get('status'))){
+      return set('inspectionsPage',{inspection:q.get('inspection')||'QA-001'});
+    }
+    if(frame.page==='inspectionFailuresPage'&&(q.get('inspection')||q.get('project')||q.get('q')||q.get('status'))){
+      return set('inspectionFailuresPage');
+    }
     if(frame.page==='flowPage'&&(q.get('item')||q.get('project'))){
       const parent=set('flowPage',{project:q.get('item')?q.get('project'):''});
       if(frame.moduleState)parent.moduleState={...frame.moduleState,project:q.get('item')?q.get('project')||'':''};
@@ -148,6 +156,8 @@
     if(button){button.disabled=busy;const text='← '+backLabel();if(button.textContent!==text)button.textContent=text;}
     if(currentLabel&&currentLabel.textContent!==label)currentLabel.textContent=label;
     node('navFlow')?.classList.toggle('primary',active.page==='flowPage');
+    node('navInspections')?.classList.toggle('primary',active.page==='inspectionsPage');
+    node('navInspectionFailures')?.classList.toggle('primary',active.page==='inspectionFailuresPage');
     node('moreTools')?.classList.toggle('fn-selected',!primary.has(active.page));
     for(const id of ['back','bulkBack','handoffBack'])node(id)?.classList.add('fn-legacy-back');
   }
@@ -162,6 +172,8 @@
       case 'progressPage':return window.FabProgress.open({project:v('project')});
       case 'handoffPage':return window.FabHandoff.open({item:v('item')});
       case 'flowPage':return window.FabFlow.open({...frame.moduleState,project:v('project'),item:v('item'),resetFilters:!frame.moduleState});
+      case 'inspectionsPage':return window.FabInspections.open({...frame.moduleState,inspection:v('inspection')||'QA-001',project:v('project'),query:v('q'),status:v('status')});
+      case 'inspectionFailuresPage':return window.FabInspectionFailures.open({...frame.moduleState,inspection:v('inspection'),project:v('project'),query:v('q'),status:v('status')});
       case 'guidePage':return window.FabGuide.open({project:v('project'),section:v('section')});
       case 'trackingPage':return window.FabTracking.open({project:v('project'),subproject:v('subproject'),spool:v('spool'),weld:v('weld'),view:v('view')});
       case 'partsPage':return window.FabParts.open({project:v('project'),spool:v('spool')});
@@ -258,3 +270,4 @@
   const observer=new MutationObserver(()=>{if(observing)return;observing=true;queueMicrotask(()=>{observing=false;changed();});});
   observer.observe(node('workspace'),{subtree:true,childList:true});
 })();
+
