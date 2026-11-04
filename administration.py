@@ -166,7 +166,7 @@ def employee_is_removed(s, badge):
 def validate_session(s, user, payload):
     version = payload.get('sv', 0)
     if employee_is_removed(s, user.badge) or type(version) is not int or version != session_version(s, user.badge):
-        raise HTTPException(401, 'Your account access changed. Sign in again with your current badge and PIN.')
+        raise HTTPException(401, 'Your account access changed. Sign in again with your current sign-in badge or badge ID and PIN.')
     s.info['authenticated_session'] = (user.badge, version)
 
 
@@ -482,6 +482,7 @@ def _active_admin_count(s):
 
 
 def _employee_dict(s, employee, *, active_admins=None, assigned_item_count=None):
+    from employee_badge_signin import badge_signin_status
     access = s.get(EmployeeAccessState, employee.badge)
     removal = s.get(EmployeeRemovalState, employee.badge)
     removed = bool(removal and removal.removed)
@@ -491,6 +492,7 @@ def _employee_dict(s, employee, *, active_admins=None, assigned_item_count=None)
         assigned_item_count = s.scalar(select(func.count()).select_from(Item).where(Item.handler == employee.badge))
     return {**_dict(employee, ('badge', 'name', 'role', 'active')),
         'role_label': role_label(employee), 'permissions': user_permissions(employee),
+        'badge_signin': badge_signin_status(s, employee.badge),
         'version': access.version if access else 0,
         'removed': removed, 'removed_at': _stamp(removal.removed_at) if removal else None,
         'removed_by': removal.removed_by if removal else None,
@@ -561,6 +563,9 @@ def update_employee(badge: str, data: EmployeeUpdateIn, u: Employee = Depends(au
             raise HTTPException(409, 'Keep at least one active administrator. Add or promote another administrator before removing this access.')
     before = _employee_dict(s, employee)
     revoke = (employee.role, employee.active) != (data.role, data.active)
+    if employee.active and not data.active:
+        from employee_badge_signin import invalidate_badge
+        invalidate_badge(s, employee, actor)
     employee.name, employee.role, employee.active = data.name, data.role, data.active
     _update_access(s, employee, access, actor, _utc(utcnow()), revoke)
     s.flush()
@@ -602,6 +607,8 @@ def remove_employee(badge: str, data: EmployeeRemovalIn, u: Employee = Depends(a
     removal.removal_reason = data.reason
     removal.restored_at, removal.restored_by, removal.restoration_reason = None, None, None
     employee.active = False
+    from employee_badge_signin import invalidate_badge
+    invalidate_badge(s, employee, actor)
     _update_access(s, employee, access, actor, now, True)
     s.flush()
     after = _employee_dict(s, employee)

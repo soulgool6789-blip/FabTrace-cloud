@@ -81,14 +81,20 @@ This action is available for released and blocked items. It creates an **Adminis
 
 The correction changes custody/location/work status. A selected operational status such as **Paused** does not independently pause the process timer or record an inspection.
 
+## Badge sign-in without a PIN
+
+Employees scan their own issued QR badge to sign in without entering a PIN. They can use the sign-in camera, scan into the sign-in field with a handheld scanner and press Enter, or open the QR link with a phone camera. Their existing badge ID and private PIN remain available for fallback sign-in. A typed badge ID alone is identification, not a sign-in credential.
+
+Reprint older identity-only employee badges once to issue the new sign-in QR. Use individual printing or the bulk sheets below; ordinary reprinting keeps the current sign-in badge valid. Keep printed badges and saved badge sheets private because their QR codes grant access to the employee's account. Item and spool QR labels do not change.
+
 ## Print employee badges in bulk
 
 1. Sign in as an **Administrator** and open **Employees → Print employee badge sheets**, or select **Print employee badge sheets** under **Admin controls → Employee accounts**.
-2. All active employees are selected initially. Use **Select all active** for the complete roster, or **Clear selection** and check individuals for reprints. Search by name, position or badge ID; selections outside the search remain selected.
+2. All active employees with badge sign-in enabled are selected initially. Use **Select all active** for the complete roster, or **Clear selection** and check individuals for reprints. Search by name, position or badge ID; selections outside the search remain selected.
 3. Choose **Print N badges**. The print window refreshes the selected employee records and prepares a three-column sheet with cut lines, continuing across as many pages as needed. The complete roster is supported without a 100-badge batch limit.
 4. Wait until every employee QR is ready, then choose **Print / Save as PDF**. Use **Letter** paper, **100% / Actual size**, and turn off browser headers and footers.
 
-Each badge shows the current name, current position, permanent badge ID and existing employee QR link. Names and badge IDs wrap rather than being clipped. Inactive and removed employees are excluded. A selected employee who is no longer available, incomplete identity details or a failed QR image blocks the job; refresh employees and retry. Allow pop-ups if the print window is blocked. The existing individual-badge print buttons remain available.
+Each badge shows the current name, current position, permanent badge ID and current sign-in QR. Names and badge IDs wrap rather than being clipped. Inactive, removed and badge-sign-in-disabled employees are excluded. A selected employee who is no longer available, incomplete identity details or a failed QR image blocks the job; refresh employees and retry. Allow pop-ups if the print window is blocked. The existing individual-badge print buttons remain available.
 
 ## Manage employee accounts
 
@@ -117,21 +123,30 @@ Assigned items stay with their recorded custodian until an administrator explici
 
 To find an employee after removal, turn on **Show removed employees**. Open the employee's account and select **Restore employee**, enter a reason and save. Restoration returns the employee to the roster **as inactive**. Use **Edit account** to review the job position and enable **Employee account is active** when access should resume. Existing sessions stay revoked after restoration; the employee must sign in again after access is enabled.
 
+### Replace or disable a sign-in badge
+
+Open **Admin controls → Employee accounts → Account controls** for the employee. The account shows whether **Badge sign-in** is enabled.
+
+- Choose **Replace sign-in badge** for a lost badge or to enable badge sign-in again. Review the employee, record the reason and save. This invalidates older copies, enables a new credential and signs the employee out of every existing session. Then select **Print QR badge** to print the replacement. The employee must have an active account.
+- Choose **Disable badge sign-in**, record the reason and save to invalidate the badge and stop badge login and printing. Existing employee sessions end. The account's private PIN remains available for fallback sign-in; use **Edit account** to deactivate the whole account when all access must stop.
+
+Both actions retain the permanent badge ID and all work/custody history. Changing your own sign-in badge signs you out: use your private PIN to sign in again, then print the replacement if you issued one. Deactivating or removing an account also invalidates its badge. After restoring/reactivating it, explicitly choose **Replace sign-in badge** and print the new badge to enable badge login again.
+
 ### Reset a private PIN
 
 Select **Reset private PIN**, enter and repeat the new PIN, record the reason, and save. PINs must contain 8–128 characters. Provide the new PIN to the employee through your normal private channel; the application does not send it to anyone automatically.
 
-Existing sessions for that employee are revoked. The employee must sign in with the new PIN. PIN values, hashes and session tokens are not displayed in account records, administrative audit events or Excel exports. A name-only correction preserves an existing session; changing role or active access requires a fresh sign-in.
+Existing sessions for that employee are revoked. The new PIN is used for fallback sign-in; an enabled sign-in badge keeps working. PIN values, hashes, badge credentials and session tokens are not displayed in account records, administrative audit events or Excel exports. A name-only correction preserves an existing session; changing role or active access requires a fresh sign-in.
 
 ### Print an employee badge
 
-**Add employee / print QR badges** opens the employee-management screen. Select **Print employee QR badge** for the active employee. The print preview fetches the current employee record and shows the employee's **name**, **position** and **permanent badge ID**. If a name or position changes, create a new preview before printing. Inactive or removed accounts cannot be printed as active employee badges.
+**Add employee / print QR badges** opens the employee-management screen. Select **Print employee QR badge** for the active employee. The print preview fetches the current employee record and shows the employee's **name**, **position** and **permanent badge ID**. If a name or position changes, create a new preview before printing. Inactive, removed or badge-sign-in-disabled accounts cannot be printed as active employee badges.
 
-The employee QR keeps its existing badge identity link and does not contain a private PIN or authentication token. It identifies the employee and does not sign them in. Item and spool QR labels continue to omit the employee-assignment line; ordinary custody details remain in the application.
+The employee QR contains the permanent badge identity and a sign-in credential, never a private PIN. Scan it at sign-in to enter the employee’s account without a PIN. Within the dedicated sender/receiver controls in **Scan & Handoff**, the same badge identifies the employee without changing the signed-in recorder. Item and spool QR labels continue to omit the employee-assignment line; ordinary custody details remain in the application.
 
 ## Review changes and resolve conflicts
 
-The Admin controls item view contains the administrative release/return/correction history. The broader **Activity log** also includes employee access, removal, restoration and PIN-reset events, with responsible employee and reason. Excel includes the same audit history, the **Employee access states** and **Employee removal states** worksheets, and release-mode columns in **Part progress**. The **Employees** worksheet retains all identities, including removed employees, so historical badge references remain usable. The raw Items `released` flag can represent either QA or administrative release; consult the release mode and audit event before interpreting it as QA acceptance.
+The Admin controls item view contains the administrative release/return/correction history. The broader **Activity log** also includes employee access, removal, restoration, sign-in badge replacement/disable and PIN-reset events, with responsible employee and reason. Excel includes the same audit history, the **Employee access states** and **Employee removal states** worksheets, and release-mode columns in **Part progress**. The **Employees** worksheet retains all identities, including removed employees, so historical badge references remain usable. The raw Items `released` flag can represent either QA or administrative release; consult the release mode and audit event before interpreting it as QA acceptance.
 
 If someone changes an item or account while your form is open, the application rejects the stale submission. Refresh, review the current record and submit a new decision. Failed or stale decisions do not partially change the record.
 

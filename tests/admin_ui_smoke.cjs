@@ -27,7 +27,7 @@ const context={document:{getElementById:id=>elements.get(id)||null},me:null,curr
   calls.push({url,...request});
   if(request.method){if(writeHold)await writeHold;if(writeFailure)throw writeFailure;const body=JSON.parse(request.body),match=url.match(/^\/api\/admin\/items\/([^/]+)\/([^/]+)$/);
    if(match){const row=records.get(decodeURIComponent(match[1]));assert.equal(body.expected_version,row.version);row.version='b'.repeat(64);if(match[2]==='release'){row.item.released=true;row.item.released_by='ADMIN';row.item.released_at='2026-10-29T12:00:00Z';row.release=release('admin_override');row.item.release_control=row.release;row.allowed_actions=['return_to_work','custody_correction'];row.history.unshift({event:'ADMIN_RELEASE_OVERRIDE',actor:'ADMIN',at:row.item.released_at,details:{reason:body.reason,reference:body.reference,bypassed_blockers:row.blockers}})}else if(match[2]==='return-to-work'){row.item.released=false;row.release=release();row.item.release_control=row.release;row.allowed_actions=['release_override','custody_correction']}else if(match[2]==='custody'){row.item.handler=body.handler;row.item.location=body.location_id==='current'?row.item.location:options.locations.find(l=>l.id===body.location_id).label;row.item.transfer={version:1,operational_status:body.operational_status,status_label:'Queued'}}return clone(row)}
-   const employeeMatch=url.match(/^\/api\/admin\/employees\/([^/]+)(?:\/(pin|remove|restore))?$/);assert.ok(employeeMatch,'unexpected admin mutation '+url);const employee=employees.find(e=>e.badge===decodeURIComponent(employeeMatch[1]));assert.equal(body.expected_version,employee.version);employee.version++;if(!employeeMatch[2])Object.assign(employee,{name:body.name,role:body.role,active:body.active});else if(employeeMatch[2]==='remove')Object.assign(employee,{removed:true,active:false,removed_at:'2026-10-29T12:00:00Z',removed_by:context.me.badge,removal_reason:body.reason});else if(employeeMatch[2]==='restore')Object.assign(employee,{removed:false,active:false,restored_at:'2026-10-29T12:10:00Z',restored_by:context.me.badge});return {...clone(employeeView(employee)),reauthenticate:employee.badge===context.me.badge};
+   const employeeMatch=url.match(/^\/api\/admin\/employees\/([^/]+)(?:\/(pin|remove|restore|badge-signin))?$/);assert.ok(employeeMatch,'unexpected admin mutation '+url);const employee=employees.find(e=>e.badge===decodeURIComponent(employeeMatch[1]));assert.equal(body.expected_version,employee.version);employee.version++;if(!employeeMatch[2])Object.assign(employee,{name:body.name,role:body.role,active:body.active});else if(employeeMatch[2]==='remove')Object.assign(employee,{removed:true,active:false,removed_at:'2026-10-29T12:00:00Z',removed_by:context.me.badge,removal_reason:body.reason});else if(employeeMatch[2]==='restore')Object.assign(employee,{removed:false,active:false,restored_at:'2026-10-29T12:10:00Z',restored_by:context.me.badge});else if(employeeMatch[2]==='badge-signin'){assert.equal(request.method,'POST');assert.ok(['reissue','disable'].includes(body.action));assert.equal(employee.removed===true,false);if(body.action==='reissue')assert.equal(employee.active,true);employee.badge_signin={enabled:body.action==='reissue',version:(employee.badge_signin?.version||0)+1}}return {...clone(employeeView(employee)),reauthenticate:employee.badge===context.me.badge};
   }
   let result;
   if(url==='/api/admin/overview')result={version:'test-admin-release',counts:{items:records.size,released:0,admin_released:0,on_hold:1,employees:employees.length,active_admins:activeAdmins()}};
@@ -154,6 +154,44 @@ async function check(name,fn){await fn();checks.push(name)}
   assert.doesNotMatch(html(),/<option value="(?:welder|misc)"/);
   set('adminEmployeeReason','Do not restore retired assignment');set('adminEmployeeRole','welder');
   const before=writes().length;await submit('adminEmployeeActionForm');assert.equal(writes().length,before);
+ });
+ await check('badge replacement reviews identity, requires a reason and posts only the current version/action',async()=>{
+  employees.push({badge:'BADGE-LOGIN',name:'Badge <employee>',role:'ndt',active:true,version:7,badge_signin:{enabled:true,version:3}});
+  await context.FabAdmin.open({tab:'employees',badge:'BADGE-LOGIN'});
+  assert.match(html(),/Badge sign-in<\/dt><dd>Enabled/);assert.match(html(),/data-admin-action="reissue-badge"/);assert.match(html(),/data-admin-action="disable-badge"/);
+  await click('reissue-badge');assert.match(html(),/Badge &lt;employee&gt;/);assert.match(html(),/invalidates all older copies/);assert.match(html(),/All existing sessions/);
+  assert.equal(elements.has('adminPin'),false);assert.equal(elements.has('adminEmployeeName'),false);
+  const before=writes().length;await submit('adminEmployeeActionForm');assert.equal(writes().length,before);assert.match(html(),/four characters/);
+  await click('cancel-form');assert.equal(elements.has('adminEmployeeActionForm'),false);assert.equal(writes().length,before);
+  await click('reissue-badge');set('adminEmployeeReason','Replace a lost employee badge');await submit('adminEmployeeActionForm');
+  assert.equal(writes().at(-1).url,'/api/admin/employees/BADGE-LOGIN/badge-signin');assert.equal(writes().at(-1).method,'POST');
+  assert.deepEqual(JSON.parse(writes().at(-1).body),{expected_version:7,reason:'Replace a lost employee badge',action:'reissue'});
+  assert.match(html(),/Sign-in badge replaced. Print the new badge/);assert.match(html(),/data-admin-action="print-badge" data-admin-id="BADGE-LOGIN"/);
+  assert.equal(employees.find(e=>e.badge==='BADGE-LOGIN').badge_signin.version,4);
+ });
+ await check('disabled badges cannot print and explicit replacement reenables badge sign-in',async()=>{
+  await click('disable-badge');assert.match(html(),/prevents badge login and printing/);set('adminEmployeeReason','Stop use of missing badge');
+  const expected=employees.find(e=>e.badge==='BADGE-LOGIN').version;await submit('adminEmployeeActionForm');
+  assert.deepEqual(JSON.parse(writes().at(-1).body),{expected_version:expected,reason:'Stop use of missing badge',action:'disable'});
+  assert.match(html(),/Badge sign-in<\/dt><dd>Disabled/);assert.doesNotMatch(html(),/data-admin-action="(?:disable-badge|print-badge)"/);
+  await click('disable-badge');assert.equal(elements.has('adminEmployeeActionForm'),false);
+  await click('employees');assert.doesNotMatch(html(),/data-admin-action="print-badge" data-admin-id="BADGE-LOGIN"/);
+  await click('employee','BADGE-LOGIN');await click('reissue-badge');set('adminEmployeeReason','Issue the replacement badge');await submit('adminEmployeeActionForm');
+  assert.equal(employees.find(e=>e.badge==='BADGE-LOGIN').badge_signin.enabled,true);assert.match(html(),/data-admin-action="print-badge"/);
+  employees.push({badge:'BADGE-INACTIVE',name:'Inactive badge owner',role:'painter',active:false,version:0,badge_signin:{enabled:true,version:0}});
+  await context.FabAdmin.open({tab:'employees',badge:'BADGE-INACTIVE'});assert.doesNotMatch(html(),/data-admin-action="(?:reissue-badge|print-badge)"/);
+  await click('reissue-badge');assert.equal(elements.has('adminEmployeeActionForm'),false);await click('disable-badge');set('adminEmployeeReason','Disable this inactive badge');await submit('adminEmployeeActionForm');assert.equal(employees.find(e=>e.badge==='BADGE-INACTIVE').badge_signin.enabled,false);
+  await context.FabAdmin.open({tab:'employees',badge:'REMOVED',includeRemoved:true});assert.doesNotMatch(html(),/data-admin-action="(?:reissue-badge|disable-badge)"/);
+  await click('reissue-badge');await click('disable-badge');assert.equal(elements.has('adminEmployeeActionForm'),false);
+ });
+ await check('badge changes honor stale versions, administrator permission and self reauthentication',async()=>{
+  await context.FabAdmin.open({tab:'employees',badge:'BADGE-LOGIN'});await click('reissue-badge');set('adminEmployeeReason','Review current badge access');
+  writeFailure=Object.assign(Error('The employee record changed. Refresh before replacing this badge.'),{status:409});await submit('adminEmployeeActionForm');
+  assert.equal(el('adminSaveEmployee').disabled,true);const before=writes().length;await submit('adminEmployeeActionForm');assert.equal(writes().length,before);
+  writeFailure=null;await click('refresh');assert.equal(elements.has('adminEmployeeActionForm'),false);
+  const adminUser=context.me;context.me={badge:'BADGE-LOGIN',name:'Badge employee',role:'ndt'};await click('reissue-badge');await click('disable-badge');assert.equal(elements.has('adminEmployeeActionForm'),false);assert.equal(writes().length,before);context.me=adminUser;
+  await context.FabAdmin.open({tab:'employees',badge:adminUser.badge});await click('reissue-badge');assert.match(html(),/changing your own badge and will be signed out/);assert.match(html(),/Use your private PIN to sign in again/);
+  set('adminEmployeeReason','Replace my own badge');const previous=reloads;await submit('adminEmployeeActionForm');assert.equal(reloads,previous+1);assert.equal(writes().at(-1).url,'/api/admin/employees/'+adminUser.badge+'/badge-signin');
  });
  await check('shell, admin visibility and release labels are integrated',async()=>{
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));for(const marker of ['id="navAdmin"','id="adminPage"','id="adminContent"','/static/admin.js','/static/admin.css','FabAdmin.cancelPending','adminReleaseBtn','itemAdminBtn'])assert.ok(index.includes(marker),marker);assert.match(index,/navAdmin'\)\.classList\.toggle\('hidden',me\.role!=='admin'/);assert.match(index,/params\.has\('admin'\)[\s\S]*FabAdmin\.open/);assert.match(index,/current\?\.release_control\?\.mode==='admin_override'[\s\S]*action:'return'/);

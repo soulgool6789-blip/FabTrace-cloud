@@ -8,7 +8,7 @@
   const statusNames={queued:'Queued',in_progress:'In progress',awaiting_inspection:'Awaiting inspection',waiting_material:'Waiting for material',paused:'Paused',ready_next_operation:'Ready for next operation'};
   const state={active:false,epoch:0,itemSequence:0,item:null,options:null,control:null,saving:false,managing:false,incoming:null};
   let camera=null,cameraLoading=null,cameraRequest=0,scannerLoad=null;
-  const scannerSource='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  const scannerSource='/static/vendor/html5-qrcode-2.3.8.min.js?v=2026.11.04-badge-signin.1';
   const text=value=>String(value??'');
   const badgeId=value=>typeof qrId==='function'?qrId(value,'badge'):text(value).trim();
   const itemId=value=>typeof qrId==='function'?qrId(value,'item'):text(value).trim();
@@ -343,5 +343,5 @@
   if(node('handoffItemCamera'))node('handoffItemCamera').onclick=()=>scanCamera({prefix:'handoff',kind:'item',label:'physical item QR',isCurrent:()=>state.active,onValue:id=>findItem(id)});
   if(node('handoffConfirm'))node('handoffConfirm').onclick=confirmTransfer;
   if(typeof window.addEventListener==='function')window.addEventListener('pagehide',()=>stopCamera());
-  window.FabHandoff={open,openBadge,cancelPending,stopCamera,controlHtml,bindControls,locationOptions,statusLabel,reviewHtml,historyHtml,errorText};
+  window.FabHandoff={open,openBadge,cancelPending,stopCamera,loadScanner:ensureScanner,controlHtml,bindControls,locationOptions,statusLabel,reviewHtml,historyHtml,errorText};
 })();

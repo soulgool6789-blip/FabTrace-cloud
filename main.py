@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.04-remove-my-work.1'
+APP_VERSION='2026.11.04-badge-signin.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -116,9 +116,9 @@ failed={}
 @app.exception_handler(RequestValidationError)
 async def validation_error(request:Request,error:RequestValidationError):
     path=request.url.path
-    if path in ('/api/login','/api/employees') or (path.startswith('/api/admin/employees/') and path.endswith('/pin')):
+    if path in ('/api/login','/api/login/badge','/api/employees') or (path.startswith('/api/admin/employees/') and path.endswith('/pin')):
         # Validation diagnostics may identify the field but must not echo a
-        # submitted PIN or password hash in the response or client error UI.
+        # submitted PIN, badge sign-in credential or password hash in the response.
         return JSONResponse(status_code=422,content={'detail':[
             {key:row[key] for key in ('type','loc','msg') if key in row} for row in error.errors()]})
     return await request_validation_exception_handler(request,error)
@@ -230,9 +230,19 @@ async def origin_check(request:Request,call_next):
 class Login(BaseModel):
     badge:str=Field(min_length=1,max_length=80)
     pin:str=Field(min_length=6,max_length=128)
+
+def finish_login(s,u,response,*,method=None):
+    from administration import session_version
+    token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow(),'sv':session_version(s,u.badge)},JWT_SECRET,algorithm='HS256')
+    response.set_cookie('fabtrace_session',token,httponly=True,secure=os.environ.get('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=8*3600,path='/')
+    details={'result':'success'}
+    if method:details['method']=method
+    audit(s,None,u.badge,'LOGIN',details);s.commit()
+    return {'badge':u.badge,'name':u.name,'role':u.role,'role_label':role_label(u),'permissions':user_permissions(u)}
+
 @app.post('/api/login')
 def login(data:Login,response:Response,request:Request,s:Session=Depends(db)):
-    from administration import employee_is_removed, session_version
+    from administration import employee_is_removed
     k=(request.client.host if request.client else 'unknown')+':'+data.badge
     hits=[v for v in failed.get(k,[]) if time.time()-v<900]
     failed[k]=hits
@@ -242,10 +252,7 @@ def login(data:Login,response:Response,request:Request,s:Session=Depends(db)):
         failed[k].append(time.time())
         raise HTTPException(401,'Invalid badge or PIN')
     failed.pop(k,None)
-    token=jwt.encode({'sub':u.badge,'exp':utcnow()+dt.timedelta(hours=8),'iat':utcnow(),'sv':session_version(s,u.badge)},JWT_SECRET,algorithm='HS256')
-    response.set_cookie('fabtrace_session',token,httponly=True,secure=os.environ.get('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=8*3600,path='/')
-    audit(s,None,u.badge,'LOGIN',{'result':'success'});s.commit()
-    return {'badge':u.badge,'name':u.name,'role':u.role,'role_label':role_label(u),'permissions':user_permissions(u)}
+    return finish_login(s,u,response)
 @app.post('/api/logout')
 def logout(response:Response,u:Employee=Depends(auth),s:Session=Depends(db)):
     audit(s,None,u.badge,'LOGOUT',{});s.commit()
@@ -270,7 +277,8 @@ class EmployeeIn(BaseModel):
 @app.get('/api/employees')
 def employees(u:Employee=Depends(auth),s:Session=Depends(db)):
     from administration import employee_not_removed
-    permit(u,'admin');return [{**asdict(x,'badge name role active'.split()),'role_label':role_label(x)} for x in s.scalars(
+    from employee_badge_signin import badge_signin_status
+    permit(u,'admin');return [{**asdict(x,'badge name role active'.split()),'role_label':role_label(x),'badge_signin':badge_signin_status(s,x.badge)} for x in s.scalars(
         select(Employee).where(employee_not_removed()).order_by(Employee.name)).all()]
 @app.get('/api/employees/directory')
 def employee_directory(u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -281,16 +289,23 @@ def employee_directory(u:Employee=Depends(auth),s:Session=Depends(db)):
 
 @app.get('/api/employees/{badge}/qr.png')
 def employee_badge_qr(badge:str,u:Employee=Depends(auth),s:Session=Depends(db)):
-    from administration import employee_is_removed
-    permit(u,'admin')
-    employee=s.get(Employee,badge)
+    from administration import employee_is_removed, locked_admin
+    from employee_badge_signin import employee_badge_link
+    u=locked_admin(s,u)
+    employee=s.scalar(select(Employee).where(Employee.badge==badge).with_for_update()
+        .execution_options(populate_existing=True))
     if not employee or not employee.active or employee_is_removed(s,badge): raise HTTPException(404,'Active employee badge not found')
-    # An HTTPS link is recognized by normal phone cameras; login is still required.
+    # The public identity remains in the query; its sign-in credential is a
+    # fragment, which is not sent in an ordinary page request or referrer.
     require_phone_qr_ready()
-    image=qrcode.make(phone_link('badge',employee.badge))
+    badge_id,link=employee.badge,employee_badge_link(s,employee)
+    # Printing is read-only. Release snapshot locks before rendering or sending
+    # the image, so a slow badge download cannot block production changes.
+    s.rollback()
+    image=qrcode.make(link)
     buf=io.BytesIO();image.save(buf,format='PNG');buf.seek(0)
     return StreamingResponse(buf,media_type='image/png',headers={
-        'Content-Disposition':f'inline; filename="badge-{employee.badge}.png"'})
+        'Content-Disposition':f'inline; filename="badge-{badge_id}.png"'})
 
 @app.post('/api/employees',status_code=201)
 def employee_create(data:EmployeeIn,u:Employee=Depends(auth),s:Session=Depends(db)):
@@ -660,6 +675,7 @@ def health(s:Session=Depends(db)):
     s.execute(select(SpoolMaterialInspection.id).limit(1))
     s.execute(select(SpoolMtrDocument.id).limit(1))
     s.execute(select(SpoolMtrFile.document_id).limit(1))
+    s.execute(select(EmployeeBadgeCredential.badge).limit(1))
     return {'status':'ok','version':APP_VERSION,'commit':os.environ.get('RENDER_GIT_COMMIT','')}
 @app.get('/')
 def ui():
@@ -698,6 +714,9 @@ app.include_router(transfers_router)
 
 from administration import router as administration_router, EmployeeAccessState, EmployeeRemovalState
 app.include_router(administration_router)
+
+from employee_badge_signin import router as employee_badge_signin_router, EmployeeBadgeCredential
+app.include_router(employee_badge_signin_router)
 
 from orders import (router as orders_router, PurchaseOrder, OrderGpn, OrderAssembly,
                     GooglePartNumber, AssemblyGpnLink)

@@ -1,5 +1,13 @@
 # FabTrace Cloud
 
+## Scan an employee badge to sign in
+
+Release `2026.11.04-badge-signin.1` adds direct employee sign-in with a printed QR badge, without entering a PIN. Use **Scan employee badge** on the sign-in page, a handheld QR scanner in the scanner field, or a phone camera to open the badge's FabTrace link. A successful badge scan opens a fresh session with the employee's current account permissions. Signing in after opening an item link returns to that item; opening a badge link directly starts in **Orders**.
+
+Administrators must **reprint existing badges once** using individual badge printing or **Print employee badge sheets**. Earlier identification-only QR codes cannot sign in. The new credential is server-signed, scoped only to badge sign-in, and carried in the URL fragment before submission to the sign-in endpoint. It is never included in employee roster JSON, audit details or exports. Camera decoding uses the locally bundled, existing html5-qrcode 2.3.8 library.
+
+**Admin controls → Employee accounts** includes **Replace sign-in badge** and **Disable badge sign-in**. Either action invalidates the old QR and signs that employee out of existing sessions. Deactivating or removing an account also invalidates its badge; after reactivation, issue a replacement. Regular reprints keep the current credential. Badge ID and PIN remain available as a fallback. Scan the employee badge inside the dedicated handoff fields to identify sender/receiver without changing the signed-in recorder.
+
 ## Employee tasks and position requirements
 
 Release `2026.11.04-remove-my-work.1` simplifies navigation by removing the separate My work tab and overview. **Orders** is the default starting screen for every employee. Existing links to the former overview open **Process flow**, retaining any selected project or item.
@@ -26,7 +34,7 @@ Release `2026.11.02-shop-positions.1` renames **Supervisor** to **Shop Foreman**
 
 The two testing positions can use ordinary badge handoffs, submit evidence assigned to their own position, and control the **NDE/testing** manual timer. Pressure Testing Technician prepares the pressure-test checklist and uploads to Job Packet **06 — Pressure testing**; NDT prepares the NDE checklist and uploads to **04 — Inspection and NDE**. On the current testing route, each position records receipt, its own test report with an explicit PASS/FAIL result, and required correction in its step 17 phases. The recorded testing custodian or an administrator submits the report and correction. QA/QC or an administrator separately accepts or fails each test attempt at step 18. Phase timers follow those same phase roles; testing staff do not control the active QA-review timer. Existing heat-number, MTR, arrival, and quality gates still apply.
 
-Printed **employee badges** show the current employee name, current position, and permanent badge ID, fetched when the print preview opens. The QR keeps its existing identity link and does not authenticate the employee. Item and spool QR labels continue to omit employee-assignment captions. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) and [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for assignment and retained-position details.
+Printed **employee badges** show the current employee name, current position, and permanent badge ID, fetched when the print preview opens. New badge prints include the secure sign-in credential described above and retain the permanent badge identity for handoffs. Item and spool QR labels continue to omit employee-assignment captions. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md) and [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for assignment and retained-position details.
 
 ## Bulk employee badge sheets
 
@@ -34,7 +42,7 @@ Release `2026.11.03-employee-badge-sheets.1` adds **Print employee badge sheets*
 
 ## Employee names on printed badges
 
-Release `2026.11.02-employee-badge-name.1` prints the employee’s current name prominently above their badge ID. Open **Employees → Print employee QR badge**. Printing reads the current active employee record before preparing the badge. The employee badge QR keeps its existing identity link; item/spool labels continue to omit employee-assignment captions.
+Release `2026.11.02-employee-badge-name.1` prints the employee’s current name prominently above their badge ID. Open **Employees → Print employee QR badge**. Printing reads the current active employee record before preparing the badge. The employee badge QR retains its permanent identity and includes the current sign-in credential; item/spool labels continue to omit employee-assignment captions.
 
 ## QR labels without assignment captions
 
@@ -401,6 +409,6 @@ Tracking and Audit readiness retain controlled report references and notes. Job 
 
 Add project-specific NDE, PMI, PWHT, hardness, coating, or other requirements from approved job documents. Job Packet pressure, torque, NDE and coating checks retain actual result fields and supporting reports; technical acceptance remains the authorized reviewer's decision. Numbered assembly travelers check declared child-spool scope and readiness, and record shipment and delivery confirmations. Legacy assemblies outside that workflow and not enrolled under a PO retain the original physical-release behavior. A PO-managed assembly requires its traveler before ordinary QA release; dossier issuance separately verifies current child packets. Carrier labels, automated emails, customer portal submission and cryptographic customer signatures are not generated. Use the print/ZIP output and record the actual transfer and receipt.
 
-Badge/PIN sign-in and audit records are the current controls. PostgreSQL history triggers reject routine updates and deletes, but do not protect against a database owner deliberately removing those controls. Validate configured work and acceptance rules with the people responsible for the job before using them for fabrication release. This application is not a certification of compliance.
+Signed employee badge sign-in, fallback badge/PIN sign-in and audit records are the current controls. PostgreSQL history triggers reject routine updates and deletes, but do not protect against a database owner deliberately removing those controls. Validate configured work and acceptance rules with the people responsible for the job before using them for fabrication release. This application is not a certification of compliance.
 
 

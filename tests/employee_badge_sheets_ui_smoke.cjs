@@ -143,7 +143,7 @@ const watchdog = setTimeout(() => {console.error('Badge sheet smoke test stalled
 
   {
     const h = harness([employee('EMP-A', {name: 'Alice Initial'}), employee('EMP-B', {name: 'Bob Initial'}),
-      employee('EMP-INACTIVE', {active: false}), employee('EMP-REMOVED', {removed: true})]);
+      employee('EMP-INACTIVE', {active: false}), employee('EMP-REMOVED', {removed: true}), employee('EMP-DISABLED', {badge_signin: {enabled: false, version: 2}})]);
     await h.app.open(); await settle();
     assert.deepEqual(h.selected(), ['EMP-A','EMP-B']);
     h.nodes.employeeBadgeSearch.value = 'Alice'; await h.nodes.employeeBadgeSearch.emit('input');
@@ -156,6 +156,8 @@ const watchdog = setTimeout(() => {console.error('Badge sheet smoke test stalled
     await settle(); const sheet = h.sheets.at(-1);
     assert.equal(sheet.images.length, 1, 'Refetching must not add employees outside the exact selection');
     assert.equal(sheet.images[0].dataset.qrSrc, '/api/employees/EMP-B/qr.png');
+    assert.match(sheet.html, /width:1\.35in;height:1\.35in/);assert.match(sheet.html, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+    assert.match(sheet.html, /Scan your own badge to sign in without a PIN/);assert.doesNotMatch(sheet.html, /do not sign in to an account/);
     assert.ok(sheet.html.includes('Bob &lt;Lead&gt; &amp; &quot;QA&quot;'));
     assert.ok(sheet.html.includes('NDT &lt;Inspector&gt; &amp; &quot;Team&quot;'));
     assert.doesNotMatch(sheet.html, /Bob Initial|<Lead>|<Inspector>|EMP-INACTIVE|EMP-REMOVED|EMP-C/);
@@ -167,7 +169,7 @@ const watchdog = setTimeout(() => {console.error('Badge sheet smoke test stalled
     await sheet.nodes.badgeSheetPrint.click(); assert.equal(sheet.printCount, 1);
     assert.equal(h.calls.length, 2); assert.equal(h.timers.size, 0);
   }
-  checks.push('Active nonremoved employees start selected; search preserves selections and printing uses only exact selected IDs with fresh escaped server labels');
+  checks.push('Active nonremoved employees with enabled badge sign-in start selected; search preserves selections and printing uses only exact selected IDs with fresh escaped server labels');
 
   {
     const h = harness(Array.from({length: 137}, (_, i) => employee('EMP-' + String(i + 1).padStart(3, '0'))));
@@ -194,16 +196,16 @@ const watchdog = setTimeout(() => {console.error('Badge sheet smoke test stalled
   }
   checks.push('Select all and clear selection work; empty selections and blocked popups cannot start a badge job');
 
-  for (const invalid of ['missing','inactive','removed','name','position','fetch-error']) {
+  for (const invalid of ['missing','inactive','removed','badge-disabled','name','position','fetch-error']) {
     const h = harness(); await h.app.open();
     if (invalid === 'fetch-error') h.state.mode = 'error';
     else if (invalid === 'missing') h.state.roster = [employee('EMP-A')];
-    else h.state.roster = [employee('EMP-A'), employee('EMP-B', invalid === 'inactive' ? {active: false} : invalid === 'removed' ? {removed: true} : invalid === 'name' ? {name: ''} : {role_label: ''})];
+    else h.state.roster = [employee('EMP-A'), employee('EMP-B', invalid === 'inactive' ? {active: false} : invalid === 'removed' ? {removed: true} : invalid === 'badge-disabled' ? {badge_signin: {enabled: false, version: 2}} : invalid === 'name' ? {name: ''} : {role_label: ''})];
     await h.app.printSelected(); const sheet = h.sheets.at(-1);
     assert.equal(sheet.closed, true, `${invalid} must reject the whole selected job`);
     assert.equal(h.state.imageRequests, 0, 'Never start a partial badge sheet after invalid roster data');
   }
-  checks.push('Missing, inactive, removed or incomplete selected employees and failed refreshes reject the entire job without printing stale badges');
+  checks.push('Missing, inactive, removed, badge-disabled or incomplete selected employees and failed refreshes reject the entire job without printing stale badges');
 
   {
     const h = harness(); await h.app.open(); h.state.mode = 'pending';

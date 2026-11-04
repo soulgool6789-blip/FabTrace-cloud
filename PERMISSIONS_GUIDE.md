@@ -1,6 +1,6 @@
 # FabTrace job positions and permissions
 
-Each employee has one assigned application position. That position determines which production, inspection, evidence and administration actions the employee can perform. Active employees can view the shared traceability records and use ordinary badge handoffs. Reading a record, holding an item or scanning another person's badge does not grant that person's job permissions.
+Each employee has one assigned application position. That position determines which production, inspection, evidence and administration actions the employee can perform. Active employees can view the shared traceability records and use ordinary badge handoffs. Reading a record, holding an item or scanning another person's badge into a handoff field does not grant that person's job permissions. Use your own issued sign-in badge to enter your account; the current server-assigned position determines its permissions.
 
 ## Assign an employee's position
 
@@ -37,7 +37,7 @@ Generic **Welder** (`welder`) and **Miscellaneous** (`misc`) are retired from ne
 | Pressure Testing Technician | Pressure-test receipt, report PASS/FAIL, required correction and pressure-phase timing | Evidence assigned to this position; pressure-test checklist and section 06 files for separate QA acceptance |
 | NDT | NDT receipt, report PASS/FAIL, required correction and NDT-phase timing | Evidence assigned to NDT; NDE checklist and section 04 files for separate QA acceptance |
 
-All positions above, and retained legacy accounts, can use ordinary **Scan & Handoff** with both employee badges. Administrators and Shop Foremen manage custom shop locations. Employee access, private PIN resets, administrative release exceptions and Excel exports remain administrator controls.
+All positions above, and retained legacy accounts, can use ordinary **Scan & Handoff** with both employee badges. Administrators and Shop Foremen manage custom shop locations. Employee access, sign-in badge replacement/disable, fallback PIN resets, administrative release exceptions and Excel exports remain administrator controls.
 
 ## P.O. assembly identities
 
@@ -122,9 +122,13 @@ Packet dispatch and receipt are available to Material coordinator, Shop Foreman,
 
 ## Employee badges
 
-An administrator opens **Employees → Print employee QR badge** to print the employee's current name, position and permanent badge ID. The preview reads the current active employee record; inactive or removed employees cannot receive a new active badge. Names and positions are human-readable captions. The QR retains its permanent badge identity link and contains no PIN or authentication token. A printed badge does not sign the employee in or grant the printed position's permissions. Item/spool labels continue to omit employee-assignment captions.
+An administrator opens **Employees → Print employee QR badge**, or **Print employee badge sheets**, to print current names, positions, permanent badge IDs and sign-in QRs. Only active, nonremoved employees with badge sign-in enabled can be printed. Older identity-only badges need a one-time reprint. Employees scan their own current badge to sign in without a PIN; badge ID and private PIN remain available for fallback sign-in. A typed badge ID alone does not authenticate an account. Keep badges and saved sheets private.
+
+**Admin controls → Employee accounts → Account controls** provides **Replace sign-in badge** and **Disable badge sign-in** with a reason and a current-account check. Both invalidate older badge credentials and revoke existing employee sessions. Replacement enables a new badge for an active employee, which an administrator then prints. Disable stops badge login and printing while retaining PIN fallback. Deactivation/removal also invalidates and disables the badge; restored/reactivated accounts require explicit replacement before badge sign-in resumes. The permanent employee ID, work and history remain attached to the same identity.
+
+Scanning a badge into the dedicated sender/receiver handoff controls identifies that employee and keeps the signed-in recorder unchanged. The printed position is a caption; the account's current server permissions govern actions. Item/spool labels continue to omit employee-assignment captions.
 
 ## When a control is unavailable
 
-Check the signed-in account's position, the item's current process and release state, and the requirement's responsible position. Use an administrator account to correct an employee assignment; use the appropriate Shop Foreman/QA workflow to correct controlled requirement scope. The server checks permissions on every change, including direct requests and stale pages. Selecting another employee's badge or editing a request cannot elevate the signed-in account's permissions.
+Check the signed-in account's position, the item's current process and release state, and the requirement's responsible position. Use an administrator account to correct an employee assignment; use the appropriate Shop Foreman/QA workflow to correct controlled requirement scope. The server checks permissions on every change, including direct requests and stale pages. Selecting another employee's badge in a handoff or editing a request cannot elevate the signed-in account's permissions.
 

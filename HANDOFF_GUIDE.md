@@ -4,7 +4,7 @@ Use **Scan & Handoff** to record who currently holds a physical part, spool or a
 
 ## Record a handoff
 
-1. Sign in and open **Scan & Handoff**, or choose **Transfer** from the item record.
+1. Sign in with your own employee QR badge, then open **Scan & Handoff**, or choose **Transfer** from the item record. Badge sign-in does not require a PIN; badge ID and private PIN remain available as a fallback.
 2. Scan the item's existing QR label, use a keyboard scanner, or enter its ID and load the item. Check the tracking ID and part number, current custodian, recorded location and process/quality state.
 3. Scan or enter the **sending employee's badge** and confirm the employee shown. This must be an active employee whose badge matches the item's recorded current custodian. Displaying the current custodian does not count as scanning their badge.
 4. Scan or enter the **receiving employee's badge** and confirm the employee shown. This employee must also be active. Camera scanning and keyboard scanners use the same employee records.
@@ -46,13 +46,13 @@ Handoff steps are **6, 8, 9, 12, 13, 16, 20 and 23**. Step **3** records the sel
 
 An ordinary **Scan & Handoff** move changes custody/location/status without advancing the numbered traveler or changing its timer. It invalidates an older open traveler form so that a later step cannot overwrite the newly recorded handoff. Released items remain locked for ordinary transfers; their permitted post-QA movements use the current numbered handoff/shipping step.
 
-The same item QR remains valid throughout receiving, preparation, spool fabrication and assembly. Existing employee badge QRs also remain valid. In the handoff screen, choose the intended sender or receiver field before scanning a badge. If a badge link is opened without a selected role, identify which side of the handoff it belongs to. QR labels contain identity, never a private PIN.
+The same item QR remains valid throughout receiving, preparation, spool fabrication and assembly. Current employee badges support no-PIN sign-in and handoff identification. Older identity-only employee badges still identify employees in handoff fields, but need a one-time administrator reprint for sign-in. In **Scan & Handoff**, choose the dedicated sender or receiver field or its camera button before scanning another employee’s badge. These controls read the badge identity without changing the signed-in recorder. Manual badge ID entry remains available for handoffs. Keep sign-in badges private; their QRs contain a sign-in credential, never a private PIN.
 
 ## Read history and Excel
 
 New transfer history retains the sender, receiver, signed-in recorder, server time, previous/new location, previous/new work status and notes. It also identifies whether custody, location or status actually changed. Earlier historical transfers keep the information originally recorded; missing older sender/status details are not filled with guesses.
 
-A badge scan identifies an employee record. It is not that employee's login or independent signature. The record does not claim that either scanned employee separately signed an acknowledgment. Use the existing controlled QA and Job Packet handover records for the corresponding approvals and actual packet receipts.
+A badge scan inside the dedicated handoff controls identifies an employee record. It does not sign that employee in or record an independent signature. The record does not claim that either scanned employee separately signed an acknowledgment. Use the existing controlled QA and Job Packet handover records for the corresponding approvals and actual packet receipts.
 
 An administrator's **Export Excel** includes **Item transfer states** and **Transfer locations** alongside **Items**, **Audit events** and **Flow events**. Item transfer states provides the current version and operational status; immutable audit events provide the before/after custody history. All sheets come from the same read-only snapshot. Exporting or editing a workbook does not change custody.
 
@@ -70,4 +70,4 @@ An administrator can use **Admin controls → Correct custodian / location** to 
 | Item is released | Continue through its permitted current post-QA traveler step. An ordinary transfer does not unlock released work. |
 | Camera unavailable | Use a keyboard scanner or enter the item/badge value in the correct field and confirm the displayed identity. |
 
-Ordinary dual-badge transfers are available to all active employees in the supported job positions, including QA/QC, painters, finishers and miscellaneous support. Custom location management is restricted to supervisors and administrators. Numbered flow actions follow the current step's job permissions; scanning another person's badge or becoming an item's custodian does not grant their work or approval permissions. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md).
+Ordinary dual-badge transfers are available to all active employees in the supported job positions, including QA/QC, painters, finishers and miscellaneous support. Custom location management is restricted to supervisors and administrators. Numbered flow actions follow the current step's job permissions; scanning another person's badge into a handoff field or becoming an item's custodian does not grant their work or approval permissions. See [PERMISSIONS_GUIDE.md](PERMISSIONS_GUIDE.md).

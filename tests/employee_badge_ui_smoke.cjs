@@ -51,14 +51,14 @@ context.window=context;vm.createContext(context);vm.runInContext(source.slice(st
  assert.doesNotMatch(escaped,/<Lead>|<position>/);
  checks.push('Fresh server name and position override stale client labels and are escaped safely in print HTML');
 
- for(const invalid of [{active:false},{name:''},{role_label:''},{role_label:undefined}]){
+ for(const invalid of [{active:false},{badge_signin:{enabled:false,version:2}},{name:''},{role_label:''},{role_label:undefined}]){
   const saved=employee;employee={...employee,...invalid};await context.printEmployeeBadge(employee.badge);
   assert.equal(sheets.at(-1).closed,true);assert.equal(sheets.at(-1).finalOpenCount,0);employee=saved;
  }
  for(const failure of ['missing','error']){
   mode=failure;await context.printEmployeeBadge(employee.badge);assert.equal(sheets.at(-1).closed,true);assert.equal(sheets.at(-1).finalOpenCount,0);
  }
- mode='ok';checks.push('Missing, inactive, incomplete or failed employee reads cannot print a stale or nameless badge');
+ mode='ok';checks.push('Missing, inactive, disabled sign-in, incomplete or failed employee reads cannot print a stale or nameless badge');
 
  let beforeSheets=sheets.length,beforeCalls=calls.length;
  admin=false;await context.printEmployeeBadge(employee.badge);admin=true;
