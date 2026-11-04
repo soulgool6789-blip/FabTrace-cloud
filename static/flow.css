@@ -40,8 +40,23 @@
 #flowPage .ff-position-work{border-left:4px solid #146291}
 #flowPage .ff-position-steps{list-style:none;padding:0;margin:12px 0 0}
 #flowPage .ff-position-steps>li{padding:12px 0;border-top:1px solid var(--ff-line)}
-#flowPage .ff-position-steps>li>div{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#flowPage .ff-position-steps>li>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 #flowPage .ff-position-steps ul{padding-left:22px;font-size:13px;margin:10px 0}
+#flowPage .ff-position-steps>li[aria-current="step"]{border-left:3px solid #146291;padding-left:12px}
+#flowPage .ff-linked-qa,#flowPage .ff-spool-qa-summary{border-left:4px solid #146291}
+#flowPage .ff-linked-qa h2,#flowPage .ff-spool-qa-summary h2{margin-bottom:8px}
+#flowPage .ff-linked-qa>.ff-section-head p{font-size:13px;color:var(--ff-muted);margin:0}
+#flowPage .ff-spool-review-group{border:1px solid var(--ff-line);border-radius:9px;margin-top:12px;background:#fff;overflow:hidden}
+#flowPage .ff-spool-review-group>summary{cursor:pointer;padding:13px 15px;background:#f5f9fc;overflow-wrap:anywhere}
+#flowPage .ff-spool-review-group>summary>strong{font-size:15px}
+#flowPage .ff-spool-review-statuses{display:inline-flex;gap:7px;flex-wrap:wrap;margin-left:12px;vertical-align:middle}
+#flowPage .ff-spool-review-body{padding:14px 16px}
+#flowPage .ff-spool-review-body>.ff-section-head>span{font-size:13px;color:var(--ff-muted)}
+#flowPage .ff-qa-defect{margin-top:12px;padding:12px;background:#fffbf4;border:1px solid #e5ceb0;border-radius:8px}
+#flowPage .ff-qa-defect .ff-rework-completion{margin-top:10px}
+#flowPage .ff-qa-empty{color:var(--ff-muted);font-size:13px;font-style:italic}
+#flowPage .ff-qa-review-notes{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:620px){#flowPage .ff-spool-review-statuses{display:flex;margin:9px 0 0}#flowPage .ff-spool-review-body{padding:12px}}
 #flowPage .ff-state{padding:25px;background:white;border:1px solid var(--ff-line);border-radius:11px}
 #flowPage .ff-current{border-top:4px solid #1e76a9}
 #flowPage .ff-current h2{font-size:21px;margin:5px 0}
@@ -201,3 +216,4 @@
 #flowPage .ff-chart-rework{font-size:11px;line-height:1.5;color:#855118;margin:12px 0 0;overflow-wrap:anywhere}
 @media(max-width:600px){#flowPage .ff-route>.ff-chart-testing{--ff-bypass-width:62px;--ff-branch-gap:16px}#flowPage .ff-chart-decision,#flowPage .ff-branch-node{padding:9px 7px}}
 @media print{#flowPage .ff-chart-testing{break-inside:avoid}#flowPage .ff-chart-testing button.ff-num{display:inline-flex!important;border:0}}
+

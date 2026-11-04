@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, select, text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from read_projection import (PROJECTION_MISSING, prime_projection, prime_rows, projection_get,
@@ -985,6 +985,43 @@ def _summary(s, item, plan=None, *, presentation=None, stations=None, stage_cach
     }
 
 
+def spool_review_records(s, item_ids):
+    """Read only the linked spool review evidence in bounded SQL batches.
+
+    This deliberately does not call detail() for each child or initialize any
+    traveler. Three SELECTs per batch cover plans, relevant immutable events,
+    and open findings, including responses returned after a committed write.
+    """
+    from collections import defaultdict
+    from flow_reviews import INVALIDATING_ACTIONS, QA_STEPS, spool_review_rows
+    identifiers = list(dict.fromkeys(key for key in item_ids if key))
+    result = {}
+    for start in range(0, len(identifiers), 400):
+        batch = identifiers[start:start + 400]
+        with s.no_autoflush:
+            plans = {row.item_id: row for row in s.scalars(select(FlowPlan).where(FlowPlan.item_id.in_(batch)))}
+            events = defaultdict(list)
+            for row in s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(batch), or_(
+                    FlowEvent.action.in_(INVALIDATING_ACTIONS),
+                    (FlowEvent.action == 'advance') & FlowEvent.step.in_((10, 11, 14, 15))))
+                    .order_by(FlowEvent.item_id, FlowEvent.sequence)):
+                events[row.item_id].append(_dict(row, EVENT_KEYS))
+            exceptions = defaultdict(list)
+            for row in s.scalars(select(FlowException).where(FlowException.item_id.in_(batch),
+                    FlowException.step.in_(QA_STEPS), FlowException.closed_at.is_(None))
+                    .order_by(FlowException.item_id, FlowException.id)):
+                exceptions[row.item_id].append(_dict(row, EXCEPTION_KEYS))
+        for key in batch:
+            plan = plans.get(key)
+            definitions = {number: step_definition(plan, number) for number in (10, 11, 14, 15)}
+            result[key] = {
+                'plan': plan,
+                'reviews': spool_review_rows(_dict(plan, PLAN_KEYS) if plan else None,
+                    definitions, events[key], exceptions[key]) if plan is None or plan.route == 'spool' else [],
+            }
+    return result
+
+
 def detail(s, item, user):
     from administration import release_summary
     from production import process_snapshot
@@ -1055,6 +1092,31 @@ def detail(s, item, user):
     display_step = chart_step_number(plan.current_step, catalog_version(plan), current.get('testing_phase')) if current else None
     testing = testing_summary(s, plan)
     work_context = _work_context(s, item, project_id)
+    selected_spool = display['route'] == 'spool'
+    related_spool_ids = [key for key in spool_ids if family[key] and family[key].kind != 'Assembly']
+    if link and parent_item and parent_item.kind != 'Assembly':
+        related_spool_ids.append(parent_item.id)
+    related_spool_ids = list(dict.fromkeys(key for key in related_spool_ids if key != item.id))
+    review_records = spool_review_records(s, ([item.id] if selected_spool else []) + related_spool_ids)
+
+    def review_group(key):
+        child, record = family[key], review_records[key]
+        child_plan = record['plan']
+        removed = item_is_removed(s, key)
+        reviews = record['reviews']
+        if removed:
+            reviews = [{**row, 'is_current': False,
+                        'status': 'rework' if row['needs_reinspection'] else 'pending'
+                            if row['status'] == 'current' else row['status']} for row in reviews]
+        return {'item_id': key, 'description': child.description,
+            **item_presentation(s, child, plan=child_plan, stations=stations, stage_cache=stage_cache),
+            'catalog_version': catalog_version(child_plan), 'has_flow': child_plan is not None,
+            'route_status': child_plan.status if child_plan else 'not_started',
+            'current_step': child_plan.current_step if child_plan else None,
+            'removed': removed, 'reviews': reviews}
+
+    selected_reviews = review_group(item.id)['reviews'] if selected_spool else []
+    related_reviews = [review_group(key) for key in related_spool_ids]
     return {
         'project_id': project_id, 'subproject_id': subproject_id,
         'stage_catalog': stages_for_versions(stage_versions),
@@ -1077,6 +1139,7 @@ def detail(s, item, user):
             'blockers': _step_errors(s, item, plan)} if plan else None,
         'work': work_projection(item, plan, user, current, display_step=display_step,
                                 testing=testing, handoff_roles=HANDOFF, active=active),
+        'qa_reviews': selected_reviews, 'spool_reviews': related_reviews,
         'rework': rework_summary(s, item, plan, parent_item=parent_item, parent_plan=parent_plan),
         'production_process': process,
         'components': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in component_ids],
@@ -1605,6 +1668,7 @@ def update_scope(item_id: str, data: ScopeIn, u: Employee = Depends(auth), s: Se
         {'before': before, 'after': after})
     _commit(s)
     return detail(s, item, u)
+
 
 
 

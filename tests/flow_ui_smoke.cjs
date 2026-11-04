@@ -676,6 +676,131 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
       await context.FabFlow.open({item:'ITM-001'});assertQaTasks('completed',phase==='pressure_qa'?'completed':'pending');assert.match(qaTaskRow(phase),/Last recorded by FRESH-ACCEPTANCE-QA/);
     }
   });
+
+  // Spool fit-up and weld reviews travel with their physical spool into related views.
+  const spoolReviewRow=(source,code)=>elementHtml(source,new RegExp('<[a-z][\\w:-]*\\b[^>]*\\bdata-qa-review="'+code+'"[^>]*>'));
+  const linkedQaPanel=()=>elementHtml(html(),/<section\b[^>]*\bclass="[^"]*\bff-linked-qa\b[^"]*"[^>]*>/);
+  const linkedQaSpool=id=>elementHtml(linkedQaPanel(),new RegExp('<[a-z][\\w:-]*\\b[^>]*\\bdata-qa-spool="'+id+'"[^>]*>'));
+  const spoolQaSummary=()=>elementHtml(html(),/<section\b[^>]*\bclass="[^"]*\bff-spool-qa-summary\b[^"]*"[^>]*>/);
+  const spoolQaResult=(number,result,extra={})=>({result,actor:'SPOOL-QA-'+number,at:'2026-11-04T11:'+String(number).padStart(2,'0')+':00Z',reference:'SPOOL-INSPECTION-'+number,notes:'Verified the physical spool and controlled records',event_id:800+number,...extra});
+  const spoolQaRow=(number,extra={})=>({
+    ...structuredClone(modernCatalog.steps[number-1]),review_key:number===11?'QA-002':'QA-003',number,qa:true,
+    checks:(number===11?['Check spool fit-up and alignment','Check spool lengths, angles and dimensions']:['Check each weld visual examination record','Check approved WPS and release evidence']).map((label,index)=>({id:'s'+number+'_'+(index+1),label})),
+    status:'pending',is_current:false,latest_review:null,defects:[],completed_at:null,last_actor:null,...extra,
+  });
+  const spoolQaGroup=(id,alias,reviews,extra={})=>({
+    item_id:id,spool_number:'643-777-PCW-03-01',qr_alias:alias,description:'Individual spool '+id,
+    catalog_version:modernCatalog.version,flow_stage:{key:'qa_002',source_item_id:id,inherited:false},removed:false,
+    has_flow:true,route_status:'active',current_step:11,reviews:structuredClone(reviews),...extra,
+  });
+  const fitupPass=spoolQaResult(11,'PASS',{actor:'FITUP-QA <one>',reference:'FITUP-REPORT <signed> & checked'});
+  const weldFailure=spoolQaResult(15,'FAIL',{actor:'WELD-QA <two>',reference:'WELD-NCR-15'});
+  const weldFinding={id:915,step:15,display_step:15,return_step:14,return_display_step:14,reason:'Undersized <weld> & incomplete cap',reference:'WELD-NCR-15',opened_by:weldFailure.actor,opened_at:weldFailure.at,needs_completion:true,completion:null};
+  const weldCorrection={event_id:916,step:14,actor:'PROCESS-WELDER',at:'2026-11-04T12:00:00Z',description:'Rebuilt <cap> & checked the weld profile',reference:'WELD-REPAIR-916'};
+  await catalogContract('spool QA002 and QA003 show their own signed results, references and inspection tasks',async()=>{
+    record=detailAt(14,{},modernCatalog);record.qa_reviews=[
+      spoolQaRow(11,{status:'completed',latest_review:structuredClone(fitupPass),last_actor:fitupPass.actor,completed_at:fitupPass.at}),
+      spoolQaRow(15,{status:'rework',latest_review:structuredClone(weldFailure),defects:[structuredClone(weldFinding)]}),
+    ];record.spool_reviews=[];context.me={role:'inspector',badge:'QA1'};
+    await context.FabFlow.open({item:'ITM-001'});
+    const panel=qaTaskPanel(),fitup=spoolReviewRow(panel,'QA-002'),weld=spoolReviewRow(panel,'QA-003');
+    assert.match(fitup,/11 · QA\/QC-002/);assert.match(weld,/15 · QA\/QC-003/);
+    assert.match(fitup,/<span class="ff-tag completed">/);assert.match(weld,/<span class="ff-tag rework">/);
+    assert.match(fitup,/Latest recorded review: <strong>PASS<\/strong>/);assert.match(weld,/Latest recorded review: <strong>FAIL<\/strong>/);
+    assert.match(fitup,/FITUP-QA &lt;one&gt;/);assert.match(fitup,/FITUP-REPORT &lt;signed&gt; &amp; checked/);assert.ok(fitup.includes(esc(new Date(fitupPass.at).toLocaleString())));
+    assert.match(weld,/WELD-QA &lt;two&gt;/);assert.match(weld,/WELD-NCR-15/);assert.match(weld,/Undersized &lt;weld&gt; &amp; incomplete cap/);
+    assert.match(fitup,/Check spool fit-up and alignment/);assert.match(weld,/Check each weld visual examination record/);
+    assert.doesNotMatch(fitup,/WELD-NCR-15|Undersized/);assert.doesNotMatch(weld,/FITUP-REPORT/,'one checkpoint cannot inherit the other inspection reference');
+    assert.doesNotMatch(panel,/<one>|<two>|<signed>|<weld>/,'free-text review evidence is escaped');
+  });
+  await catalogContract('ordinary spool reinspection preserves failures and corrective work without crediting stale downstream acceptance',async()=>{
+    const fitupFailure=spoolQaResult(11,'FAIL',{reference:'FITUP-NCR-11'}),oldWeldPass=spoolQaResult(15,'PASS',{actor:'OLDER-WELD-QA',reference:'PREVIOUS-WELD-PASS'});
+    const fitupFinding={...structuredClone(weldFinding),id:911,step:11,display_step:11,return_step:10,return_display_step:10,reason:'Fit-up alignment must be corrected',reference:fitupFailure.reference,opened_by:fitupFailure.actor,opened_at:fitupFailure.at};
+    record=detailAt(10,{},modernCatalog);record.qa_reviews=[
+      spoolQaRow(11,{status:'rework',latest_review:fitupFailure,defects:[fitupFinding]}),
+      spoolQaRow(15,{status:'pending',latest_review:oldWeldPass}),
+    ];await context.FabFlow.open({item:'ITM-001'});
+    assert.match(qaTaskRow('QA-002'),/<span class="ff-tag rework">/);assert.match(qaTaskRow('QA-003'),/<span class="ff-tag pending">/);
+    assert.match(qaTaskRow('QA-003'),/PREVIOUS-WELD-PASS/);assert.doesNotMatch(qaTaskRow('QA-003'),/<span class="ff-tag completed">/,'a historical PASS is not current acceptance after a return');
+    record=detailAt(15,{},modernCatalog);record.qa_reviews=[
+      spoolQaRow(11,{status:'completed',latest_review:structuredClone(fitupPass)}),
+      spoolQaRow(15,{status:'current',is_current:true,latest_review:structuredClone(weldFailure),defects:[{...structuredClone(weldFinding),needs_completion:false,completion:structuredClone(weldCorrection)}]}),
+    ];await context.FabFlow.open({item:'ITM-001'});
+    const active=qaTaskRow('QA-003');assert.match(active,/<span class="ff-tag current">/);assert.match(active,/Latest recorded review: <strong>FAIL<\/strong>/);
+    assert.match(active,/Undersized &lt;weld&gt; &amp; incomplete cap/);assert.match(active,/Rebuilt &lt;cap&gt; &amp; checked the weld profile/);assert.match(active,/PROCESS-WELDER/);assert.match(active,/WELD-REPAIR-916/);
+    assert.doesNotMatch(active,/<span class="ff-tag completed">/);assert.match(html(),/id="flowStepForm"/,'the current spool inspection retains its normal controlled form');
+    const freshPass=spoolQaResult(15,'PASS',{actor:'REINSPECT-WELD-QA',reference:'WELD-REINSPECT-PASS',at:'2026-11-04T12:15:00Z',event_id:917});
+    record=detailAt(16,{},modernCatalog);record.qa_reviews=[spoolQaRow(11,{status:'completed',latest_review:structuredClone(fitupPass)}),spoolQaRow(15,{status:'completed',latest_review:freshPass,completed_at:freshPass.at,last_actor:freshPass.actor})];
+    await context.FabFlow.open({item:'ITM-001'});assert.match(qaTaskRow('QA-003'),/<span class="ff-tag completed">/);assert.match(qaTaskRow('QA-003'),/WELD-REINSPECT-PASS/);assert.doesNotMatch(qaTaskRow('QA-003'),/WELD-NCR-15/);
+  });
+  await catalogContract('unstarted and late-baseline spools expose planned QA002 and QA003 without inventing acceptance',async()=>{
+    record=detailAt(9,{},modernCatalog);record.flow=null;record.suggested_route='spool';record.qa_reviews=[spoolQaRow(11),spoolQaRow(15)];record.spool_reviews=[];
+    await context.FabFlow.open({item:'ITM-001'});
+    for(const code of ['QA-002','QA-003']){assert.ok(qaTaskRow(code),'planned spool review remains visible before route setup');assert.match(qaTaskRow(code),/<span class="ff-tag pending">/);}
+    assert.doesNotMatch(qaTaskPanel(),/Latest recorded review:|Last recorded by|<span class="ff-tag completed">/);assert.doesNotMatch(html(),/id="flowStepForm"/,'unstarted work cannot receive a QA approval from the summary');
+    record=detailAt(16,{},modernCatalog);record.flow.baseline_step=16;record.qa_reviews=[spoolQaRow(11,{status:'not_recorded'}),spoolQaRow(15,{status:'not_recorded'})];
+    // The old aggregate route rows may say completed, but carry no signed QA evidence.
+    record.flow.steps=record.flow.steps.map(step=>({...step,status:'completed',last_actor:'BASELINE-ACTOR',completed_at:'2026-11-04T08:00:00Z'}));
+    await context.FabFlow.open({item:'ITM-001'});
+    for(const code of ['QA-002','QA-003'])assert.match(qaTaskRow(code),/<span class="ff-tag not_recorded">/);
+    assert.doesNotMatch(qaTaskPanel(),/Latest recorded review:|BASELINE-ACTOR|<span class="ff-tag completed">/);
+  });
+  const relatedSpoolA=spoolQaGroup('SPL-REVIEW-A','643-777-PCW-03-01-[001]',[spoolQaRow(11,{status:'current',is_current:true}),spoolQaRow(15)]);
+  const relatedSpoolB=spoolQaGroup('SPL-REVIEW-B','643-777-PCW-03-01-[002]',[
+    spoolQaRow(11,{status:'completed',latest_review:spoolQaResult(11,'PASS',{actor:'SPOOL-B-QA2',reference:'SPOOL-B-FITUP-PASS'})}),
+    spoolQaRow(15,{status:'rework',latest_review:spoolQaResult(15,'FAIL',{actor:'SPOOL-B-QA3',reference:'SPOOL-B-WELD-FAIL'}),defects:[{...structuredClone(weldFinding),reason:'Spool B weld repair is required',reference:'SPOOL-B-WELD-FAIL'}]}),
+  ],{current_step:14,flow_stage:{key:'welding',source_item_id:'SPL-REVIEW-B',inherited:false}});
+  const assemblyWithSpoolReviews=()=>{const value=testingAt('decision','decision',{},modernCatalog);value.qa_reviews=[];value.spool_reviews=[structuredClone(relatedSpoolA),structuredClone(relatedSpoolB)];value.spools=value.spool_reviews.map(group=>({...group,route:'spool',status:group.route_status}));return value;};
+  await catalogContract('assembly view keeps each linked spool QA002 and QA003 separate with direct review links',async()=>{
+    record=assemblyWithSpoolReviews();context.me={role:'inspector',badge:'QA1'};const beforeRead=calls.length;
+    await context.FabFlow.open({item:'ITM-001',project:'P1',resetFilters:true});const panel=linkedQaPanel();
+    assert.ok(panel,'assembly includes the linked spool review section');assert.deepEqual([...panel.matchAll(/\bdata-qa-spool="([^"]+)"/g)].map(match=>match[1]),['SPL-REVIEW-A','SPL-REVIEW-B']);
+    const first=linkedQaSpool('SPL-REVIEW-A'),second=linkedQaSpool('SPL-REVIEW-B');
+    for(const [id,source] of [['SPL-REVIEW-A',first],['SPL-REVIEW-B',second]]){
+      assert.match(source,new RegExp('data-flow-action="item" data-flow-id="'+id+'"[^>]*>Open spool review<'));
+      assert.match(spoolReviewRow(source,'QA-002'),/11 · QA\/QC-002/);assert.match(spoolReviewRow(source,'QA-003'),/15 · QA\/QC-003/);
+      assert.match(source,/Check spool fit-up and alignment/);assert.match(source,/Check each weld visual examination record/);
+      assert.doesNotMatch(source,/id="flowStepForm"|id="flowAdvance"|data-flow-action="fail"/,'linked cards do not approve another physical spool');
+    }
+    assert.match(first,/643-777-PCW-03-01-\[001\]/);assert.match(second,/643-777-PCW-03-01-\[002\]/);
+    assert.match(spoolReviewRow(first,'QA-002'),/<span class="ff-tag current">/);assert.match(spoolReviewRow(first,'QA-003'),/<span class="ff-tag pending">/);
+    assert.match(spoolReviewRow(second,'QA-002'),/<span class="ff-tag completed">/);assert.match(spoolReviewRow(second,'QA-003'),/<span class="ff-tag rework">/);
+    assert.match(second,/SPOOL-B-FITUP-PASS/);assert.match(second,/SPOOL-B-WELD-FAIL/);assert.match(second,/Spool B weld repair is required/);assert.doesNotMatch(first,/SPOOL-B-|Spool B weld repair/,'another spool cannot supply this spool’s results');
+    assertQaTasks('pending','pending','linked spool reviews do not displace the assembly’s own QA gates');
+    assert.deepEqual(calls.slice(beforeRead).filter(call=>call.url.startsWith('/api/flow/items/')).map(call=>call.url),['/api/flow/items/ITM-001'],'linked summaries arrive in the current response without per-spool fetches');
+  });
+  await catalogContract('assigned-spool reviews remain visible from receiving and unstarted linked spools stay unapproved',async()=>{
+    record=detailAt(2,{},modernCatalog);record.qa_reviews=[];record.parent={item_id:'SPL-REVIEW-A',route:'spool'};
+    record.spool_reviews=[spoolQaGroup('SPL-REVIEW-A','643-777-PCW-03-01-[001]',[spoolQaRow(11,{status:'not_recorded'}),spoolQaRow(15,{status:'not_recorded'})],{has_flow:false,route_status:'not_started',current_step:null})];
+    await context.FabFlow.open({item:'ITM-001'});const linked=linkedQaSpool('SPL-REVIEW-A');assert.ok(linked,'receiving retains the next spool reviews alongside its own QA001');
+    assert.match(qaTaskPanel(),/QA\/QC-001/);assert.match(linked,/QA\/QC-002/);assert.match(linked,/QA\/QC-003/);
+    for(const code of ['QA-002','QA-003'])assert.match(spoolReviewRow(linked,code),/<span class="ff-tag not_recorded">/);
+    assert.doesNotMatch(linked,/Latest recorded review:|Last recorded by|<span class="ff-tag completed">|id="flowStepForm"/);
+  });
+  await catalogContract('QA task checklists stay inspector-only while other positions can read spool inspection summaries',async()=>{
+    for(const role of ['admin','handler','process_welder']){
+      context.me={role,badge:role==='admin'?'ADMIN':'WORKER'};
+      record=detailAt(11,{},modernCatalog);record.qa_reviews=[spoolQaRow(11,{status:'current',is_current:true,latest_review:structuredClone(fitupPass)}),spoolQaRow(15)];record.spool_reviews=[];
+      await context.FabFlow.open({item:'ITM-001'});const summary=spoolQaSummary();assert.ok(summary,role+' can see recorded spool QA status');
+      assert.doesNotMatch(html(),/ff-position-work|QA\/QC review tasks/);assert.match(summary,/QA\/QC-002/);assert.match(summary,/QA\/QC-003/);assert.match(summary,/FITUP-REPORT &lt;signed&gt; &amp; checked/);
+      assert.doesNotMatch(summary,/Check spool fit-up and alignment|Check each weld visual examination record|name="check_|id="flowStepForm"/,'a summary does not assign QA checklist tasks to another position');
+      if(role==='admin')assert.match(html(),/id="flowStepForm"/,'the permitted administrator current inspection form is preserved');
+      else assert.doesNotMatch(html(),/id="flowStepForm"/,'ordinary trades cannot perform the current QA review');
+      record=assemblyWithSpoolReviews();await context.FabFlow.open({item:'ITM-001'});
+      assert.match(linkedQaPanel(),/SPOOL-B-WELD-FAIL/);assert.doesNotMatch(linkedQaPanel(),/Check spool fit-up and alignment|Check each weld visual examination record|name="check_|id="flowStepForm"/);
+      assert.doesNotMatch(html(),/ff-position-work/);
+    }
+    context.me={role:'inspector',badge:'QA1'};
+  });
+  await catalogContract('opening a linked spool review reads that physical spool and preserves context without QA writes',async()=>{
+    record=assemblyWithSpoolReviews();context.me={role:'inspector',badge:'QA1'};await context.FabFlow.open({item:'ITM-001',project:'P1',resetFilters:true});
+    assert.match(linkedQaSpool('SPL-REVIEW-B'),/data-flow-action="item" data-flow-id="SPL-REVIEW-B"[^>]*>Open spool review</);
+    const child=detailAt(14,{},modernCatalog);Object.assign(child.item,{id:'SPL-REVIEW-B',qr_alias:relatedSpoolB.qr_alias});child.flow.item_id='SPL-REVIEW-B';child.transfer.item_id='SPL-REVIEW-B';child.production_process.item_id='SPL-REVIEW-B';child.qa_reviews=structuredClone(relatedSpoolB.reviews);child.spool_reviews=[];record=child;
+    const beforeRead=calls.length,beforeWrite=posts().length;await click('item','SPL-REVIEW-B');
+    assert.deepEqual(calls.slice(beforeRead).filter(call=>call.url.startsWith('/api/flow/items/')).map(call=>call.url),['/api/flow/items/SPL-REVIEW-B']);
+    const url=new URL(context.url,context.location.origin);assert.equal(url.searchParams.get('item'),'SPL-REVIEW-B');assert.equal(url.searchParams.get('project'),'P1');
+    assert.match(qaTaskPanel(),/SPOOL-B-WELD-FAIL/);assert.match(qaTaskPanel(),/Spool B weld repair is required/);assert.equal(posts().length,beforeWrite,'opening another spool is read-only');
+  });
   assert.equal(posts().length,taskReadWrites,'review-list projections never create QA records or mutate the live workflow');
 
   // Every ordinary QA failure returns to the one server-selected preceding production step.

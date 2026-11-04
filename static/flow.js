@@ -285,6 +285,13 @@
   function workRecords(work){
     return arr(work?.requirements).length?`<p class="ff-work-records"><strong>Required records:</strong> ${arr(work.requirements).map(value=>esc(value)).join(' · ')}</p>`:'';
   }
+  function reviewRecord(row){
+    const review=row.latest_review;
+    return {...row,review_key:row.review_key||row.qa_code||String(row.number),
+      review_result:review?.result??row.review_result,review_reference:review?.reference??row.review_reference,
+      review_notes:review?.notes??row.review_notes,last_actor:review?.actor??row.last_actor,
+      reviewed_at:review?.at??row.reviewed_at,defects:arr(row.defects)};
+  }
   function qaReviewSteps(){
     const flow=state.detail.flow,current=flow.current,value=testing();
     return arr(flow.steps).flatMap(step=>{
@@ -309,16 +316,42 @@
         });
       }
       const isCurrent=Number(step.number)===Number(current?.number),row=isCurrent?{...step,...current}:step;
-      return row.qa===true?[{...row,review_key:row.qa_code||String(row.number),is_current:isCurrent}]:[];
+      const projected=arr(state.detail.qa_reviews).find(review=>Number(review.number)===Number(row.number));
+      return row.qa===true?[reviewRecord({...row,review_key:row.qa_code||String(row.number),is_current:isCurrent,...(projected||{})})]:[];
     });
+  }
+  function qaReviewRows(steps,{version=currentCatalogVersion(),own=false,checks=me?.role==='inspector'}={}){
+    return `<ol class="ff-position-steps">${steps.map(raw=>{
+      const step=reviewRecord(raw),current=state.detail.flow?.current;
+      const number=step.display_step??(own&&step.is_current&&current?currentStepNumber(current):chartStepNumber(step.number,version,step.testing_phase||''));
+      const defects=step.defects.map(defect=>`<div class="ff-qa-defect" data-qa-defect="${esc(defect.id)}"><strong>Defect / required repair</strong><p class="ff-rework-description">${esc(defect.reason)}</p>${defect.reference?`<p class="ff-secondary">Inspection / NCR reference: ${esc(defect.reference)}</p>`:''}${defect.completion?`<div class="ff-rework-completion"><strong>Completed rework</strong><p class="ff-rework-description">${esc(defect.completion.description)}</p><p class="ff-secondary">${esc(defect.completion.actor)}${defect.completion.at?' · '+esc(stamp(defect.completion.at)):''}${defect.completion.reference?' · '+esc(defect.completion.reference):''}</p><p class="ff-footer-note">Awaiting QA/QC reinspection.</p></div>`:'<p class="ff-rework-pending">Completed rework has not been recorded.</p>'}</div>`).join('');
+      return `<li data-qa-review="${esc(step.review_key)}"${step.is_current?' aria-current="step"':''}><div><strong>${esc(number)} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div>${checks?`<ul class="ff-qa-checks">${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>`:''}${['PASS','FAIL'].includes(step.review_result)?`<p class="ff-secondary">Latest recorded review: <strong>${esc(step.review_result)}</strong>${step.review_attempt?' · Attempt '+esc(step.review_attempt):''}${step.review_reference?' · '+esc(step.review_reference):''}</p>`:Object.prototype.hasOwnProperty.call(step,'latest_review')?'<p class="ff-qa-empty">No inspection result recorded.</p>':''}${step.review_notes?`<p class="ff-qa-review-notes">${esc(step.review_notes)}</p>`:''}${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.reviewed_at||step.completed_at?` · ${esc(stamp(step.reviewed_at||step.completed_at))}`:''}</p>`:''}${step.needs_reinspection&&step.review_result==='PASS'?'<p class="ff-rework-pending">The earlier PASS is retained in history. A new QA/QC review is required.</p>':''}${defects}</li>`;
+    }).join('')}</ol>`;
   }
   function positionWork(){
     const detail=state.detail,flow=detail.flow,work=detail.work;
-    if(!flow||me?.role!=='inspector')return '';
-    const current=flow.current,currentQa=current?.qa===true;
-    const steps=qaReviewSteps();
-    const message=removed()?'This removed record is available for history only.':currentQa?work?.restriction||'Review this QA/QC hold point and its recorded evidence before recording PASS or FAIL.':current?`The current production step belongs to ${arr(current.roles).map(roleLabel).join(' / ')}. QA/QC review becomes available at the next QA hold point.`:'Review this route’s recorded QA/QC inspections and any unresolved defects.';
-    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · QA/QC</div><h2>QA/QC review tasks</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${currentQa?workRecords(work):''}<details class="ff-fold" open><summary>QA/QC hold points on this ${esc(routeNames[flow.route]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?`<ol class="ff-position-steps">${steps.map(step=>`<li data-qa-review="${esc(step.review_key)}"${step.is_current?' aria-current="step"':''}><div><strong>${esc(step.is_current?currentStepNumber(current):chartStepNumber(step.number,flow.catalog_version,step.testing_phase||''))} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div><ul>${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>${['PASS','FAIL'].includes(step.review_result)?`<p class="ff-secondary">Latest recorded review: <strong>${esc(step.review_result)}</strong>${step.review_attempt?' · Attempt '+esc(step.review_attempt):''}${step.review_reference?' · '+esc(step.review_reference):''}</p>`:''}${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.reviewed_at||step.completed_at?` · ${esc(stamp(step.reviewed_at||step.completed_at))}`:''}</p>`:''}</li>`).join('')}</ol>`:'<p class="ff-footer-note">This route has no recorded QA/QC hold points. Related components, spools and assemblies keep their own inspection records.</p>'}</details></section>`;
+    if(me?.role!=='inspector'||!flow&&!arr(detail.qa_reviews).length)return '';
+    const current=flow?.current,currentQa=current?.qa===true,routeName=flow?.route||detail.suggested_route||(detail.item.kind==='Spool'?'spool':'item');
+    const steps=flow?qaReviewSteps():arr(detail.qa_reviews).map(reviewRecord);
+    const message=removed()?'This removed record is available for history only.':!flow?'These reviews are planned for this spool. Each becomes available when its production step is reached.':currentQa?work?.restriction||'Review this QA/QC hold point and its recorded evidence before recording PASS or FAIL.':current?`The current production step belongs to ${arr(current.roles).map(roleLabel).join(' / ')}. QA/QC review becomes available at the next QA hold point.`:'Review this route’s recorded QA/QC inspections and any unresolved defects.';
+    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · QA/QC</div><h2>QA/QC review tasks</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${currentQa?workRecords(work):''}<details class="ff-fold" open><summary>QA/QC hold points on this ${esc(routeNames[routeName]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?qaReviewRows(steps,{own:true}):'<p class="ff-footer-note">This route has no recorded QA/QC hold points. Related components, spools and assemblies keep their own inspection records.</p>'}</details></section>`;
+  }
+  function spoolReviewSummary(){
+    const reviews=arr(state.detail.qa_reviews);
+    if(me?.role==='inspector'||!reviews.length)return '';
+    return `<section class="card ff-spool-qa-summary"><h2>QA/QC-002 and QA/QC-003 review records</h2><p>Review the spool’s fit-up and weld inspection results, including any required rework.</p>${qaReviewRows(reviews,{own:true,checks:false})}</section>`;
+  }
+  function linkedSpoolReviews(){
+    const groups=arr(state.detail.spool_reviews);if(!groups.length)return '';
+    const inspections=groups.flatMap(group=>arr(group.reviews)),attention=inspections.filter(row=>row.status==='rework'||arr(row.defects).length).length;
+    return `<section class="card ff-linked-qa"><div class="ff-section-head"><div><h2>Spool QA/QC-002 and QA/QC-003 reviews</h2><p>${groups.length} linked spool${groups.length===1?'':'s'} · Each spool has its own fit-up and weld inspection records.</p></div>${attention?tag('rework',attention+' review'+(attention===1?'':'s')+' needing reinspection'):''}</div>${groups.map((group,index)=>{
+      const reviews=arr(group.reviews),identity={...group,route:'spool'},open=index===0||reviews.some(row=>row.is_current||row.status==='rework'||arr(row.defects).length);
+      return `<details class="ff-spool-review-group" data-qa-spool="${esc(group.item_id)}"${open?' open':''}><summary><strong>${spoolText(identity)}</strong><span class="ff-spool-review-statuses">${reviews.map(review=>tag(review.status,(review.display_qa_code||review.qa_code||'QA/QC')+' · '+(stepStatusNames[review.status]||'Not recorded'))).join('')}</span></summary><div class="ff-spool-review-body"><div class="ff-section-head"><span>${group.removed?'Removed spool · history only':group.route_status==='not_started'?'Spool production route has not started.':esc(statusNames[group.route_status]||group.route_status||'Production record')}</span>${action('item','Open spool review',group.item_id,'primary')}</div>${qaReviewRows(reviews,{version:group.catalog_version||currentCatalogVersion()})}</div></details>`;
+    }).join('')}</section>`;
+  }
+  function qaReviewPanels(){
+    const own=positionWork()+spoolReviewSummary(),linked=linkedSpoolReviews();
+    return state.detail.flow?.route==='assembly'||state.detail.item.kind==='Assembly'?linked+own:own+linked;
   }
   function reworkSummary(){
     const value=state.detail?.rework,defects=arr(value?.defects);
@@ -476,12 +509,13 @@
     if(state.notice)html+=`<div class="ff-error" role="alert">${esc(state.notice)}</div>`;
     html+=reworkSummary();
     if(!flow){
+      html+=qaReviewPanels();
       html+=`<section class="card"><h2>Start a numbered process route</h2>${metadata([['Item type',item.kind],['Project',item.project],['Location',item.location],['Current handler',item.handler]])}<p>Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–${catalogLast()}. Begin at the first step, or record a documented starting point for existing work.</p>${can('start')?action('start','Set up process route','','primary'):'<p class="muted">A Shop Foreman or administrator can start this item’s route.</p>'}</section>`;
       return html+'<section class="card"><h2>The fabrication flow</h2>'+renderMap(false)+'</section>';
     }
 
     if(detail.parts?.configured){const t=detail.parts.totals||{},required=num(t.required_qty),prepared=num(t.prepared_qty);html+=`<section class="card"><div class="ff-section-head"><h2>Required component pieces</h2>${action('spool-parts','Spool parts',item.id)}</div><p>${prepared} of ${required} required pieces prepared for fit-up · ${num(t.assigned_qty)} assigned · ${num(t.received_qty)} receipt recorded · ${num(t.short_qty)} still to assign</p>${required>0?`<progress max="${required}" value="${Math.min(required,prepared)}" aria-label="Required pieces prepared for fit-up" style="width:100%"></progress>`:''}</section>`;}
-    html+=positionWork()+`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',detail.project_id||item.project],['Subproject',detail.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
+    html+=qaReviewPanels()+`<div class="ff-grid"><div>${currentStep()}${exceptions()}</div><div>${family()}<section class="card"><h2>Item record</h2>${metadata([['Project',detail.project_id||item.project],['Subproject',detail.subproject_id],['Location',item.location],['Current handler',item.handler],['Work status',(detail.transfer||item.transfer)?.status_label||'Not recorded'],['Drawing',item.drawing],['Release decision',(detail.release_control||item.release_control)?.label||(item.released?'Released':'Not released')]])}<p class="ff-footer-note">Each step stores its actor, time, checks, and reference. Quality acceptance and shipment remain separate records.</p></section></div></div>`;
 
     html+=`<section class="card"><div class="ff-section-head"><h2>${esc(routeNames[flow.route])} route · steps ${chartStepNumber(route(flow.route)?.first_step)}–${chartStepNumber(route(flow.route)?.last_step)}</h2>${tag(openExceptions().length?'rework':flow.status)}</div>${routeProgress()}${flow.baseline_reference?`<p class="ff-footer-note"><strong>Existing work starting point:</strong> ${esc(flow.baseline_reference)} · ${esc(flow.baseline_reason||'')} Earlier steps marked “Not recorded” have no completion recorded in this route.</p>`:''}</section>`;
     html+=`<section class="card"><details class="ff-fold"><summary>View this traveler’s numbered route</summary><p class="ff-footer-note">These are the saved definitions for this ${esc(routeNames[flow.route].toLowerCase())} traveler. Linked components, spools and assemblies retain their own routes.</p>${renderMap(true)}</details></section>`;
