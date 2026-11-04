@@ -16,9 +16,7 @@
   const primary=new Set(['orderSetupPage','ordersPage','orderLabelsPage','productionProgressPage','progressPage','handoffPage','flowPage','guidePage']);
   const originalReplace=history.replaceState.bind(history),stack=[],lastByPage=new Map();
   let active=null,prepared=null,restoring=0,busy=false,observing=false;
-  const home=()=>typeof me!=='undefined'&&me&&!['admin','supervisor'].includes(me.role)
-    ?{page:'flowPage',url:'/?flow=1&view=work&work_scope=position',label:'My work'}
-    :{page:'orderSetupPage',url:'/?order-setup=1',label:'Orders'};
+  const home=()=>({page:'orderSetupPage',url:'/?order-setup=1',label:'Orders'});
 
   function safeUrl(value){
     try{const u=new URL(value,location.origin);if(u.origin!==location.origin||!['/','/index.html'].includes(u.pathname))return null;u.hash='';u.searchParams.sort();return '/'+u.search;}catch(_){return null;}
@@ -101,7 +99,7 @@
 
   function fallback(frame=active){
     if(!frame)return home();
-    const q=new URL(frame.url,location.origin).searchParams,set=(page,values={})=>({page,url:'/?'+new URLSearchParams({[pages[page][2]]:'1',...Object.fromEntries(Object.entries(values).filter(([,value])=>value))}),label:page==='flowPage'&&values.view==='work'?'My work':pages[page][1]});
+    const q=new URL(frame.url,location.origin).searchParams,set=(page,values={})=>({page,url:'/?'+new URLSearchParams({[pages[page][2]]:'1',...Object.fromEntries(Object.entries(values).filter(([,value])=>value))}),label:pages[page][1]});
     if(frame.page==='orderLabelsPage')return set('orderSetupPage',{po:q.get('po')});
     if(frame.page==='ordersPage'){
       if(q.get('assembly'))return set('ordersPage',{po:q.get('po'),gpn:q.get('gpn')});
@@ -115,7 +113,7 @@
     }
     if(frame.page==='partsPage'&&q.get('spool'))return set('partsPage',{project:q.get('project')});
     if(frame.page==='flowPage'&&(q.get('item')||q.get('project'))){
-      const work=q.get('view')==='work',parent=set('flowPage',{project:q.get('item')?q.get('project'):'',view:work?'work':'',work_scope:work?(q.get('work_scope')==='custody'?'custody':'position'):''});
+      const parent=set('flowPage',{project:q.get('item')?q.get('project'):''});
       if(frame.moduleState)parent.moduleState={...frame.moduleState,project:q.get('item')?q.get('project')||'':''};
       return parent;
     }
@@ -149,9 +147,7 @@
     active.label=label;
     if(button){button.disabled=busy;const text='← '+backLabel();if(button.textContent!==text)button.textContent=text;}
     if(currentLabel&&currentLabel.textContent!==label)currentLabel.textContent=label;
-    const work=active.page==='flowPage'&&new URL(active.url,location.origin).searchParams.get('view')==='work';
-    node('navMyWork')?.classList.toggle('primary',work);
-    node('navFlow')?.classList.toggle('primary',active.page==='flowPage'&&!work);
+    node('navFlow')?.classList.toggle('primary',active.page==='flowPage');
     node('moreTools')?.classList.toggle('fn-selected',!primary.has(active.page));
     for(const id of ['back','bulkBack','handoffBack'])node(id)?.classList.add('fn-legacy-back');
   }
@@ -165,7 +161,7 @@
       case 'productionProgressPage':return window.FabProductionProgress.open({project:v('project')});
       case 'progressPage':return window.FabProgress.open({project:v('project')});
       case 'handoffPage':return window.FabHandoff.open({item:v('item')});
-      case 'flowPage':return window.FabFlow.open({...frame.moduleState,project:v('project'),item:v('item'),view:v('view')==='work'?'work':'board',workScope:v('work_scope')==='custody'?'custody':'position',resetFilters:!frame.moduleState});
+      case 'flowPage':return window.FabFlow.open({...frame.moduleState,project:v('project'),item:v('item'),resetFilters:!frame.moduleState});
       case 'guidePage':return window.FabGuide.open({project:v('project'),section:v('section')});
       case 'trackingPage':return window.FabTracking.open({project:v('project'),subproject:v('subproject'),spool:v('spool'),weld:v('weld'),view:v('view')});
       case 'partsPage':return window.FabParts.open({project:v('project'),spool:v('spool')});

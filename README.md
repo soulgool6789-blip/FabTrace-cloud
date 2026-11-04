@@ -1,8 +1,10 @@
 # FabTrace Cloud
 
-## Employee work and position requirements
+## Employee tasks and position requirements
 
-Release `2026.11.03-employee-work.1` adds **My work** with current tasks for the employee's position and a separate current-custody view. Cards use saved traveler checks and actual testing phases, including specific technician restrictions, required records and current completion blockers. Component, spool and assembly work remain attached to their own records. Opening an item places current required work and position steps before its route diagram. The item/QR screen provides **My tasks & requirements**. The overview is read-only and does not start routes or create completion evidence. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for employee navigation and scope.
+Release `2026.11.04-remove-my-work.1` simplifies navigation by removing the separate My work tab and overview. **Orders** is the default starting screen for every employee. Existing links to the former overview open **Process flow**, retaining any selected project or item.
+
+Open **My tasks & requirements** from an item/QR record to review the current required work and position steps before its route diagram. Requirements follow saved traveler checks and actual testing phases, including specific technician restrictions and required records. Component, spool and assembly work remain attached to their own records. Viewing requirements does not start routes or create completion evidence. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for employee navigation.
 
 ## Required Assembly Number
 

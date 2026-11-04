@@ -40,7 +40,7 @@ context.api=async(url,options={})=>{
 };
 const visible=id=>!el(id).classes.has('hidden');
 const writes=()=>calls.filter(call=>call.method);
-async function signIn(role){selectedRole=role;const before=routes.length;await context.refreshAuth();assert.equal(routes.length,before+1,'sign-in opens one landing view');assert.deepEqual(routes.at(-1),['admin','supervisor'].includes(role)?{name:'OrderSetup'}:{name:'Flow',view:'work',workScope:'position',resetFilters:true},role+' default landing');await context.openItem('SYNTHETIC-ITEM')}
+async function signIn(role){selectedRole=role;const before=routes.length;await context.refreshAuth();assert.equal(routes.length,before+1,'sign-in opens one landing view');assert.deepEqual(routes.at(-1),{name:'OrderSetup'},role+' default landing remains Orders');await context.openItem('SYNTHETIC-ITEM')}
 (async()=>{
  for(const {id:role} of allRoles){
   await signIn(role);
@@ -55,14 +55,14 @@ async function signIn(role){selectedRole=role;const before=routes.length;await c
   assert.equal(visible('transferBtn'),true,role+' ordinary custody handoff');
   assert.ok(el('userTop').innerHTML.includes(policy(role).label.replace('&','&amp;')),role+' readable position label');
  }
- assert.match(html,/<button id="navMyWork" type="button">My work<\/button>/,'My work is a primary entry point');
+ assert.doesNotMatch(html,/navMyWork/,'My work has no navigation button or stale shell binding');
  assert.match(html,/<h2>Item identification<\/h2><button id="itemFlowBtn" type="button" class="primary">My tasks &amp; requirements<\/button>/,'QR/item users see their requirements beside item identification');
  assert.equal((html.match(/id="itemFlowBtn"/g)||[]).length,1,'the existing item flow action remains unique');
  selectedRole='painter';
  vm.runInContext("params.set('flow','1');params.set('item','SYNTHETIC-ITEM');params.set('project','UI-TEST');params.set('view','work');params.set('work_scope','custody')",context);
- await context.refreshAuth();assert.deepEqual(routes.at(-1),{name:'Flow',item:'SYNTHETIC-ITEM',project:'UI-TEST',view:'work',workScope:'custody'},'a work deep link retains exact item, project and custody scope');
+ await context.refreshAuth();assert.deepEqual(routes.at(-1),{name:'Flow',item:'SYNTHETIC-ITEM',project:'UI-TEST'},'a former work deep link opens the ordinary flow record and retains item/project');
  vm.runInContext("params.delete('view');params.set('work_scope','invalid')",context);
- await context.refreshAuth();assert.deepEqual(routes.at(-1),{name:'Flow',item:'SYNTHETIC-ITEM',project:'UI-TEST',view:'board',workScope:'position'},'existing flow deep links keep the all-work board and normalize invalid scope');
+ await context.refreshAuth();assert.deepEqual(routes.at(-1),{name:'Flow',item:'SYNTHETIC-ITEM',project:'UI-TEST'},'ordinary flow links ignore obsolete work scope');
  vm.runInContext("params.delete('flow');params.delete('item');params.delete('project');params.delete('work_scope')",context);
  await signIn('painter');const beforeDenied=writes().length;await el('weldBtn').onclick();await el('inspectBtn').onclick();await el('releaseBtn').onclick();await el('navNew').onclick();
  assert.equal(el('dlg').open,false,'unavailable controls cannot open mutation dialogs through programmatic clicks');assert.equal(writes().length,beforeDenied);
@@ -114,5 +114,5 @@ async function signIn(role){selectedRole=role;const before=routes.length;await c
  assert.equal(context.FabPermissions.can('admin'),false,'failed authentication clears stale capability grants');
  context.api=originalApi;
  assert.equal(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),html,'both HTML entrypoints stay identical');
- console.log('PASS: controls and navigation for 10 current positions and 2 retained historical roles; trades land on My work and managers on Orders; flow deep links retain work scope and item context; item requirements are prominent; server denial is authoritative; current-only employee selection; exact retained owner options; ordinary badge transfers remain available; missing capabilities fail closed.');
+ console.log('PASS: controls and navigation for 10 current positions and 2 retained historical roles; all employees land on Orders; former work links retain item/project in ordinary Process flow; My work navigation is absent and per-item requirements remain prominent; server denial is authoritative; current-only employee selection; exact retained owner options; ordinary badge transfers remain available; missing capabilities fail closed.');
 })().catch(error=>{console.error(error);process.exitCode=1});
