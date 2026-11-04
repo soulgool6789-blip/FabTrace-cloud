@@ -95,6 +95,10 @@ The current testing traveler owns its phase transitions. Pause/resume follows th
 
 ## Requirement evidence and QA acceptance
 
+The personal **QA/QC review tasks** panel is shown only to the QA/QC position. This presentation does not remove administrators' existing QA authority or other positions' production, report, handoff, timer and corrective-work controls.
+
+A failed traveler inspection returns to its preceding production step with the original spool errors. The employee authorized for that production step must record the corrective action before QA can pass reinspection; QA then records its own reinspection resolution. Receiving material/arrival corrections require a Material coordinator, Shop Foreman or administrator and a separate QA/QC decision. Individual Pass and PASS ALL both enforce the correction requirement. Testing corrections keep the exact original technician restriction described above. Workflow returns preserve actual custody and station records until a physical handoff is recorded.
+
 The responsible position on a tracking requirement controls who may submit evidence. An employee may submit evidence assigned to their position. Pressure Testing Technician and NDT have separate ownership: one does not automatically inherit the other's requirements. A retained legacy Welder may also submit evidence assigned to Fit-up welder or Process welder. Specialists do not automatically inherit the general Welder assignment; select their actual responsible position in the controlled requirement/template when appropriate.
 
 Administrators, Shop Foremen and QA/QC may coordinate evidence submission across positions. Only QA/QC or an administrator may accept or reject it. Existing requirements retain their assigned position; default inspector-owned requirements appear as QA/QC responsibilities. A reference or reported passing result is still evidence awaiting review, not acceptance.

@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from conftest import BADGES
-from receiving_helpers import (accept_arrival, receiving_detail, save_receiving_materials,
+from receiving_helpers import (accept_arrival, receiving_detail, record_receiving_rework, save_receiving_materials,
                                upload_receiving_bom)
 from test_material_piece_qa import decide, edit_piece
 from test_order_labels import public_qr_url
@@ -90,8 +90,12 @@ def test_reviewed_fail_and_stale_pass_can_be_reinspected_together(api):
     passed = ok(decide(api, 'BULK-QA-01', failed['traceability']['materials'][1]), 201)
     changed = edit_piece(api, 'BULK-QA-01', 1, heat_number='NEW-CHECKED-HEAT')
     assert [row['qa001']['status'] for row in changed['traceability']['materials']] == ['failed', 'needs_reinspection']
-    assert all(not row['qa001']['pass_blockers'] for row in changed['traceability']['materials'])
-    result = ok(pass_all(api, 'BULK-QA-01', pass_all_body(changed)))
+    assert changed['traceability']['materials'][0]['qa001']['pass_blockers']
+    assert not changed['traceability']['materials'][1]['qa001']['pass_blockers']
+    assert pass_all(api, 'BULK-QA-01', pass_all_body(changed)).status_code == 409
+    corrected = ok(record_receiving_rework(api, 'BULK-QA-01',
+        piece_key=changed['traceability']['materials'][0]['piece_key']), 201)
+    result = ok(pass_all(api, 'BULK-QA-01', pass_all_body(corrected)))
     assert result['qa001_bulk_result']['passed_count'] == 2
     assert [row['qa001']['version'] for row in result['traceability']['materials']] == [2, 2]
     history = ok(api.get(result['traceability']['materials'][0]['qa001']['history_url']))

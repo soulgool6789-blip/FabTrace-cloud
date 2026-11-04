@@ -10,7 +10,7 @@ from sqlalchemy import select
 from conftest import BADGES
 from test_order_labels import public_qr_url
 from tracking_helpers import ok, make_spool
-from receiving_helpers import (CHECKS, accept_arrival, adopt_current_bom, approve_materials, receiving_detail, record_arrival,
+from receiving_helpers import (CHECKS, accept_arrival, adopt_current_bom, approve_materials, receiving_detail, record_arrival, record_receiving_rework,
                                save_receiving_materials, upload_receiving_bom)
 from test_progress import database_state
 
@@ -97,6 +97,9 @@ def test_heat_edit_stales_pass_fail_remains_until_new_qa_pass_and_all_history_su
     corrected = save_receiving_materials(api, item_id, heat='HEAT-VERIFIED')
     assert corrected['arrival']['status'] == 'failed'
     approve_materials(api, item_id)
+    assert record_arrival(api, item_id).status_code == 409
+    ok(record_receiving_rework(api, item_id,
+        description='Verified the supplier evidence and corrected the material heat marking'), 201)
     passed = ok(record_arrival(api, item_id, notes='Supplier evidence checked and material marking verified'), 201)
     assert passed['arrival']['can_proceed']
     assert [row['result'] for row in passed['arrival']['history']] == ['Pass', 'Fail', 'Pass']

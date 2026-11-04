@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from conftest import BADGES
+from test_progress import database_state
 from test_flow import (ROOT, completed_spool, create_item, detail, enroll,
                        inspect_dimensions, link_spool)
 from tracking_helpers import (accept_weld, add_weld, approve, complete_weld,
@@ -79,6 +80,24 @@ def fail_body(api, item_id, **values):
 
 def fail(api, item_id, **values):
     return ok(api.post(f'{ROOT}/items/{item_id}/fail', fail_body(api, item_id, **values), role='inspector'))
+
+
+def assert_inherited_test_defect(api, child_id, parent_id, exception_id, defect, qa_step, return_step, *, corrected_by=None):
+    child = detail(api, child_id)
+    assert child['flow']['status'] == 'completed' and child['flow']['current_step'] is None
+    assert child['exceptions'] == [], 'An assembly failure must not duplicate or reopen the completed spool traveler'
+    context = child['rework']
+    assert context['source_item_id'] == parent_id and context['inherited'] is True
+    row = next(value for value in context['defects'] if value['id'] == exception_id)
+    assert row['reason'] == defect
+    assert (row['display_step'], row['return_display_step']) == (qa_step, return_step)
+    assert row['needs_completion'] is (corrected_by is None)
+    if corrected_by is None:
+        assert row['completion'] is None
+    else:
+        assert row['completion']['actor'] == BADGES[corrected_by]
+        assert row['completion']['description'] == 'Corrected the failed test setup and verified the approved procedure'
+    return child
 
 
 def to_ndt_qa(api, item_id):
@@ -192,14 +211,30 @@ def test_failed_report_returns_exact_sender_and_requires_correction_then_fresh_t
     false_pass = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id), role='inspector')
     assert false_pass.status_code == 409, false_pass.text
     before = detail(api, item_id)
-    for values in ({'receiver_badge': BADGES['pressure_testing_technician']}, {'location_id': 'floor'}, {'return_step': 17}):
+    unchanged = database_state(api)
+    legacy_fail = api.post(f'/api/items/{item_id}/inspect', {
+        'kind': 'Dimensional', 'result': 'Fail', 'report': 'LEGACY-NDT-FAIL',
+        'measurements': 'A dimensional failure must use the active testing return and correction procedure'}, role='inspector')
+    assert legacy_fail.status_code == 409, legacy_fail.text
+    assert database_state(api) == unchanged
+    for values in ({'receiver_badge': BADGES['pressure_testing_technician']}, {'location_id': 'floor'}, {'return_step': 17},
+                   {'reason': ''}, {'reason': '   '}, {'reference': ''}):
         response = api.post(f'{ROOT}/items/{item_id}/fail', fail_body(api, item_id, **values), role='inspector')
         assert response.status_code == 422, response.text
     assert detail(api, item_id)['events'] == before['events']
-    failed = fail(api, item_id)
+    child_id = before['spools'][0]['item_id']
+    child_events = detail(api, child_id)['events']
+    defect = 'NDT indication at child spool ' + child_id + ': repair the indicated joint before retesting.'
+    failed = fail(api, item_id, reason=defect)
     assert failed['flow']['testing']['phase'] == 'ndt_rework'
     assert failed['item']['handler'] == BADGES['ndt'] and failed['item']['location'] == 'Testing'
     assert failed['exceptions'][-1]['closed_at'] is None
+    exception_id = failed['exceptions'][-1]['id']
+    assert failed['exceptions'][-1]['reason'] == defect
+    assert failed['events'][-1]['notes'] == defect
+    assert failed['events'][-1]['data']['exception_id'] == exception_id
+    inherited = assert_inherited_test_defect(api, child_id, item_id, exception_id, defect, 19, 18)
+    assert inherited['events'] == child_events
     bypass = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id, testing_decision='NO'), role='ndt')
     assert bypass.status_code == 422, bypass.text
     missing = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id, resolution=''), role='ndt')
@@ -207,13 +242,21 @@ def test_failed_report_returns_exact_sender_and_requires_correction_then_fresh_t
     corrected = advance(api, item_id, role='ndt')
     assert corrected['flow']['testing']['attempt'] == 2 and corrected['flow']['testing']['phase'] == 'ndt'
     assert corrected['exceptions'][-1]['closed_at'] is None
+    assert corrected['exceptions'][-1]['reason'] == defect
+    assert_inherited_test_defect(api, child_id, item_id, exception_id, defect, 19, 18, corrected_by='ndt')
     report(api, item_id)
     no_dimensions = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id), role='inspector')
     assert no_dimensions.status_code == 409, no_dimensions.text
     inspect_dimensions(api, item_id)
     passed = advance(api, item_id, role='inspector')
     assert passed['exceptions'][-1]['closed_by'] == BADGES['inspector']
+    assert passed['exceptions'][-1]['id'] == exception_id
+    assert passed['exceptions'][-1]['reason'] == defect
+    assert next(event for event in passed['events'] if event['action'] == 'fail'
+                and event['data'].get('exception_id') == exception_id)['notes'] == defect
     assert passed['flow']['testing']['pending_exception_ids'] == []
+    child = detail(api, child_id)
+    assert child['rework'] is None and child['events'] == child_events
 
 
 def test_repeated_failures_close_only_the_explicit_corrected_test_chain(api):
@@ -262,27 +305,40 @@ def test_setup_scope_freezes_after_decision_but_repairs_are_allowed_during_corre
         flow.guard_weld_operation(session, item, 'fitup')
 
 
-def test_final_qa_return_restarts_a_required_cycle_and_cannot_jump_to_generic_test_qa(api):
+def test_final_qa_failure_returns_to_paint_and_requires_correction_before_reinspection(api):
     item_id = assembly(api)
     finish_tests(api, item_id)
     advance(api, item_id, role='handler')
     advance(api, item_id, role='painter')
     current = detail(api, item_id)
     assert current['flow']['current_step'] == 22
-    assert current['flow']['current']['return_steps'] == [17, 20, 21]
-    for target in (18, 19):
+    assert current['flow']['current']['return_steps'] == [21]
+    for target in (17, 18, 19, 20):
         response = api.post(f'{ROOT}/items/{item_id}/fail', {
             'expected_version': current['flow']['version'], 'return_step': target,
             'reason': 'Coating acceptance needs a construction review', 'reference': 'FINAL-FAIL'}, role='inspector')
         assert response.status_code == 422, response.text
     returned = ok(api.post(f'{ROOT}/items/{item_id}/fail', {
-        'expected_version': current['flow']['version'], 'return_step': 17,
-        'reason': 'Construction correction requires the testing route again', 'reference': 'FINAL-FAIL'}, role='inspector'))
-    assert returned['flow']['testing']['cycle'] == 2
-    assert returned['flow']['testing']['phase'] == 'decision'
+        'expected_version': current['flow']['version'], 'return_step': 21,
+        'reason': 'Coating coverage is incomplete and requires correction', 'reference': 'FINAL-FAIL'}, role='inspector'))
+    assert returned['flow']['current_step'] == 21
+    assert returned['flow']['testing']['cycle'] == 1
+    assert returned['flow']['testing']['phase'] == 'complete'
     assert 'scope' not in returned['allowed_actions'] and 'link-spool' not in returned['allowed_actions']
-    no = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id, testing_decision='NO'), role='handler')
-    assert no.status_code == 409, no.text
+    missing = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id), role='painter')
+    assert missing.status_code == 422, missing.text
+    corrected = advance(api, item_id, role='painter',
+        resolution='Corrected the incomplete coating coverage and verified the repair', reference='PAINT-REWORK-01')
+    assert corrected['flow']['current_step'] == 22
+    assert corrected['exceptions'][-1]['closed_at'] is None
+    blocked = api.post(f'{ROOT}/items/{item_id}/advance', body(api, item_id,
+        resolution='Attempted review before fresh dimensional inspection', reference='EARLY-FINAL-REVIEW'), role='inspector')
+    assert blocked.status_code == 409 and 'dimensional' in blocked.text.lower(), blocked.text
+    inspect_dimensions(api, item_id)
+    passed = advance(api, item_id, role='inspector',
+        resolution='Reinspected and accepted the completed coating correction', reference='FINAL-COATING-REVIEW')
+    assert passed['flow']['current_step'] == 23 and passed['item']['released'] is True
+    assert passed['exceptions'][-1]['closed_by'] == BADGES['inspector']
 
 
 def test_future_pressure_requirement_defers_only_until_its_qa_and_reviews_do_not_stale_reports(api):
@@ -321,11 +377,33 @@ def test_pressure_failure_returns_to_pressure_sender_and_retests_same_kind(api):
     to_ndt_qa(api, item_id)
     advance(api, item_id, role='inspector')
     advance(api, item_id, role='handler')
-    report(api, item_id, kind='pressure')
-    failed = fail(api, item_id)
+    reviewed = report(api, item_id, kind='pressure')
+    unchanged = database_state(api)
+    legacy_fail = api.post(f'/api/items/{item_id}/inspect', {
+        'kind': 'Dimensional', 'result': 'Fail', 'report': 'LEGACY-PRESSURE-FAIL',
+        'measurements': 'A pressure review failure must retain its exact testing employee and station return'}, role='inspector')
+    assert legacy_fail.status_code == 409, legacy_fail.text
+    assert database_state(api) == unchanged
+    for missing in ('', '   '):
+        response = api.post(f'{ROOT}/items/{item_id}/fail', fail_body(api, item_id, reason=missing), role='inspector')
+        assert response.status_code == 422, response.text
+    assert detail(api, item_id)['events'] == reviewed['events']
+    child_id = reviewed['spools'][0]['item_id']
+    child_events = detail(api, child_id)['events']
+    defect = 'Pressure loss at child spool ' + child_id + ': locate and correct the leak before the next pressure test.'
+    failed = fail(api, item_id, reason=defect)
     assert failed['flow']['testing']['phase'] == 'pressure_rework'
     assert failed['item']['handler'] == BADGES['pressure_testing_technician']
-    advance(api, item_id, role='pressure_testing_technician')
+    exception_id = failed['exceptions'][-1]['id']
+    assert failed['exceptions'][-1]['reason'] == defect
+    assert failed['events'][-1]['notes'] == defect
+    assert failed['events'][-1]['data']['exception_id'] == exception_id
+    inherited = assert_inherited_test_defect(api, child_id, item_id, exception_id, defect, 22, 21)
+    assert inherited['events'] == child_events
+    corrected = advance(api, item_id, role='pressure_testing_technician')
+    assert corrected['exceptions'][-1]['reason'] == defect
+    assert corrected['exceptions'][-1]['closed_at'] is None
+    assert_inherited_test_defect(api, child_id, item_id, exception_id, defect, 22, 21, corrected_by='pressure_testing_technician')
     inspect_dimensions(api, item_id)
     repeated = report(api, item_id, kind='pressure')
     assert repeated['flow']['testing']['attempt'] == 2
@@ -333,6 +411,13 @@ def test_pressure_failure_returns_to_pressure_sender_and_retests_same_kind(api):
     passed = advance(api, item_id, role='inspector')
     assert passed['flow']['testing']['phase'] == 'floor_before_paint'
     assert passed['exceptions'][-1]['closed_at']
+    assert passed['exceptions'][-1]['id'] == exception_id
+    assert passed['exceptions'][-1]['reason'] == defect
+    assert passed['exceptions'][-1]['closed_by'] == BADGES['inspector']
+    assert next(event for event in passed['events'] if event['action'] == 'fail'
+                and event['data'].get('exception_id') == exception_id)['notes'] == defect
+    child = detail(api, child_id)
+    assert child['rework'] is None and child['events'] == child_events
 
 
 def test_changed_source_after_qa_blocks_paint_and_controlled_restart_preserves_testing(api):

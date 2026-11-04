@@ -6,7 +6,7 @@ import pytest
 
 from conftest import BADGES
 from station_helpers import move
-from test_flow import (ROOT, action_body, advance as advance_step, completed_spool,
+from test_flow import (PROJECT, ROOT, action_body, advance as advance_step, completed_spool,
                        create_item, detail, enroll, inspect_dimensions, link_spool)
 from test_flow_testing import advance, body, decide
 from test_progress import database_state
@@ -42,26 +42,48 @@ def test_a_new_catalog_cannot_start_inside_an_unrecorded_testing_phase(api, step
     assert detail(api, item_id)['flow'] is None
 
 
-def test_new_late_baseline_return_to_testing_requires_a_fresh_explicit_decision(api):
+def test_new_late_baseline_failure_requires_paint_rework_without_inventing_test_results(api):
     item_id = create_item(api, 'CATALOG-LATE-BASELINE', kind='Assembly')
+    child = create_item(api, 'CATALOG-LATE-CHILD', kind='Spool')
+    child_plan = ok(api.get(f'/api/tracking/spools/{child}'))['plan']
+    ok(api.post(f'/api/tracking/spools/{child}/plan', {
+        'project_id': PROJECT, 'assembly_id': item_id, 'planned_welds': 0,
+        'expected_version': child_plan['version'],
+        'zero_weld_reason': 'The approved child spool has no welded joints'}))
+    enroll(api, child, 'spool', start_step=15)
+    inspect_dimensions(api, child)
+    advance_step(api, child, role='inspector')
+    advance_step(api, child)
     baseline = enroll(api, item_id, 'assembly', start_step=22, expected_children=1)
     assert baseline['flow']['testing'] is None
-    assert baseline['flow']['current']['return_steps'] == [17, 20, 21]
+    assert baseline['flow']['current']['return_steps'] == [21]
     payload = {'expected_version': baseline['flow']['version'],
-        'reason': 'Final inspection found a condition requiring fresh testing',
+        'reason': 'Final inspection found incomplete coating coverage',
         'reference': 'CONTROLLED-FINAL-NCR'}
-    for target in (18, 19):
+    for target in (17, 18, 19, 20):
         reject_without_writes(api, item_id, {**payload, 'return_step': target},
                               422, role='inspector', action='fail')
     returned = ok(api.post(f'{ROOT}/items/{item_id}/fail',
-        {**payload, 'return_step': 17}, role='inspector'))
-    assert returned['flow']['current_step'] == 17
-    assert returned['flow']['testing']['active']
-    assert returned['flow']['testing']['phase'] == 'decision'
-    assert returned['flow']['testing']['decision'] is None
+        {**payload, 'return_step': 21}, role='inspector'))
+    assert returned['flow']['current_step'] == 21
+    assert returned['flow']['testing'] is None
+    assert returned['rework']['required_display_step'] == 25
     assert returned['events'][:len(baseline['events'])] == baseline['events']
     assert not any(row['data'].get('test_result') for row in returned['events'])
-    reject_without_writes(api, item_id, body(api, item_id), 422)
+    reject_without_writes(api, item_id, action_body(api, item_id), 422, role='painter')
+    corrected = advance_step(api, item_id, role='painter',
+        resolution='Reapplied the incomplete coating to the required coverage')
+    assert corrected['flow']['current_step'] == 22
+    assert corrected['exceptions'][-1]['closed_at'] is None
+    review = action_body(api, item_id, resolution='Reinspected the repaired coating and dimensions')
+    reject_without_writes(api, item_id, review, 409, role='inspector')
+    inspect_dimensions(api, item_id)
+    passed = advance_step(api, item_id, role='inspector',
+        resolution='Reinspected and accepted the repaired coating and dimensions')
+    assert passed['item']['released'] is True
+    assert passed['flow']['testing'] is None
+    assert passed['rework'] is None
+    assert not any(row['data'].get('test_result') for row in passed['events'])
 
 
 @pytest.mark.parametrize('legacy', [False, True], ids=['current-25', 'retained-24'])

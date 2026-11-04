@@ -179,3 +179,11 @@
 @media(max-width:600px){#spoolBomDialog .fbom-bulk-qa{padding:14px}#spoolBomDialog #fbomPassAll .actions>button{flex:1 1 160px}#spoolBomDialog .fbom-piece-pass-blockers button,#spoolBomDialog .fbom-bulk-blockers button{margin:5px 0 0}}
 @media(max-width:600px){#spoolBomDialog .fbom-piece-qa-radios>label{flex:1;min-width:90px}#spoolBomDialog .fbom-piece-qa-form{padding:12px}#spoolBomDialog .fbom-piece-qa-form .actions>button{flex:1 1 130px}#spoolBomDialog .fbom-piece-qa-last{align-items:flex-start;flex-direction:column}}
 @media(max-width:600px){#spoolBomDialog{max-height:calc(100dvh - 18px);width:calc(100vw - 16px);max-width:calc(100vw - 16px)}#spoolBomDialog .fbom-head{padding:12px 14px}#spoolBomDialog #spoolBomBack{margin-bottom:9px}#spoolBomDialog .fbom-arrival{padding:14px}#spoolBomDialog .fbom-section-heading{gap:9px}#spoolBomDialog .fbom-section-heading>div{flex-basis:100%}#spoolBomDialog .fbom-section-heading>button{width:100%}#spoolBomDialog .fbom-role-note{max-width:none}#spoolBomDialog .fbom-files li{align-items:flex-start;flex-wrap:wrap}#spoolBomDialog .fbom-files li>div{margin-left:auto}#spoolBomDialog .fbom-files li>span{flex-basis:calc(100% - 32px)}#spoolBomDialog .fbom-mtr-upload>.actions>button,#spoolBomDialog .fbom-inspection .actions>button{flex:1 1 150px}#spoolBomDialog .fbom-context{margin:4px 0 17px}.item-spool-records{gap:14px}}
+
+#spoolBomDialog .fbom-rework{margin:18px 0;padding:18px;background:#fff9ef;border:1px solid #e5c69d;border-radius:9px;overflow-wrap:anywhere}
+#spoolBomDialog .fbom-rework h3{margin:0 0 8px;font-size:18px}
+#spoolBomDialog .fbom-rework>p{font-size:13px;line-height:1.5}
+#spoolBomDialog .fbom-rework-finding{padding:14px 0;border-top:1px solid #e5d4ba}
+#spoolBomDialog .fbom-rework-finding h4{margin:0 0 9px}
+#spoolBomDialog .fbom-rework-finding p{font-size:13px;line-height:1.5}
+#spoolBomDialog .fbom-rework-finding fieldset{border:0;padding:0;margin:12px 0 0}

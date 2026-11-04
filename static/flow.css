@@ -113,6 +113,15 @@
 #flowPage .ff-history p{font-size:13px;margin:5px 0}
 #flowPage .ff-history small{font-size:11px;color:var(--ff-muted)}
 #flowPage .ff-history pre{font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+#flowPage .ff-rework-card{border:1px solid #e2b983;border-left:5px solid #ae6514;background:#fffbf4}
+#flowPage .ff-rework-card h2{font-size:20px}
+#flowPage .ff-rework-card>p{font-size:14px;line-height:1.5}
+#flowPage .ff-rework-defect{margin-top:16px;padding-top:14px;border-top:1px solid #e5ceb0;break-inside:avoid}
+#flowPage .ff-rework-defect h3{font-size:16px;margin:0 0 9px}
+#flowPage .ff-rework-description{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.5}
+#flowPage .ff-rework-pending{color:#854709;font-size:13px}
+#flowPage .ff-rework-completion{padding:13px;border:1px solid #c5dcca;border-radius:8px;background:#f2f8f3}
+#flowDialog .ff-return-destination{padding:12px;border:1px solid #e2b983;border-radius:8px;background:#fff8ed;overflow-wrap:anywhere}
 #flowPage .ff-exception{border:1px solid #e8c79b;background:#fff9ed;border-radius:9px;padding:12px;margin:9px 0}
 #flowPage .ff-exception.closed{background:#f4f8f5;border-color:#cbded0}
 #flowPage .ff-exception p{font-size:13px;margin:6px 0}

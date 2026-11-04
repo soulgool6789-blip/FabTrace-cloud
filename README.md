@@ -8,11 +8,17 @@ Administrators must **reprint existing badges once** using individual badge prin
 
 **Admin controls → Employee accounts** includes **Replace sign-in badge** and **Disable badge sign-in**. Either action invalidates the old QR and signs that employee out of existing sessions. Deactivating or removing an account also invalidates its badge; after reactivation, issue a replacement. Regular reprints keep the current credential. Badge ID and PIN remain available as a fallback. Scan the employee badge inside the dedicated handoff fields to identify sender/receiver without changing the signed-in recorder.
 
-## Employee tasks and position requirements
+## QA/QC review tasks and mandatory rework
+
+Release `2026.11.04-qa-rework.1` limits the personal task panel to **QA/QC**. Inspectors choose **QA/QC reviews** on an item to see the checks and evidence for each applicable review, including separate NDT, pressure-test and final paint reviews. Other positions choose **Process flow** and keep their normal production, handoff, timing and correction controls. Administrators retain their existing review authority.
+
+A failed traveler review requires a description of the spool errors and a reference. The route returns to the preceding production step: material receiving, fit-up, welding, the applicable test, or sandblast/paint. The original findings stay visible, and the responsible production employee must record the completed rework before QA/QC can pass the reinspection. Completed corrections retain the employee, time, description and reference. New test attempts and fresh dimensional/evidence checks remain required where applicable. Returning a workflow does not invent a physical station transfer; record actual custody/location changes through the normal handoff.
+
+Failed receiving material and arrival reviews follow the same correction-before-reinspection rule. A Material coordinator, Shop Foreman or administrator records the completed receiving correction in **Materials & QA/QC**. QA/QC then records a separate new decision. Individual Pass and **PASS ALL** cannot bypass missing correction. Earlier open traveler failures can use **Return to production for rework** when offered, retaining their original history.
 
 Release `2026.11.04-remove-my-work.1` simplifies navigation by removing the separate My work tab and overview. **Orders** is the default starting screen for every employee. Existing links to the former overview open **Process flow**, retaining any selected project or item.
 
-Open **My tasks & requirements** from an item/QR record to review the current required work and position steps before its route diagram. Requirements follow saved traveler checks and actual testing phases, including specific technician restrictions and required records. Component, spool and assembly work remain attached to their own records. Viewing requirements does not start routes or create completion evidence. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for employee navigation.
+Component, spool and assembly work remain attached to their own records. A completed child spool shows its assembly's active findings and a link to the assembly without reopening the completed child traveler. Viewing requirements does not start routes or create completion evidence. See [ADMIN_GUIDE.md](ADMIN_GUIDE.md) for employee navigation.
 
 ## Required Assembly Number
 

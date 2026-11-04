@@ -66,7 +66,7 @@ def station_positions(s, items, *, flows=None, plans=None):
     events = defaultdict(list)
     for row in s.scalars(select(FlowEvent).where(FlowEvent.item_id.in_(ids),
             FlowEvent.action.in_(('advance', 'assembly_link', 'custody_transfer',
-                                 'fail', 'reopen', 'admin_return_to_work')))
+                                 'fail', 'rework_return', 'reopen', 'admin_return_to_work')))
             .order_by(FlowEvent.item_id, FlowEvent.sequence)):
         events[row.item_id].append(row)
     audits = defaultdict(list)
@@ -99,7 +99,7 @@ def station_positions(s, items, *, flows=None, plans=None):
                 if event.step == last_step and (flow.route == 'spool' or prepared) and opened is None:
                     opened = [at, None]
                     intervals.append(opened)
-            elif event.action in ('fail', 'reopen', 'admin_return_to_work'):
+            elif event.action in ('fail', 'rework_return', 'reopen', 'admin_return_to_work'):
                 target = (event.data or {}).get('return_step', event.step)
                 if type(target) is int and target <= last_step:
                     if opened is not None:

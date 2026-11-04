@@ -27,7 +27,8 @@
   const now=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
   let clockTimer=null;
   const removed=()=>state.detail?.removal?.removed===true||state.detail?.item?.removal?.removed===true;
-  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action)&&(!['scope','link-spool'].includes(action)||!testingScopeFrozen())&&(action!=='advance'||!testingActorRestriction()&&state.detail?.work?.can_record!==false)&&(action!=='restart-testing'||canRestartTesting());
+  const qaReviewRole=()=>['inspector','admin'].includes(me?.role);
+  const can=action=>!removed()&&arr(state.detail?.allowed_actions).includes(action)&&(!['advance','fail','return-for-rework'].includes(action)||state.detail?.flow?.current?.qa!==true||qaReviewRole())&&(!['scope','link-spool'].includes(action)||!testingScopeFrozen())&&(action!=='advance'||!testingActorRestriction()&&state.detail?.work?.can_record!==false)&&(action!=='restart-testing'||canRestartTesting());
   const action=(name,label,id='',className='',spool=null)=>`<button type="button" class="${esc(className)}" data-flow-action="${esc(name)}"${id?` data-flow-id="${esc(id)}"`:''}>${spool?spoolText(spool,label):esc(label)}</button>`;
   const option=(value,label,selected='')=>`<option value="${esc(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
   const secondary=text=>`<span class="ff-secondary">${esc(text)}</span>`;
@@ -207,7 +208,7 @@
     const id='ff-field-'+name,common=`id="${esc(id)}" name="${esc(name)}"${settings.required?' required':''}${settings.disabled?' disabled':''}`;
     let control;
     if(settings.options)control=`<select ${common}>${settings.options.map(row=>option(row[0],row[1],value)).join('')}</select>`;
-    else if(settings.type==='textarea')control=`<textarea ${common}${settings.maxlength?` maxlength="${settings.maxlength}"`:''} rows="${settings.rows||3}">${esc(value)}</textarea>`;
+    else if(settings.type==='textarea')control=`<textarea ${common}${settings.maxlength?` maxlength="${settings.maxlength}"`:''}${settings.minlength?` minlength="${settings.minlength}"`:''} rows="${settings.rows||3}">${esc(value)}</textarea>`;
     else control=`<input ${common} type="${settings.type||'text'}" value="${esc(value)}"${settings.min!==undefined?` min="${settings.min}"`:''}${settings.max!==undefined?` max="${settings.max}"`:''}${settings.maxlength?` maxlength="${settings.maxlength}"`:''}${settings.minlength?` minlength="${settings.minlength}"`:''}${settings.placeholder?` placeholder="${esc(settings.placeholder)}"`:''}${settings.readonly?' readonly':''} autocomplete="off">`;
     return `<div class="field${settings.full?' ff-span':''}"><label for="${id}">${esc(label)}${settings.required?' *':''}</label>${control}${settings.help?`<span class="ff-form-help">${esc(settings.help)}</span>`:''}</div>`;
   }
@@ -286,12 +287,19 @@
   }
   function positionWork(){
     const detail=state.detail,flow=detail.flow,work=detail.work;
-    if(!flow)return '';
-    const steps=arr(flow.steps).filter(step=>arr(step.roles).includes(me?.role));
-    const own=work?.for_position===true,waiting=work?.pending===true&&!own;
-    let message=removed()?'This removed record is available for history only.':work?.restriction||
-      (waiting?`The current step belongs to ${arr(work.responsible_roles).map(roleLabel).join(' / ')}.`:own?'Review the required checks below and complete the work using the current-step form.':'Review the recorded and upcoming steps for your position on this route.');
-    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · ${esc(roleLabel(me?.role))}</div><h2>Your tasks & requirements</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${workRecords(work)}<details class="ff-fold"><summary>Steps for your position on this ${esc(routeNames[flow.route]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?`<ol class="ff-position-steps">${steps.map(step=>`<li><div><strong>${esc(chartStepNumber(step.number,flow.catalog_version,step.testing_phase||''))} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div><ul>${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.completed_at?` · ${esc(stamp(step.completed_at))}`:''}</p>`:''}</li>`).join('')}</ol>`:'<p class="ff-footer-note">This route currently has no numbered steps for your position. Related component and assembly work stays on its own record; testing duties appear when the required testing phase is reached.</p>'}</details></section>`;
+    if(!flow||me?.role!=='inspector')return '';
+    const current=flow.current,currentQa=current?.qa===true;
+    const steps=arr(flow.steps).map(step=>Number(step.number)===Number(current?.number)?{...step,...current}:step).filter(step=>step.qa===true);
+    const message=removed()?'This removed record is available for history only.':currentQa?work?.restriction||'Review this QA/QC hold point and its recorded evidence before recording PASS or FAIL.':current?`The current production step belongs to ${arr(current.roles).map(roleLabel).join(' / ')}. QA/QC review becomes available at the next QA hold point.`:'Review this route’s recorded QA/QC inspections and any unresolved defects.';
+    return `<section class="card ff-position-work"><div class="ff-section-head"><div><div class="ff-eyebrow">${esc(me?.name||me?.badge||'Employee')} · QA/QC</div><h2>QA/QC review tasks</h2></div>${work?.in_custody?tag('active','In your custody'):''}</div><p>${esc(message)}</p>${currentQa?workRecords(work):''}<details class="ff-fold"><summary>QA/QC hold points on this ${esc(routeNames[flow.route]?.toLowerCase()||'item')} (${steps.length})</summary>${steps.length?`<ol class="ff-position-steps">${steps.map(step=>`<li><div><strong>${esc(Number(step.number)===Number(current?.number)?currentStepNumber(current):chartStepNumber(step.number,flow.catalog_version,step.testing_phase||''))} · ${esc(step.title)}</strong>${tag(step.status,stepStatusNames[step.status]||'Not recorded')}</div><ul>${arr(step.checks).map(check=>`<li>${esc(check.label)}</li>`).join('')}</ul>${step.last_actor?`<p class="ff-secondary">Last recorded by ${esc(step.last_actor)}${step.completed_at?` · ${esc(stamp(step.completed_at))}`:''}</p>`:''}</li>`).join('')}</ol>`:'<p class="ff-footer-note">This route has no recorded QA/QC hold points. Related components, spools and assemblies keep their own inspection records.</p>'}</details></section>`;
+  }
+  function reworkSummary(){
+    const value=state.detail?.rework,defects=arr(value?.defects);
+    if(!value||!defects.length)return '';
+    const inherited=value.inherited===true,roles=arr(value.responsible_roles).map(roleLabel).join(' / '),target=value.required_display_step??value.required_step;
+    const description=inherited?'These defects are recorded on the parent assembly. Open its process record to complete the required rework and QA/QC reinspection.':value.requires_return?'Return this item to the required production step before recording the corrective work.':value.needs_completion?'The responsible production employee must record the completed corrective work before QA/QC can accept reinspection.':'Completed corrective work is recorded. QA/QC must verify it and pass the applicable reinspection before the defect can close.';
+    const controls=inherited&&value.source_item_id?action('item','Open parent assembly',value.source_item_id,'primary'):!inherited&&value.requires_return&&can('return-for-rework')?action('return-for-rework','Return to production for rework','','primary'):'';
+    return `<section class="card ff-rework-card" aria-labelledby="flowReworkTitle" data-rework-source="${esc(value.source_item_id)}"><div class="ff-section-head"><h2 id="flowReworkTitle">Open defects &amp; required rework</h2>${tag('rework',value.needs_completion?'Rework required':'Awaiting QA/QC reinspection')}</div><p>${esc(description)}</p>${metadata([['Work record',value.source_item_id],['Required production step',target==null?'Not verified':String(target)],['Responsible position',roles||'See the current production step']])}${controls?`<div class="actions">${controls}</div>`:''}${defects.map(defect=>`<article class="ff-rework-defect"><h3>QA/QC finding · step ${esc(defect.display_step??defect.step)}</h3><p class="ff-rework-description"><strong>Defect / required repair:</strong> ${esc(defect.reason)}</p>${metadata([['Return to production step',defect.return_display_step??defect.return_step],['Inspection / NCR reference',defect.reference],['Recorded by',defect.opened_by],['Recorded at',stamp(defect.opened_at)]])}${defect.completion?`<div class="ff-rework-completion"><strong>Recorded completed rework</strong><p class="ff-rework-description">${esc(defect.completion.description)}</p>${metadata([['Completed by',defect.completion.actor],['Completed at',stamp(defect.completion.at)],['Work reference',defect.completion.reference]])}<p class="ff-footer-note">QA/QC acceptance is still required for this open defect.</p></div>`:'<p class="ff-rework-pending"><strong>Completed rework has not been recorded.</strong></p>'}</article>`).join('')}</section>`;
   }
   function renderBoard(){
     const rows=visibleItems(),spools=visibleItems(false,state.spools);
@@ -352,7 +360,7 @@
     if(step.number===5)content+=field('target_spool_id','Assigned spool ID',state.detail.parent?.item_id||'',{required:true,maxlength:500,help:'This must match the spool linked to this component.'});
     if(step.requires_reference||testingReview())content+=field('reference',activeTesting()?.action==='complete'?testName(activeTesting())+' report reference':testingReview()?'QA/QC inspection / approval or NCR reference':activeTesting()?.action==='correct'?'Repair / corrective work record reference':step.number===18?'Hydro/UT test report / approval reference':step.qa?'Inspection report / approval reference':'PO, BOM, drawing, or record reference','',{required:true,minlength:2,maxlength:500,full:true});
     if(isShipmentStep(step))content+=field('carrier','Carrier','',{required:true,maxlength:160})+field('shipment_reference','Shipping document / tracking reference','',{required:true,maxlength:500})+field('destination','Destination / customer','',{required:true,maxlength:500,full:true});
-    if(needsResolution(step))content+=field('resolution',activeTesting()?.action==='correct'?'Completed rework and corrective action':'Rework resolution and reinspection findings','',{required:true,type:'textarea',full:true,maxlength:3000});
+    if(needsResolution(step))content+=field('resolution',step.qa?'QA/QC reinspection findings':'Completed rework and corrective action','',{required:true,type:'textarea',full:true,minlength:4,maxlength:3000});
     content+=field('notes','Work notes / measurements','',{type:'textarea',full:true,maxlength:3000});
     return fields(content);
   }
@@ -378,12 +386,13 @@
     html+=`<p class="ff-footer-note">Recorded by: ${arr(step.roles).map(value=>esc(roleLabel(value))).join(' · ')}</p>`;
     if(allowed)html+='<form id="flowStepForm"><div id="flowStepError" class="ff-error hidden" role="alert"></div>'+testingChoices();
     if(allowed&&testingReview())html+='<fieldset id="flowTestingPassChecks" class="ff-testing-pass-checks">';
-    html+=`<ul class="ff-checklist">${arr(step.checks).map(check=>`<li>${allowed?`<label><input type="checkbox" name="check_${esc(check.id)}" required> <span>${esc(check.label)}</span></label>`:`<span class="ff-check-read">${esc(check.label)}</span>`}</li>`).join('')}</ul>`;
+    if(!qa||qaReviewRole())html+=`<ul class="ff-checklist">${arr(step.checks).map(check=>`<li>${allowed?`<label><input type="checkbox" name="check_${esc(check.id)}" required> <span>${esc(check.label)}</span></label>`:`<span class="ff-check-read">${esc(check.label)}</span>`}</li>`).join('')}</ul>`;
+    else html+='<p class="ff-footer-note">QA/QC completes the inspection checklist and records the review decision at this hold point.</p>';
     if(allowed&&testingReview())html+='</fieldset>';
     if(allowed){
       html+=stepInputs(step)+testingFailureInputs(step)+`<div class="actions"><button id="flowAdvance" type="submit" class="primary"${blocked?' disabled':''}>${activeTesting()?esc(testingButton(activeTesting())):isShipmentStep(step)?'Record shipment':qa?'Pass inspection & continue':'Complete step '+currentStepNumber(step)}</button>${can('fail')&&!activeTesting()?action('fail',step.number===2?'Record failure / exception':'Record failed inspection'):''}</div></form>`;
     }else{
-      html+=`<p class="ff-footer-note">${esc(testingActorRestriction()||'An authorized employee can complete this step after checking the physical item and its records.')}</p>`;
+      html+=`<p class="ff-footer-note">${esc(detail.work?.restriction||testingActorRestriction()||'An authorized employee can complete this step after checking the physical item and its records.')}</p>`;
       if(can('fail')&&!activeTesting())html+=action('fail','Record failed inspection');
     }
     if(can('restart-testing'))html+=`<div class="actions">${action('restart-testing','Return to testing')}</div><p class="ff-footer-note">Start a new testing cycle when changed material or physical scope requires another review.</p>`;
@@ -414,12 +423,12 @@
     }).join(''):'<p class="muted">No process exceptions recorded.</p>'}</section>`;
   }
   function eventHistory(){
-    const labels={start:'Route started',adopt:'Existing work adopted',advance:'Step completed',fail:'Inspection failed',deliver:'Delivery recorded',assign_component:'Component assigned',link_spool:'Spool linked',shipment:'Shipment recorded'};
+    const labels={start:'Route started',adopt:'Existing work adopted',advance:'Step completed',fail:'Inspection failed',rework_return:'Returned to production for required rework',deliver:'Delivery recorded',assign_component:'Component assigned',link_spool:'Spool linked',shipment:'Shipment recorded'};
     const rows=arr(state.detail.events);
     return `<section class="card"><h2>Process history</h2>${rows.length?[...rows].reverse().map(row=>{
       const data=row.data||{},isTesting=data.testing_protocol==='CLM-TEST-v1',restarted=isTesting&&data.testing_action==='restart',phase=isTesting?testingPhaseName(restarted?data.next_phase:data.testing_phase,data.definition_version||'CLM-24-v6',restarted?null:data.step_definition):'',cycle=restarted?data.next_cycle:data.testing_cycle,attempt=restarted?null:data.testing_attempt,decision=restarted&&data.testing_required_preserved===true?'YES':data.testing_decision||data.decision,result=data.test_result;
       const recorded=isTesting?({decision:'Testing decision recorded',start:'Test receipt recorded',complete:'Technician test report recorded',review:'QA/QC result recorded',correct:'Completed rework recorded',handoff:'Floor handoff recorded',restart:'Returned to testing'})[data.testing_action]:null;
-      return `<div class="ff-history"><strong>${esc(recorded||labels[row.action]||String(row.action).replace(/_/g,' '))}${row.step?' · step '+esc(row.step):''}</strong>${data.step_definition?.title?`<p class="ff-recorded-step">${esc(data.step_definition.title)}</p>`:''}${isTesting?`<p>${esc(phase)}${Number.isInteger(cycle)&&cycle>1?' · Cycle '+cycle:''}${Number.isInteger(attempt)?' · Attempt '+attempt:''}${['YES','NO'].includes(decision)?' · Testing required: '+esc(decision):''}${['PASS','FAIL'].includes(result)?' · Result: '+esc(result):''}</p>`:''}${row.reference?`<p>Reference: ${esc(row.reference)}</p>`:''}${row.notes?`<p>${esc(row.notes)}</p>`:''}<small>${esc(row.actor)} · ${esc(stamp(row.at))}</small>${Object.keys(data).length?`<details><summary class="ff-footer-note">Recorded details</summary><pre>${esc(JSON.stringify(data,null,2))}</pre></details>`:''}</div>`;
+      return `<div class="ff-history"><strong>${esc(recorded||(arr(data.reworked_exception_ids).length?'Completed rework recorded':labels[row.action])||String(row.action).replace(/_/g,' '))}${row.step?' · step '+esc(row.step):''}</strong>${data.step_definition?.title?`<p class="ff-recorded-step">${esc(data.step_definition.title)}</p>`:''}${isTesting?`<p>${esc(phase)}${Number.isInteger(cycle)&&cycle>1?' · Cycle '+cycle:''}${Number.isInteger(attempt)?' · Attempt '+attempt:''}${['YES','NO'].includes(decision)?' · Testing required: '+esc(decision):''}${['PASS','FAIL'].includes(result)?' · Result: '+esc(result):''}</p>`:''}${row.reference?`<p>Reference: ${esc(row.reference)}</p>`:''}${row.notes?`<p>${esc(row.notes)}</p>`:''}${arr(data.reworked_exception_ids).length&&data.resolution?`<p class="ff-rework-description"><strong>Completed rework:</strong> ${esc(data.resolution)}</p>`:''}<small>${esc(row.actor)} · ${esc(stamp(row.at))}</small>${Object.keys(data).length?`<details><summary class="ff-footer-note">Recorded details</summary><pre>${esc(JSON.stringify(data,null,2))}</pre></details>`:''}</div>`;
     }).join(''):'<p class="muted">No route events recorded.</p>'}</section>`;
   }
   function timingHistory(){
@@ -438,6 +447,7 @@
     let html=heading(itemLabel(identity),item.kind||'Fabrication item',controls,isSpool(identity)?identity:null)+(flowStatus()?.strip(detail.stage_catalog||state.catalog.stage_catalog,detail.flow_stage)||'')+(flowStatus()?.legend(detail.stage_catalog||state.catalog.stage_catalog)||'')+lookup();
     if(removed())html+='<div class="fr-removed-notice"><strong>Removed record · History only</strong><p>Its process route, checks and timing are retained. Open Item &amp; QR record to review or restore its removed group.</p></div>';
     if(state.notice)html+=`<div class="ff-error" role="alert">${esc(state.notice)}</div>`;
+    html+=reworkSummary();
     if(!flow){
       html+=`<section class="card"><h2>Start a numbered process route</h2>${metadata([['Item type',item.kind],['Project',item.project],['Location',item.location],['Current handler',item.handler]])}<p>Components follow steps 1–8, spools follow 9–16, and assemblies follow 17–${catalogLast()}. Begin at the first step, or record a documented starting point for existing work.</p>${can('start')?action('start','Set up process route','','primary'):'<p class="muted">A Shop Foreman or administrator can start this item’s route.</p>'}</section>`;
       return html+'<section class="card"><h2>The fabrication flow</h2>'+renderMap(false)+'</section>';
@@ -502,7 +512,7 @@
       if(value?.requires_decision&&value.decision==='YES'&&values.testing_decision==='NO')throw Error('Testing remains required by the recorded YES decision. Select YES to continue this rework cycle.');
       if(value?.requires_result&&!['PASS','FAIL'].includes(values.test_result))throw Error('Choose PASS or FAIL for this test attempt.');
       if(failedTestReport(value)&&values.test_result==='PASS')throw Error('The technician’s report records FAIL. Record a QA/QC FAIL disposition, complete rework, and submit a fresh test before QA/QC PASS.');
-      if(value?.action==='review'&&values.test_result==='PASS'&&testingPassBlockers().length)throw Error('QA/QC PASS is blocked: '+testingPassBlockers().join(' '));
+      if(!qaFail&&step.qa&&arr(detail.flow.blockers).length)throw Error('QA/QC PASS is blocked: '+arr(detail.flow.blockers).join(' '));
       const confirmations=arr(step.checks).filter(check=>values['check_'+check.id]==='on').map(check=>check.id);
       if(!qaFail&&confirmations.length!==arr(step.checks).length)throw Error('Confirm every checklist item before completing this step.');
       const payload={expected_version:detail.flow.version,...testingPayload(value),...(!qaFail?{confirmations,notes:String(values.notes||'').trim()}:{test_result:'FAIL'})};
@@ -531,7 +541,7 @@
       if(step.number===5)payload.target_spool_id=await readId(values.target_spool_id,'Assigned spool ID');
       if(step.requires_reference||qaFail){payload.reference=String(values.reference||'').trim();if(payload.reference.length<2)throw Error('Enter the required record or inspection reference (at least two characters).');}
       if(isShipmentStep(step))for(const key of ['carrier','shipment_reference','destination']){payload[key]=String(values[key]||'').trim();if(!payload[key])throw Error('Enter the carrier, shipping reference, and destination.');}
-      if(!qaFail&&needsResolution(step)){payload.resolution=String(values.resolution||'').trim();if(payload.resolution.length<4)throw Error('Record the completed rework and reinspection findings (at least four characters).');}
+      if(!qaFail&&needsResolution(step)){payload.resolution=String(values.resolution||'').trim();if(payload.resolution.length<4)throw Error(step.qa?'Record the QA/QC reinspection findings (at least four characters).':'Record the completed rework and corrective action (at least four characters).');}
       if(qaFail){payload.reason=String(values.reason||'').trim();if(payload.reason.length<4)throw Error('Record the failure, required repair and nonconformance details (at least four characters).');}
       if(state.sequence!==sequence||state.item!==detail.item.id)return;
       await save(ROOT+'/items/'+encode(detail.item.id)+(qaFail?'/fail':'/advance'),payload);
@@ -582,13 +592,20 @@
   function failStep(){
     if(!can('fail'))return;
     if(activeTesting()){if(testingReview()&&node('ff-test_result-FAIL')){node('ff-test_result-PASS').checked=false;node('ff-test_result-FAIL').checked=true;updateTestingChoice();node('ff-field-reason')?.focus();}return;}
-    const detail=state.detail,step=detail.flow.current,choices=arr(step.return_steps);
-    dialog('Record failure · step '+currentStepNumber(step),'<p>The exception stays in the history. The item returns to the selected process and requires a new inspection before continuing.</p>'+fields(field('reason','Failure / nonconformance and required repair','',{required:true,type:'textarea',full:true,maxlength:3000})+field('reference','Inspection / NCR reference','',{required:true,maxlength:500,full:true})+field('return_step','Return to step',choices[0],{required:true,options:choices.map(number=>[number,`${chartStepNumber(number)} · ${definition(number)?.title||''}`])})),async values=>{
-      const payload={expected_version:detail.flow.version,reason:String(values.reason||'').trim(),reference:String(values.reference||'').trim(),return_step:Number(values.return_step)};
-      if(!payload.reason||!payload.reference)throw Error('Record the failure reason and inspection reference.');
-      if(!choices.includes(payload.return_step))throw Error('Choose an allowed return step.');
+    const detail=state.detail,step=detail.flow.current,choices=arr(step.return_steps),target=choices.length===1?choices[0]:null,previous=definition(target),sequence=state.sequence;
+    if(!Number.isInteger(target)||!previous)return notify('The required production return step could not be verified. Refresh the process record before recording FAIL.');
+    dialog('Record FAIL · step '+currentStepNumber(step),'<p>Record the defect and required repair. The item returns to its preceding production step. Completed rework must be recorded there before QA/QC can pass reinspection.</p>'+`<p class="ff-return-destination"><strong>Return for rework:</strong> Step ${esc(chartStepNumber(target))} · ${esc(previous.title)}</p>`+fields(field('reason','Defect / failure and required repair','',{required:true,type:'textarea',full:true,minlength:4,maxlength:3000})+field('reference','Inspection / NCR reference','',{required:true,minlength:2,maxlength:500,full:true})),async values=>{
+      if(state.sequence!==sequence||state.item!==detail.item.id)throw Error('The process record changed. Close this dialog and review the current step.');
+      const payload={expected_version:detail.flow.version,reason:String(values.reason||'').trim(),reference:String(values.reference||'').trim(),return_step:target};
+      if(payload.reason.length<4)throw Error('Describe the defect and required repair (at least four characters).');
+      if(payload.reference.length<2)throw Error('Record the inspection / NCR reference (at least two characters).');
       return save(ROOT+'/items/'+encode(detail.item.id)+'/fail',payload);
-    },'Record exception & return');
+    },'Record FAIL & return for rework');
+  }
+  async function returnForRework(){
+    const detail=state.detail,value=detail?.rework;
+    if(!can('return-for-rework')||!value||value.inherited===true||value.requires_return!==true||value.source_item_id!==detail.item.id)return;
+    return save(ROOT+'/items/'+encode(detail.item.id)+'/return-for-rework',{expected_version:detail.flow.version});
   }
   function editScope(){
     if(!can('scope'))return;
@@ -650,6 +667,7 @@
     if(name==='clear-step'){state.step='';render();return;}
     if(name==='start')return startFlow();
     if(name==='fail')return failStep();
+    if(name==='return-for-rework')return returnForRework();
     if(name==='scope')return editScope();
     if(name==='restart-testing')return restartTesting();
     if(name==='assign-component'||name==='link-spool')return linkItem(name);

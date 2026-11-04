@@ -145,12 +145,12 @@ def test_rejected_quality_step_invalidates_downstream_recorded_progress(api):
     ok(api.post(f"/api/flow/items/{item_id}/fail", {
         "expected_version": flow["flow"]["version"],
         "reason": "Synthetic final inspection found an assembly defect",
-        "reference": "PROGRESS-NCR-001", "return_step": 18,
+        "reference": "PROGRESS-NCR-001", "return_step": 21,
     }, role="inspector"))
     after = part(api, item_id)
-    assert after["completed_steps"] == 1
-    assert after["progress_percent"] == pytest.approx(12.5)
-    assert after["current_step"] == 18
+    assert after["completed_steps"] == 4
+    assert after["progress_percent"] == pytest.approx(50)
+    assert after["current_step"] == 21
     assert after["blocked"] and after["blockers"]
     assert not after["fabrication_finished"]
     assert len(flow_detail(api, item_id)["events"]) > len(flow["events"])

@@ -1,12 +1,18 @@
 # FabTrace administrator controls
 
-## Employee tasks and position requirements
+## QA/QC reviews and failed inspections
 
-Open a component, spool or assembly record and choose **My tasks & requirements**. Current required checks, scans, report references, handoffs and completion blockers appear with the existing completion form. A summary of recorded and upcoming steps for the employee's position appears before the route chart.
+Open a component, spool or assembly record and choose **QA/QC reviews** as a QA/QC employee, or **Process flow** for other positions. The personal **QA/QC review tasks** panel belongs only to QA/QC and lists its applicable reviews and their specific requirements. Administrators retain the review forms and existing authority. Other employees retain normal production completion, report, correction, handoff and timer controls.
+
+To fail a review, choose **Fail**, describe the actual spool errors and provide the inspection reference. The server returns the traveler to the preceding production step. The worker sees the original findings and must enter **Completed rework and corrective action** before advancing. QA/QC then performs the current checklist and records the reinspection decision and resolution. The prior Fail and separate correction record remain in history. At final inspection, fresh dimensional acceptance follows the paint correction; it cannot be substituted for the repair record. NDT and pressure failures keep their exact testing employee/station return and require a fresh test attempt before QA review.
+
+For material-piece or arrival failures, open **Materials & QA/QC**. **QA/QC-001 findings and rework** identifies the failed piece or spool, the reported errors and the required receiving correction. A Material coordinator, Shop Foreman or administrator records the actual completed repair/supplier correction and reference. A separate new QA/QC decision is still required; neither an individual Pass nor **PASS ALL** can clear an unresolved correction. This also applies to previously recorded failures. Earlier traveler failures already back at QA show **Return to production for rework** when a required corrective record is missing.
+
+Workflow returns do not record physical movement. Use the normal badge handoff when custody or location changes. On completed child spools, assembly findings appear with an **Open parent assembly** link; record the assembly's correction on that assembly.
 
 Employee position controls which work can be recorded. Custody is separately established by the recorded handoff. A testing report or mandatory correction can require the exact technician shown, even when another employee has the same position. Component, spool and assembly work remain on their own records.
 
-Every employee starts in **Orders** when signing in without a specific record link. **Process flow** opens the production board; an item or QR link opens the selected record. Current tasks follow saved route definitions and actual testing phases. Viewing requirements does not start routes, assign custody or record completion. Existing weld, material and Job Packet controls retain their own required evidence.
+Every employee starts in **Orders** when signing in without a specific record link. **Process flow** opens the production board; an item or QR link opens the selected record. QA/QC review tasks follow saved route definitions and actual testing phases. Viewing requirements does not start routes, assign custody or record completion. Existing weld, material and Job Packet controls retain their own required evidence.
 
 ## Change an employee's position
 

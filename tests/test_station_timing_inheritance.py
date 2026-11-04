@@ -46,7 +46,7 @@ def test_completed_child_retains_past_parent_visits_after_its_own_later_move(api
         assert [row['stage_key'] for row in parent_current['station_visits']] == ['floor', 'testing', 'welding', 'paint']
 
 
-@pytest.mark.parametrize('return_action', ['reopen', 'fail', 'admin_return_to_work'])
+@pytest.mark.parametrize('return_action', ['reopen', 'fail', 'rework_return', 'admin_return_to_work'])
 def test_parent_visits_follow_each_completion_interval_and_exclude_open_rework(api, return_action):
     from flow import FlowEvent, FlowPlan
     from flow_stations import station_positions

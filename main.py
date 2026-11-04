@@ -40,7 +40,7 @@ engine=create_engine(DATABASE_URL,pool_pre_ping=True)
 SessionLocal=sessionmaker(engine,expire_on_commit=False)
 password_hash=PasswordHash.recommended()
 UTC=dt.timezone.utc
-APP_VERSION='2026.11.04-badge-signin.1'
+APP_VERSION='2026.11.04-qa-rework.1'
 
 def utcnow(): return dt.datetime.now(UTC)
 class Base(DeclarativeBase): pass
@@ -497,6 +497,8 @@ class InspectionIn(BaseModel):
 def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Depends(db)):
     lock_flow_topology(s)
     permit(u,'inspector','admin');r=lock_item(s,item_id);require_unreleased(r)
+    if data.result=='Fail' and len(data.measurements.strip())<4:
+        raise HTTPException(422,'Describe the spool errors and required correction using at least four characters.')
     if is_tracked(s,r) and data.kind=='Weld':
         raise HTTPException(409,'Review each weld requirement in Projects & welds. Aggregate weld inspection cannot accept individual welds.')
     if data.kind=='Weld' and data.result=='Pass':
@@ -508,7 +510,9 @@ def inspect(item_id:str,data:InspectionIn,u:Employee=Depends(auth),s:Session=Dep
     else:r.weld=data.result;r.weld_at=t
     if data.result=='Fail':
         r.reinspection_due=True
-        s.add(Rework(item_id=r.id,kind=data.kind+' correction',reason=data.measurements,assigned=r.handler,opened_at=t))
+        from flow import record_inspection_failure
+        if not record_inspection_failure(s,r,u,data.measurements.strip(),data.report,t):
+            s.add(Rework(item_id=r.id,kind=data.kind+' correction',reason=data.measurements,assigned=r.handler,opened_at=t))
     elif r.dimensional=='Pass' and r.weld=='Pass' and not s.scalar(select(func.count()).select_from(Rework).where(Rework.item_id==r.id,Rework.closed_at.is_(None))):
         r.reinspection_due=False
     audit(s,r.id,u.badge,'INSPECTION',data.model_dump());s.commit();return item_dict(s,r,u)

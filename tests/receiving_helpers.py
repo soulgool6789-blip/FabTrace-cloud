@@ -49,6 +49,24 @@ def record_arrival(api, item_id, *, result='Pass', role='inspector', notes='Synt
         'checks': {check['key']: result == 'Pass' for check in detail['arrival']['checks_catalog']}}, role=role)
 
 
+def receiving_rework_body(detail, *, piece_key=None, **values):
+    """Explicit corrective evidence for one displayed failed inspection."""
+    qa = (next(row['qa001'] for row in detail['traceability']['materials'] if row['piece_key'] == piece_key)
+          if piece_key is not None else detail['arrival'])
+    finding = qa['rework']
+    assert finding is not None, 'Select an actual current failed receiving inspection'
+    return {'inspection_kind': 'material' if piece_key is not None else 'arrival',
+        'failure_id': finding['failure_id'], 'expected_version': finding['expected_version'],
+        'basis_sha256': qa['basis_sha256'],
+        'description': 'Completed the recorded receiving correction and returned the material for QA reinspection',
+        'reference': 'SYNTHETIC-RECEIVING-REWORK', **values}
+
+
+def record_receiving_rework(api, item_id, *, piece_key=None, role='handler', **values):
+    return api.post('/api/spool-boms/spools/' + item_id + '/receiving-rework',
+        receiving_rework_body(receiving_detail(api, item_id), piece_key=piece_key, **values), role=role)
+
+
 def approve_materials(api, item_id):
     """Use the real per-piece QA endpoint; never infer acceptance from fields."""
     detail = receiving_detail(api, item_id)

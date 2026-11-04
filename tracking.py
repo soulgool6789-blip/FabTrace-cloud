@@ -844,13 +844,15 @@ def _assembly_errors(s, item_id, project_id, assembly_id):
 
 
 @_snapshot_response
-def tracking_release_errors(s, item, *, requirement_stages=None, deferred_requirement_roles=()):
+def tracking_release_errors(s, item, *, requirement_stages=None, deferred_requirement_roles=(), require_dimensions=True):
     """Authoritative release gate for explicitly enrolled spools.
 
     Legacy aggregate Weld inspections cannot satisfy individual requirements.
     Dimensional inspection and legacy rework still apply at the spool level.
     A pre-final checkpoint may select explicit requirement stages. The default
     final-release gate always checks every stage, including final obligations.
+    A recorded paint correction can defer its own dimensional reinspection
+    until the next QA review; all other readiness evidence still applies.
     """
     plan = read_get(s, SpoolPlan, item.id)
     if not plan:
@@ -886,12 +888,13 @@ def tracking_release_errors(s, item, *, requirement_stages=None, deferred_requir
     for hold in _holds(s, item.id):
         if hold.closed_at is None:
             errors.append('Spool hold: ' + hold.reason)
-    if item.dimensional != 'Pass':
-        errors.append('Spool dimensional inspection must pass')
-    if item.dimension_at is None:
-        errors.append('Spool dimensional inspection timestamp missing')
-    elif not _after(item.dimension_at, item.last_work_at):
-        errors.append('Spool dimensional inspection predates latest work')
+    if require_dimensions:
+        if item.dimensional != 'Pass':
+            errors.append('Spool dimensional inspection must pass')
+        if item.dimension_at is None:
+            errors.append('Spool dimensional inspection timestamp missing')
+        elif not _after(item.dimension_at, item.last_work_at):
+            errors.append('Spool dimensional inspection predates latest work')
     if _snapshot(s, item.id)['open_rework']:
         errors.append('Open spool rework exists')
     from parts import parts_blockers

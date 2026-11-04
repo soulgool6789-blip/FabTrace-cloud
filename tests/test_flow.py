@@ -212,10 +212,11 @@ def test_catalog_covers_the_photo_routes_and_explicit_quality_and_shipping_point
         assert len({check["id"] for check in row["checks"]}) == len(row["checks"])
     for number in (2, 11, 15, 18, 22):
         assert set(steps[number - 1]["roles"]) == {"admin", "inspector"}
+    assert steps[1]["return_steps"] == [1]
     assert steps[10]["return_steps"] == [10]
     assert steps[14]["return_steps"] == [14]
-    assert set(steps[17]["return_steps"]) == {17, 18}
-    assert set(steps[21]["return_steps"]) == {17, 18, 19, 20, 21}
+    assert steps[17]["return_steps"] == [17]
+    assert steps[21]["return_steps"] == [21]
 
 
 def test_step2_reviews_available_documents_with_heat_and_mtr_deferred(api):
@@ -557,7 +558,10 @@ def test_numbered_steps_share_one_clock_and_rework_adds_a_new_visit(api, monkeyp
     }, role="inspector"))
     assert len(failed["production_process"]["visits"]) == 3
     assert failed["production_process"]["visits"][1]["elapsed_seconds"] == 30
-    now[0] += dt.timedelta(seconds=90)
+    now[0] += dt.timedelta(seconds=60)
+    returned = advance(api, item_id, role="handler", resolution="Replaced the incorrect material certificate")
+    assert_current(returned, 2)
+    now[0] += dt.timedelta(seconds=30)
     passed = advance(api, item_id, role="inspector", resolution="Correct material certificate reviewed and accepted")
     timing = passed["production_process"]
     assert timing["current"]["process_key"] == "clm_03"
@@ -565,7 +569,9 @@ def test_numbered_steps_share_one_clock_and_rework_adds_a_new_visit(api, monkeyp
     assert timing["totals"]["active_seconds"] == 180
     assert timing["totals"]["paused_seconds"] == 120
     material_qa = next(row for row in timing["by_process"] if row["process_key"] == "clm_02")
-    assert material_qa["visits"] == 2 and material_qa["elapsed_seconds"] == 120
+    assert material_qa["visits"] == 2 and material_qa["elapsed_seconds"] == 60
+    material_receiving = next(row for row in timing["by_process"] if row["process_key"] == "clm_01")
+    assert material_receiving["visits"] == 2 and material_receiving["elapsed_seconds"] == 240
     assert sum(row["ended_at"] is None for row in timing["visits"]) == 1
     assert all(left["ended_at"] == right["started_at"] for left, right in zip(timing["visits"], timing["visits"][1:]))
 
@@ -660,7 +666,7 @@ def test_spool_final_qa_requires_weld_acceptance_and_cannot_use_release_endpoint
 
 
 @pytest.mark.parametrize("route,kind,step,return_step", [
-    ("component", "Part", 2, 2),
+    ("component", "Part", 2, 1),
     ("spool", "Spool", 11, 10),
     ("spool", "Spool", 15, 14),
     ("assembly", "Assembly", 18, 17),
@@ -678,6 +684,11 @@ def test_quality_failure_opens_exception_and_routes_back_without_erasing_attempt
     assert_current(failed, return_step)
     assert len(failed["exceptions"]) == 1
     assert failed["exceptions"][0]["closed_at"] is None
+    assert failed["flow"]["current"]["requires_resolution"] is True
+    assert failed["rework"]["required_step"] == return_step
+    assert failed["rework"]["needs_completion"] is True
+    assert failed["rework"]["defects"][0]["reason"] == "Test nonconformance requires documented rework"
+    assert failed["rework"]["defects"][0]["completion"] is None
     assert len(failed["events"]) > len(current["events"])
     assert failed["events"][:len(current["events"])] == current["events"]
     assert len(failed["production_process"]["visits"]) == 2
@@ -687,15 +698,136 @@ def test_quality_failure_opens_exception_and_routes_back_without_erasing_attempt
 def test_passing_failed_material_check_requires_documented_resolution(api):
     item_id = create_item(api, "FLOW-RESOLUTION")
     current = enroll(api, item_id, "component", start_step=2)
-    ok(api.post(f"{ROOT}/items/{item_id}/fail", {
+    failed = ok(api.post(f"{ROOT}/items/{item_id}/fail", {
         "expected_version": current["flow"]["version"], "reason": "Dimensions outside test tolerance",
         "reference": "TEST-NCR-DIMENSIONS",
     }, role="inspector"))
-    response = api.post(f"{ROOT}/items/{item_id}/advance", action_body(api, item_id), role="inspector")
-    assert response.status_code in (409, 422), response.text
+    assert_current(failed, 1)
+    exception_id = failed["exceptions"][0]["id"]
+    route = f"{ROOT}/items/{item_id}/advance"
+    assert api.post(route, action_body(api, item_id), role="inspector").status_code == 403
+    response = api.post(route, action_body(api, item_id), role="handler")
+    assert response.status_code == 422, response.text
+    repaired = advance(api, item_id, role="handler", resolution="Replaced the component with one matching drawing dimensions")
+    assert_current(repaired, 2)
+    assert repaired["exceptions"][0]["closed_at"] is None
+    assert repaired["rework"]["needs_completion"] is False
+    correction = repaired["rework"]["defects"][0]["completion"]
+    assert correction["actor"] == BADGES["handler"]
+    assert correction["description"] == "Replaced the component with one matching drawing dimensions"
+    assert repaired["events"][-1]["data"]["reworked_exception_ids"] == [exception_id]
+    assert repaired["events"][:len(failed["events"])] == failed["events"]
+    assert api.post(route, action_body(api, item_id), role="inspector").status_code == 422
     passed = advance(api, item_id, role="inspector", resolution="Replacement component inspected to the correct drawing dimensions")
     assert_current(passed, 3)
     assert passed["exceptions"][0]["closed_at"]
+    assert passed["rework"] is None
+
+
+def test_a_repeat_qa_failure_requires_new_correction_evidence_for_its_own_findings(api):
+    item_id = create_item(api, "FLOW-REPEAT-FAILURE")
+    current = enroll(api, item_id, "component", start_step=2)
+    first = ok(api.post(f"{ROOT}/items/{item_id}/fail", {
+        "expected_version": current["flow"]["version"], "reason": "Material length is outside tolerance",
+        "reference": "MATERIAL-NCR-ONE",
+    }, role="inspector"))
+    repaired = advance(api, item_id, role="handler", resolution="Replaced the component to correct its length")
+    repeated = ok(api.post(f"{ROOT}/items/{item_id}/fail", {
+        "expected_version": repaired["flow"]["version"], "reason": "Replacement has an incorrect material grade",
+        "reference": "MATERIAL-NCR-TWO",
+    }, role="inspector"))
+    assert_current(repeated, 1)
+    first_id, second_id = [row["id"] for row in repeated["exceptions"]]
+    defects = {row["id"]: row for row in repeated["rework"]["defects"]}
+    assert defects[first_id]["completion"] == repaired["rework"]["defects"][0]["completion"]
+    assert defects[second_id]["completion"] is None
+    assert repeated["rework"]["needs_completion"] is True
+    assert api.post(f"{ROOT}/items/{item_id}/advance", action_body(api, item_id), role="handler").status_code == 422
+    corrected = advance(api, item_id, role="handler", resolution="Replaced with the specified grade and checked both defects")
+    assert corrected["events"][-1]["data"]["reworked_exception_ids"] == [second_id]
+    assert all(not row["closed_at"] for row in corrected["exceptions"])
+    passed = advance(api, item_id, role="inspector", resolution="Reinspected the grade and length against the approved drawing")
+    assert all(row["closed_at"] for row in passed["exceptions"])
+    assert passed["rework"] is None
+    assert passed["events"][:len(first["events"])] == first["events"]
+
+
+def test_retained_open_qa_failure_can_return_for_recorded_rework_without_rewriting_history(api):
+    from test_progress import database_state
+    item_id = create_item(api, "FLOW-RETAINED-QA-FAILURE")
+    enroll(api, item_id, "component", start_step=2)
+    flow = importlib.import_module("flow")
+    with api.session_factory() as session:
+        item = session.get(api.application.Item, item_id)
+        plan = session.get(flow.FlowPlan, item_id)
+        at = api.application.utcnow()
+        exception = flow.FlowException(item_id=item_id, step=2, return_step=2,
+            reason="Retained material certificate has an incorrect grade", reference="RETAINED-NCR",
+            opened_by=BADGES["inspector"], opened_at=at)
+        session.add(exception)
+        session.flush()
+        historical = {**flow.step_definition(plan, 2), "return_steps": [2]}
+        flow._event(session, item, plan, BADGES["inspector"], "fail", 2, at,
+            reference=exception.reference, notes=exception.reason,
+            data={"exception_id": exception.id, "return_step": 2}, step_definition=historical)
+        flow._sync(session, item, BADGES["inspector"], 2, at, "Retained QA failure fixture")
+        session.commit()
+    retained = detail(api, item_id)
+    assert retained["rework"]["requires_return"] is True
+    assert retained["rework"]["required_step"] == 1
+    assert "return-for-rework" in retained["allowed_actions"]
+    saved = database_state(api)
+    response = api.post(f"{ROOT}/items/{item_id}/advance", action_body(api, item_id,
+        resolution="Attempted reinspection without a completed correction"), role="inspector")
+    assert response.status_code == 409, response.text
+    route = f"{ROOT}/items/{item_id}/return-for-rework"
+    assert api.post(route, {"expected_version": retained["flow"]["version"]}, role="handler").status_code == 403
+    assert api.post(route, {"expected_version": retained["flow"]["version"] - 1}, role="inspector").status_code == 409
+    assert database_state(api) == saved
+    returned = ok(api.post(route, {"expected_version": retained["flow"]["version"]}, role="inspector"))
+    assert_current(returned, 1)
+    assert returned["exceptions"][0]["return_step"] == 2
+    assert returned["events"][:len(retained["events"])] == retained["events"]
+    assert returned["events"][-1]["action"] == "rework_return"
+    assert returned["events"][-1]["data"]["return_step"] == 1
+    assert returned["events"][-1]["data"]["defects"][0]["reason"] == retained["exceptions"][0]["reason"]
+    assert returned["rework"]["requires_return"] is False
+    corrected = advance(api, item_id, role="handler", resolution="Obtained the correct material certificate and verified the grade")
+    assert_current(corrected, 2)
+    passed = advance(api, item_id, role="inspector", resolution="Rechecked and accepted the corrected material grade certificate")
+    assert_current(passed, 3)
+    assert passed["exceptions"][0]["closed_at"]
+    assert passed["events"][:len(retained["events"])] == retained["events"]
+
+
+@pytest.mark.parametrize("route,kind,step,target", [
+    ("component", "Part", 2, 1),
+    ("spool", "Spool", 15, 14),
+    ("assembly", "Assembly", 18, 17),
+    ("assembly", "Assembly", 22, 21),
+])
+def test_item_screen_failed_inspection_routes_current_qa_without_a_duplicate_rework_ticket(api, route, kind, step, target):
+    from test_progress import database_state
+    item_id = create_item(api, f"FLOW-ITEM-INSPECTION-{step}", kind=kind)
+    before = enroll(api, item_id, route, start_step=step, expected_children=1 if route == "assembly" else 0,
+                    legacy_catalog=route == "assembly" and step == 18)
+    payload = {"kind": "Dimensional", "result": "Fail", "report": "ITEM-SCREEN-NCR",
+               "measurements": "Spool flange alignment is outside the approved drawing tolerance"}
+    saved = database_state(api)
+    invalid = api.post(f"/api/items/{item_id}/inspect", {**payload, "measurements": "    "}, role="inspector")
+    assert invalid.status_code == 422, invalid.text
+    assert database_state(api) == saved
+    ok(api.post(f"/api/items/{item_id}/inspect", payload, role="inspector"))
+    failed = detail(api, item_id)
+    assert_current(failed, target)
+    assert len(failed["exceptions"]) == 1
+    assert failed["exceptions"][0]["step"] == step
+    assert failed["rework"]["defects"][0]["reason"] == payload["measurements"]
+    assert failed["events"][:len(before["events"])] == before["events"]
+    with api.session_factory() as session:
+        assert not list(session.scalars(select(api.application.Rework).where(api.application.Rework.item_id == item_id)))
+        recorded = session.scalars(select(api.application.Inspection).where(api.application.Inspection.item_id == item_id)).all()
+        assert len(recorded) == 1 and recorded[0].measurements == payload["measurements"]
 
 
 def test_failed_weld_qa_requires_new_acceptance_and_resolution_before_release(api):
@@ -716,7 +848,7 @@ def test_failed_weld_qa_requires_new_acceptance_and_resolution_before_release(ap
     tracked = ok(api.get(f"/api/tracking/spools/{item_id}"))
     assert tracked["welds"][0]["production_complete"] is True
     assert tracked["welds"][0]["qa_accepted"] is False
-    advance(api, item_id)
+    advance(api, item_id, resolution="Reworked the rejected weld and supplied corrected examination evidence")
     response = api.post(f"{ROOT}/items/{item_id}/advance", action_body(api, item_id,
         resolution="Corrected examination supplied and reviewed"), role="inspector")
     assert response.status_code == 409, response.text
@@ -937,15 +1069,22 @@ def test_failed_final_qa_preserves_old_steps_but_invalidates_current_downstream_
     assert all(row["status"] == "completed" for row in before["flow"]["steps"] if row["number"] in range(17, 22))
     failed = ok(api.post(f"{ROOT}/items/{assembly}/fail", {
         "expected_version": before["flow"]["version"], "reason": "Final test dimensions require assembly rework",
-        "reference": "TEST-FINAL-NCR", "return_step": 18,
+        "reference": "TEST-FINAL-NCR", "return_step": 21,
     }, role="inspector"))
-    assert_current(failed, 18)
+    assert_current(failed, 21)
     assert failed["events"][:len(before["events"])] == before["events"]
-    assert all(row["status"] != "completed" for row in failed["flow"]["steps"] if row["number"] in range(18, 23))
-    assert next(row for row in failed["flow"]["steps"] if row["number"] == 17)["status"] == "completed"
+    assert all(row["status"] != "completed" for row in failed["flow"]["steps"] if row["number"] in (21, 22))
+    assert all(row["status"] == "completed" for row in failed["flow"]["steps"] if row["number"] in range(17, 21))
     assert failed["item"]["dimensional"] != "Pass"
-    assert api.post(f"{ROOT}/items/{assembly}/advance", action_body(api, assembly), role="inspector").status_code == 409
-    assert_current(detail(api, assembly), 18)
+    assert api.post(f"{ROOT}/items/{assembly}/advance", action_body(api, assembly), role="inspector").status_code == 403
+    assert api.post(f"{ROOT}/items/{assembly}/advance", action_body(api, assembly), role="painter").status_code == 422
+    inherited = detail(api, child)
+    assert inherited["flow"]["status"] == "completed"
+    assert inherited["exceptions"] == []
+    assert inherited["rework"]["source_item_id"] == assembly
+    assert inherited["rework"]["inherited"] is True
+    assert inherited["rework"]["defects"][0]["reason"] == "Final test dimensions require assembly rework"
+    assert_current(detail(api, assembly), 21)
 
 
 def test_component_issue_found_after_spool_and_assembly_release_still_blocks_shipping(api):

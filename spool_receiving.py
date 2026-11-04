@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, deferred, undefer
 from read_projection import (read_cached, reader_role, read_get, projection_get,
                              PROJECTION_MISSING)
 
-from main import Base, Employee, Item, audit, auth, db, lock_item, utcnow
+from main import Base, Employee, Item, Audit, audit, auth, db, lock_item, utcnow
 from orders import Input, _commit, _key, read_snapshot
 from permissions import has_capability
 
@@ -155,6 +155,42 @@ class MaterialPassAllIn(Input):
     reference: str = Field(default='', max_length=300)
     notes: str = Field(default='', max_length=3000)
     pieces: list[MaterialPassExpectationIn] = Field(min_length=1, max_length=500)
+
+
+class ReceivingReworkIn(Input):
+    inspection_kind: str = Field(pattern='^(material|arrival)$')
+    failure_id: int = Field(ge=1, strict=True)
+    expected_version: int = Field(ge=1, strict=True)
+    basis_sha256: str = Field(min_length=64, max_length=64)
+    description: str = Field(min_length=4, max_length=3000)
+    reference: str = Field(min_length=2, max_length=300)
+
+
+@read_cached(lambda s, item_id: item_id)
+def receiving_rework_history(s, item_id):
+    """Correction evidence is retained in the existing append-only audit log."""
+    return [{**row.details, 'id': row.id, 'actor': row.actor, 'at': _stamp(row.at)}
+            for row in s.scalars(select(Audit).where(Audit.item_id == item_id,
+                Audit.event == 'QA001_REWORK_RECORDED').order_by(Audit.id))]
+
+
+def _receiving_rework(s, item, decision, inspection_kind, user=None):
+    if decision is None or decision.result != 'Fail':
+        return None
+    history = receiving_rework_history(s, item.id)
+    completed = next((row for row in reversed(history)
+                      if row.get('inspection_kind') == inspection_kind
+                      and row.get('failure_id') == decision.id), None)
+    return {'inspection_kind': inspection_kind, 'failure_id': decision.id,
+        'expected_version': decision.version,
+        'piece_key': getattr(decision, 'piece_key', None),
+        'error_description': decision.notes, 'failure_reference': decision.reference,
+        'reported_by': decision.actor, 'reported_at': _stamp(decision.at),
+        'return_title': 'Inventory / material receiving',
+        'status': 'awaiting_reinspection' if completed else 'awaiting_rework',
+        'completion': completed,
+        'can_complete': bool(not completed and reader_role(user) in ('handler', 'supervisor', 'admin')
+                             and not _locked_reason(s, item))}
 
 
 def _stamp(value):
@@ -435,18 +471,23 @@ def material_qa_states(s, state, user=None, *, bases=None):
         blockers = list(pass_blockers)
         digest = _digest(bases[key])
         decision = latest.get(key)
+        rework = _receiving_rework(s, state['item'], decision, 'material', user)
+        if rework and not rework['completion']:
+            pass_blockers.append('Record the completed receiving rework before QA/QC can pass this piece.')
+            blockers = list(pass_blockers)
         current = bool(decision and decision.result == 'Pass' and decision.basis_sha256 == digest and not blockers)
         status = ('pending' if decision is None else 'failed' if decision.result == 'Fail'
                   else 'passed' if current else 'needs_reinspection')
         if status == 'pending':
             blockers.insert(0, 'QA-001 has not been recorded for this physical piece.')
         elif status == 'failed':
-            blockers.insert(0, 'QA-001 failed. Correct the findings and record a new inspection.')
+            blockers.insert(0, 'QA-001 failed: ' + decision.notes + ' Return to Inventory / material receiving for correction and QA/QC reinspection.')
         elif status == 'needs_reinspection':
             blockers.insert(0, 'This piece or its source/MTR evidence changed after QA-001 Pass. Reinspection is required.')
         result[key] = {'code': 'QA-001', 'version': decision.version if decision else 0,
             'status': status, 'can_proceed': current, 'basis_sha256': digest,
             'latest': _material_inspection_view(decision), 'blockers': blockers, 'pass_blockers': pass_blockers,
+            'rework': rework,
             'heat_deferral': deepcopy(bases[key].get('heat_deferral')),
             'mtr_deferral': deepcopy(bases[key].get('mtr_deferral')),
             'history_url': f'/api/spool-boms/spools/{quote(state["item"].id, safe="")}/materials/{quote(key, safe="")}/qa-001',
@@ -532,11 +573,15 @@ def _physical_summary(s, item, user=None, history=False):
     blockers = list(pass_blockers)
     digest = _digest(evidence)
     latest = _latest(s, item.id)
+    rework = _receiving_rework(s, item, latest, 'arrival', user)
+    if rework and not rework['completion']:
+        pass_blockers.append('Record the completed receiving rework before QA/QC can pass the arrival inspection.')
+        blockers = list(pass_blockers)
     current = bool(latest and latest.result == 'Pass' and latest.basis_sha256 == digest and not blockers)
     if latest is None:
         status, message = 'pending', 'QA/QC arrival inspection has not been recorded.'
     elif latest.result == 'Fail':
-        status, message = 'failed', 'The arrival inspection failed. QA/QC must record a new passing inspection after correction.'
+        status, message = 'failed', 'The arrival inspection failed: ' + latest.notes + ' Return to Inventory / material receiving for correction and QA/QC reinspection.'
     elif not current:
         status, message = 'needs_reinspection', 'The BOM, heat/MTR register or source evidence changed after the arrival Pass. QA/QC reinspection is required.'
     else:
@@ -547,6 +592,7 @@ def _physical_summary(s, item, user=None, history=False):
         'status': status, 'can_proceed': current, 'basis_sha256': digest,
         'blockers': list(dict.fromkeys(blockers)), 'pass_blockers': pass_blockers,
         'latest': _inspection_view(latest),
+        'rework': rework, 'rework_history': receiving_rework_history(s, item.id),
         'history': [], 'permissions': {'can_inspect': has_capability(user, 'quality_review') and not _locked_reason(s, item)},
         'heat_deferral': deepcopy(evidence.get('heat_deferral')),
         'mtr_deferral': deepcopy(evidence.get('mtr_deferral')),
@@ -651,8 +697,10 @@ def inspect_material(item_id: str, piece_key: str, data: MaterialInspectionIn,
         raise HTTPException(409, 'This material piece, BOM or MTR changed. Reload and inspect the current evidence.')
     basis = bases[piece_key]
     material = basis['material']
-    if data.result == 'Pass' and state['source_status']['changed']:
-        raise HTTPException(409, 'QA-001 Pass requires this piece\'s current BOM; heat numbers and MTR references are required after fabrication.')
+    if data.result == 'Pass' and qa['pass_blockers']:
+        raise HTTPException(409, {'message': 'QA-001 Pass is blocked until the required correction and current evidence are recorded.',
+            'piece_blockers': [{'piece_key': piece_key, 'piece_identifier': material['piece_identifier'],
+                                'blockers': qa['pass_blockers']}]})
     row = SpoolMaterialInspection(spool_id=item.id, piece_key=piece_key,
         version=data.expected_version + 1, check_code='QA-001', result=data.result,
         actor=user.badge, reference=data.reference, notes=data.notes,
@@ -776,6 +824,9 @@ def inspect_arrival(item_id: str, data: ArrivalIn, user: Employee = Depends(auth
     evidence, blockers = _basis(s, item)
     if data.basis_sha256 != _digest(evidence):
         raise HTTPException(409, 'The spool BOM, materials or MTRs changed. Reload and inspect the current evidence.')
+    rework = _receiving_rework(s, item, latest, 'arrival', user)
+    if data.result == 'Pass' and rework and not rework['completion']:
+        blockers = list(blockers) + ['Record the completed receiving rework before QA/QC can pass the arrival inspection.']
     checks = data.checks.model_dump()
     phantom_checks = []
     if 'heat_numbers' in evidence.get('deferred_checks', []) and checks['heat_numbers']:
@@ -796,6 +847,58 @@ def inspect_arrival(item_id: str, data: ArrivalIn, user: Employee = Depends(auth
     s.flush()
     audit(s, item.id, user.badge, 'SPOOL_ARRIVAL_INSPECTED', _inspection_view(row))
     source_changed(s, 'spools', item.id, user.badge, 'Arrival inspection recorded: ' + data.result)
+    result = _spool_detail(s, item.id, user)
+    _commit(s)
+    return result
+
+
+@router.post('/spools/{item_id}/receiving-rework', status_code=201)
+def record_receiving_rework(item_id: str, data: ReceivingReworkIn,
+                           user: Employee = Depends(auth), s: Session = Depends(db)):
+    from flow import lock_topology
+    from spool_boms import physical_bom_state, _spool_detail
+    if user.role not in ('handler', 'supervisor', 'admin'):
+        raise HTTPException(403, 'The material coordinator, shop foreman or administrator records completed receiving rework.')
+    lock_topology(s)
+    if user.role not in ('handler', 'supervisor', 'admin'):
+        raise HTTPException(403, 'Your current position cannot record completed receiving rework.')
+    item = lock_item(s, item_id)
+    _context(s, item.id)
+    locked = _locked_reason(s, item)
+    if locked:
+        raise HTTPException(409, locked)
+    piece_identifier = None
+    if data.inspection_kind == 'material':
+        decision = s.get(SpoolMaterialInspection, data.failure_id)
+        if not decision or decision.spool_id != item.id:
+            raise HTTPException(404, 'The failed material inspection does not belong to this spool.')
+        state = physical_bom_state(s, item.id)
+        qa = material_qa_states(s, state, user).get(decision.piece_key)
+        if not qa or not qa.get('latest') or qa['latest']['id'] != decision.id:
+            raise HTTPException(409, 'This is not the current material inspection. Reload the spool before recording correction.')
+        digest = qa['basis_sha256']
+        piece_identifier = next(row['piece_identifier'] for row in state['materials'] if row['piece_key'] == decision.piece_key)
+    else:
+        decision = _latest(s, item.id)
+        if not decision or decision.id != data.failure_id:
+            raise HTTPException(409, 'The arrival inspection changed. Reload the spool before recording correction.')
+        evidence, _ = _basis(s, item)
+        digest = _digest(evidence)
+    if decision.result != 'Fail' or data.expected_version != decision.version:
+        raise HTTPException(409, 'Rework must refer to the current failed inspection. Reload this spool.')
+    if data.basis_sha256 != digest:
+        raise HTTPException(409, 'The current receiving evidence changed. Reload before recording completed rework.')
+    prior = _receiving_rework(s, item, decision, data.inspection_kind, user)
+    if prior['completion']:
+        raise HTTPException(409, 'Completed rework is already recorded for this failure. QA/QC must reinspect it.')
+    audit(s, item.id, user.badge, 'QA001_REWORK_RECORDED', {
+        'inspection_kind': data.inspection_kind, 'failure_id': decision.id,
+        'failure_version': decision.version, 'piece_key': getattr(decision, 'piece_key', None),
+        'piece_identifier': piece_identifier, 'error_description': decision.notes,
+        'failure_reference': decision.reference, 'basis_sha256': digest,
+        'return_title': 'Inventory / material receiving',
+        'description': data.description, 'reference': data.reference})
+    s.flush()
     result = _spool_detail(s, item.id, user)
     _commit(s)
     return result

@@ -8,7 +8,7 @@
   const statusNames={queued:'Queued',in_progress:'In progress',awaiting_inspection:'Awaiting inspection',waiting_material:'Waiting for material',paused:'Paused',ready_next_operation:'Ready for next operation'};
   const state={active:false,epoch:0,itemSequence:0,item:null,options:null,control:null,saving:false,managing:false,incoming:null};
   let camera=null,cameraLoading=null,cameraRequest=0,scannerLoad=null;
-  const scannerSource='/static/vendor/html5-qrcode-2.3.8.min.js?v=2026.11.04-badge-signin.1';
+  const scannerSource='/static/vendor/html5-qrcode-2.3.8.min.js?v=2026.11.04-qa-rework.1';
   const text=value=>String(value??'');
   const badgeId=value=>typeof qrId==='function'?qrId(value,'badge'):text(value).trim();
   const itemId=value=>typeof qrId==='function'?qrId(value,'item'):text(value).trim();

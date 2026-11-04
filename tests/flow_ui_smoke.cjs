@@ -40,7 +40,7 @@ function detailAt(number,extra={},source=catalog){
   const step=source.steps[number-1],r=source.routes.find(row=>row.id===step.route),modern=source.version==='CLM-25-v1';
   const transfer={item_id:'ITM-001',version:4,handler:'SHOP1',handler_name:'Sender One',handler_active:true,location:'Shop',location_id:null,operational_status:'queued',status_label:'Queued',can_transfer:![16,23,24].includes(number)};
   const identity=step.route==='spool'?{spool_number:'643-777-PCW-03-01',google_part_number:'643-777-PCW-03-01',qr_alias:'643-777-PCW-03-01-[001]',display_code:'643-777-PCW-03-01-[001]'}:{};
-  return {stage_catalog:structuredClone(source.stage_catalog),flow_stage:{key:step.flow_stage_key,source_item_id:'ITM-001',inherited:false},transfer,item:{...identity,id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24,25].includes(number)},flow:{item_id:'ITM-001',catalog_version:source.version,route_definition:structuredClone(r),ready_to_ship_step:modern?24:23,shipment_step:modern?25:24,route:step.route,current_step:number,current_display_step:modern?({18:19,19:20}[number]||number+(number>=20?4:0)):number,current:structuredClone(step),version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:source.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
+  return {stage_catalog:structuredClone(source.stage_catalog),flow_stage:{key:step.flow_stage_key,source_item_id:'ITM-001',inherited:false},transfer,item:{...identity,id:'ITM-001',kind:step.route==='component'?'Part':step.route==='spool'?'Spool':'Assembly',description:'Test <item>',project:'P1',location:'Shop',handler:'SHOP1',released:[16,23,24,25].includes(number)},flow:{item_id:'ITM-001',catalog_version:source.version,route_definition:structuredClone(r),ready_to_ship_step:modern?24:23,shipment_step:modern?25:24,route:step.route,current_step:number,current_display_step:modern?({18:19,19:20}[number]||number+(number>=20?4:0)):number,current:{...structuredClone(step),return_steps:step.qa?[({2:1,11:10,15:14,18:17,22:21})[number]]:[]},version:7,status:'active',expected_children:step.route==='component'?0:1,step_entered_at:'2026-10-28T12:00:00Z',steps:source.steps.filter(x=>x.route===step.route).map(x=>({...x,status:x.number<number?'completed':x.number===number?'current':'pending'})),blockers:[],baseline_reference:'',baseline_reason:''},production_process:baseProcess(),components:[],spools:[],parent:null,events:[],exceptions:[],...extra};
 }
 function testingAt(phase,action,extra={},source=catalog){
   const kind=phase.startsWith('pressure')||phase==='floor_before_paint'?'pressure':'ndt',qa=action==='review',work=action==='start'||action==='complete',number=qa?18:action==='handoff'?19:['complete','not_required'].includes(phase)?20:17;
@@ -203,12 +203,13 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   record=detailAt(11);context.me.role='handler';await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/id="flowStepForm"/);assert.doesNotMatch(html(),/data-flow-action="fail"/);
   context.me.role='inspector';await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Pass inspection & continue/);
   assert.doesNotMatch(html(),/data-flow-action="(?:advance-12|advance-15|skip)"/,'no arbitrary later-step controls');
-  await click('fail');await submitDialog({reason:'Alignment out of tolerance',reference:'NCR-007',return_step:'10'});
+  await click('fail');assert.doesNotMatch(elements.get('flowDialogFields').innerHTML,/name="return_step"/);assert.match(elements.get('flowDialogFields').innerHTML,/Return for rework:[\s\S]*Step 10/);
+  let failures=posts().length;await submitDialog({reason:'  ',reference:'NCR-007',return_step:'17'});assert.equal(posts().length,failures);assert.match(elements.get('flowDialogError').textContent,/Describe the defect/);await submitDialog({reason:'Alignment out of tolerance',reference:'NCR-007',return_step:'17'});
   assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7,reason:'Alignment out of tolerance',reference:'NCR-007',return_step:10});
   assert.equal(posts().at(-1).url,'/api/flow/items/ITM-001/fail');
 
   record.exceptions=[{id:1,step:11,return_step:10,reason:'Bad <alignment>',reference:'NCR-007',opened_by:'QA<one>',opened_at:'2026-10-28T11:00:00Z',closed_at:null}];
-  await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Rework resolution and reinspection findings/);assert.match(html(),/Bad &lt;alignment&gt;/);assert.match(html(),/Needs reinspection/);
+  await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/QA\/QC reinspection findings/);assert.match(html(),/Bad &lt;alignment&gt;/);assert.match(html(),/Needs reinspection/);
   await submitStep({...check(11),reference:'REPORT-008',resolution:'Alignment corrected and verified'});assert.equal(JSON.parse(posts().at(-1).body).resolution,'Alignment corrected and verified');
   allowedOverride=[];context.me.role='admin';await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/id="flowStepForm"/,'server allowed_actions override local administrator status');allowedOverride=null;
 
@@ -547,12 +548,64 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
     const before=posts().length;await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/data-flow-action="item" data-flow-id="ASM-NEW-25">Open assembly process/);assert.match(html(),/data-flow-stage="qa_pressure_results" class="fst-current"/);assert.match(html(),/following ASM-NEW-25 at QA\/QC-005 · Pressure review/);assert.deepEqual(numberedSteps(selectedMap()),[9,10,11,12,13,14,15,16]);assert.doesNotMatch(html(),/ff-chart-testing|ff-testing-branch|id="flowStepForm"/);assert.equal(posts().length,before);
   });
   context.FabFlow.cancelPending();assert.equal(readTimeouts.size,0);assert.equal(timers.size,0);
-  // Item-level requirements remain after removal of the separate work overview.
+  // QA review visibility is separate from ordinary production work and administrator oversight.
+  for(const role of ['handler','fitup_welder','process_welder','ndt','pressure_testing_technician','painter','supervisor']){
+    record=detailAt(11);record.flow.blockers=['Inspection awaits recorded production correction'];context.me={role,badge:'WORKER'};
+    await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/ff-position-work|ff-checklist|id="flowStepForm"|data-flow-action="fail"/);
+    assert.match(html(),/QA\/QC completes the inspection checklist/);assert.match(html(),/Inspection awaits recorded production correction/);
+  }
+  record=detailAt(11);context.me={role:'admin',badge:'ADMIN'};await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/id="flowStepForm"/);assert.doesNotMatch(html(),/ff-position-work/);assert.match(html(),/data-flow-action="admin-controls"/);
+  for(const [phase,code,display] of [['ndt_qa','QA/QC-004',19],['pressure_qa','QA/QC-005',22]]){
+    record=testingAt(phase,'review',{},modernCatalog);context.me={role:'inspector',badge:'QA1'};await context.FabFlow.open({item:'ITM-001'});
+    const panel=elementHtml(html(),/<section class="card ff-position-work">/);assert.ok(panel.includes(display+' · '+code));assert.doesNotMatch(panel,/Determine if Spool|Sandblast &amp; Paint/);
+  }
+
+  // Every ordinary QA failure returns to the one server-selected preceding production step.
+  context.me={role:'inspector',badge:'QA1'};
+  for(const [qaStep,productionStep] of [[2,1],[11,10],[15,14],[18,17],[22,21]]){
+    record=detailAt(qaStep,{},modernCatalog);await context.FabFlow.open({item:'ITM-001'});await click('fail');
+    const fields=elements.get('flowDialogFields').innerHTML;assert.doesNotMatch(fields,/name="return_step"|<select/);assert.ok(fields.includes('Step '+(productionStep>=20?productionStep+4:productionStep)));
+    await submitDialog({reason:'Recorded defect requiring correction',reference:'NCR-FIXED-'+qaStep,return_step:'2'});
+    assert.equal(JSON.parse(posts().at(-1).body).return_step,productionStep);assert.equal(posts().at(-1).url,'/api/flow/items/ITM-001/fail');
+  }
+  record=detailAt(22);record.flow.current.return_steps=[17,21];await context.FabFlow.open({item:'ITM-001'});elements.get('flowDialog').close();const invalidReturnWrites=posts().length;await click('fail');assert.equal(elements.get('flowDialog').open,false);assert.equal(posts().length,invalidReturnWrites);assert.match(messages.at(-1),/production return step could not be verified/);
+
+  const defect={id:990,step:11,display_step:11,return_step:10,return_display_step:10,reason:'Misaligned <fit-up> & damaged edge',reference:'NCR-990',opened_by:'QA1',opened_at:'2026-11-04T09:00:00Z',needs_completion:true,completion:null};
+  const rework={source_item_id:'ITM-001',inherited:false,current_step:10,required_step:10,required_display_step:10,responsible_roles:['fitup_welder','admin'],needs_completion:true,requires_return:false,defects:[defect]};
+  record=detailAt(10);record.rework=structuredClone(rework);record.exceptions=[structuredClone(defect)];record.flow.current.roles=['fitup_welder','admin'];record.flow.current.requires_resolution=true;record.flow.current.requires_rework=true;context.me={role:'fitup_welder',badge:'FIT1'};
+  await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/ff-position-work/);assert.match(html(),/id="flowStepForm"/);assert.match(html(),/Completed rework and corrective action/);assert.match(html(),/id="ff-field-resolution"[^>]+minlength="4"/);
+  assert.match(html(),/Misaligned &lt;fit-up&gt; &amp; damaged edge/);assert.doesNotMatch(html(),/<fit-up>/);assert.match(html(),/Completed rework has not been recorded/);assert.ok(html().indexOf('ff-rework-card')<html().indexOf('ff-current"'),'workers see the defect before their completion form');
+  let reworkWrites=posts().length;await submitStep({...currentChecks(),resolution:'   '});assert.equal(posts().length,reworkWrites);assert.match(elements.get('flowStepError').textContent,/completed rework/);
+  await submitStep({...currentChecks(),resolution:'abc'});assert.equal(posts().length,reworkWrites);
+  await submitStep({...currentChecks(),resolution:'Realigned fit-up and replaced the damaged edge',notes:'Drawing verified'});let reworkBody=JSON.parse(posts().at(-1).body);assert.equal(reworkBody.resolution,'Realigned fit-up and replaced the damaged edge');assert.equal(reworkBody.reworked_exception_ids,undefined,'the server determines which defects this work satisfies');
+
+  const completion={event_id:991,step:10,actor:'FIT1',at:'2026-11-04T10:00:00Z',description:'Replaced <edge> & checked alignment',reference:'WORK-991'};
+  record=detailAt(11);record.exceptions=[structuredClone(defect)];record.rework={...structuredClone(rework),current_step:11,needs_completion:false,defects:[{...structuredClone(defect),needs_completion:false,completion}]};record.events=[{action:'advance',step:10,actor:'FIT1',at:completion.at,reference:completion.reference,data:{reworked_exception_ids:[990],resolution:completion.description}}];context.me={role:'inspector',badge:'QA1'};
+  await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Recorded completed rework/);assert.match(html(),/Replaced &lt;edge&gt; &amp; checked alignment/);assert.match(html(),/Completed by<\/dt><dd>FIT1/);assert.match(html(),/WORK-991/);assert.match(html(),/QA\/QC reinspection findings/);assert.match(html(),/Completed rework recorded/);assert.doesNotMatch(html(),/Completed rework has not been recorded/);
+  reworkWrites=posts().length;await submitStep({...currentChecks(),reference:'QA-REINSPECT-991'});assert.equal(posts().length,reworkWrites);assert.match(elements.get('flowStepError').textContent,/reinspection findings/);
+  await submitStep({...currentChecks(),reference:'QA-REINSPECT-991',resolution:'Corrected alignment verified against drawing'});assert.equal(JSON.parse(posts().at(-1).body).resolution,'Corrected alignment verified against drawing');
+
+  // An older open QA failure with no worker correction requires the controlled return first.
+  record=detailAt(11);record.exceptions=[structuredClone(defect)];record.rework={...structuredClone(rework),current_step:11,requires_return:true};record.flow.blockers=['Record completed production rework before QA/QC PASS'];allowedOverride=['advance','fail','return-for-rework'];
+  await context.FabFlow.open({item:'ITM-001'});assert.equal(elements.get('flowAdvance').disabled,true);assert.match(html(),/data-flow-action="return-for-rework"/);
+  reworkWrites=posts().length;await submitStep({...currentChecks(),reference:'QA-BLOCKED',resolution:'QA text cannot replace completed production work'});assert.equal(posts().length,reworkWrites);assert.match(elements.get('flowStepError').textContent,/QA\/QC PASS is blocked/);
+  await click('return-for-rework');assert.equal(posts().at(-1).url,'/api/flow/items/ITM-001/return-for-rework');assert.deepEqual(JSON.parse(posts().at(-1).body),{expected_version:7});
+  allowedOverride=[];await context.FabFlow.open({item:'ITM-001'});assert.doesNotMatch(html(),/data-flow-action="return-for-rework"/);reworkWrites=posts().length;await click('return-for-rework');assert.equal(posts().length,reworkWrites);allowedOverride=null;
+
+  // Completed child spools show assembly defects without acquiring assembly work controls.
+  record=detailAt(16);Object.assign(record.flow,{current:null,current_step:null,status:'completed'});record.flow.steps=record.flow.steps.map(step=>({...step,status:'completed'}));record.parent={item_id:'ASM-DEFECT',route:'assembly'};record.flow_stage={key:'paint',inherited:true,source_item_id:'ASM-DEFECT'};
+  record.rework={...structuredClone(rework),source_item_id:'ASM-DEFECT',inherited:true,current_step:21,required_step:21,required_display_step:25,responsible_roles:['painter','admin'],defects:[{...structuredClone(defect),step:22,display_step:26,return_step:21,return_display_step:25,reason:'Assembly coating <defect>'}]};context.me={role:'painter',badge:'PAINT1'};
+  reworkWrites=posts().length;await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Assembly coating &lt;defect&gt;/);assert.match(html(),/QA\/QC finding · step 26/);assert.match(html(),/Required production step<\/dt><dd>25/);assert.match(html(),/data-flow-action="item" data-flow-id="ASM-DEFECT">Open parent assembly/);assert.doesNotMatch(html(),/id="flowStepForm"|data-flow-action="return-for-rework"|ff-position-work/);await click('return-for-rework');assert.equal(posts().length,reworkWrites);
+  record.flow=null;record.suggested_route='spool';await context.FabFlow.open({item:'ITM-001'});assert.match(html(),/Assembly coating &lt;defect&gt;/,'an inherited defect remains visible without a local numbered traveler');assert.equal(posts().length,reworkWrites);
+  context.FabFlow.cancelPending();assert.equal(readTimeouts.size,0);assert.equal(timers.size,0);
+  console.log('PASS: QA/QC-only review summaries; preserved trade and admin forms; dynamic NDT/pressure hold points; fixed preceding-step FAIL routing; mandatory recorded worker corrections; blocked QA PASS and permitted legacy rework return; inherited assembly defects are read-only on child spools.');
+  // QA item review and current production requirements remain after removal of the separate work overview.
   const taskWrites=posts().length;
   readHook=null;record=detailAt(11);context.me={role:'inspector',badge:'QA1',name:'QA <Employee>'};
   record.work={pending:true,for_position:true,in_custody:false,custodian_badge:'HANDLER1',responsible_roles:['inspector'],required_employee_badge:null,can_record:true,restriction:'',requirements:['Verify <drawing> & dimensions','Record the inspection reference']};
   await context.FabFlow.open({item:'ITM-001',project:'P1',resetFilters:true});
-  assert.match(html(),/Your tasks &amp; requirements|Your tasks & requirements/);assert.match(html(),/QA &lt;Employee&gt;/);
+  assert.match(html(),/QA\/QC review tasks/);assert.match(html(),/QA &lt;Employee&gt;/);
+  const qaPanel=elementHtml(html(),/<section class="card ff-position-work">/);assert.match(qaPanel,/QA\/QC hold points on this spool \(2\)/);assert.doesNotMatch(qaPanel,/Complete Welds|Fit-Up &amp; Tack Weld/);
   assert.match(html(),/Verify &lt;drawing&gt; &amp; dimensions/);assert.doesNotMatch(html(),/<drawing>/);assert.match(html(),/id="flowStepForm"/);
   assert.ok(html().indexOf('ff-position-work')>=0&&html().indexOf('ff-position-work')<html().indexOf('ff-route-step'));
   assert.ok(html().indexOf('ff-current"')<html().indexOf('ff-route-step'),'spool requirements and current actions remain before the route diagram');
@@ -560,8 +613,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   record=testingAt('ndt','complete',{},modernCatalog);context.me={role:'ndt',badge:'NDT1',name:'Assigned tester'};
   record.work={pending:true,for_position:true,in_custody:false,custodian_badge:'OTHER-EMPLOYEE',responsible_roles:['admin','ndt'],required_employee_badge:'NDT1',can_record:false,restriction:'Restore the recorded testing custodian before submitting its report.',requirements:['Record the actual NDT report reference']};
   await context.FabFlow.open({item:'ITM-001',project:'P1',view:'work',workScope:'custody',workPage:2});
-  assert.match(html(),/Your tasks &amp; requirements|Your tasks & requirements/);assert.match(html(),/Restore the recorded testing custodian/);assert.match(html(),/Record the actual NDT report reference/);assert.doesNotMatch(html(),/id="flowStepForm"/);
-  assert.ok(html().indexOf('ff-position-work')>=0&&html().indexOf('ff-position-work')<html().indexOf('ff-route-step'));
+  assert.doesNotMatch(html(),/ff-position-work|QA\/QC review tasks|Your tasks/);assert.match(html(),/Restore the recorded testing custodian/);assert.doesNotMatch(html(),/id="flowStepForm"/);
   assert.ok(html().indexOf('ff-current"')<html().indexOf('ff-route-step'),'assembly requirements and current actions remain before the route diagram');
   assert.doesNotMatch(html(),/My work|data-flow-action="my-work"|id="flowWorkScope"|data-work-item=/);
   const itemUrl=new URL(context.url,context.location.origin);
@@ -578,7 +630,7 @@ async function catalogContract(name,run){await run();catalogContracts.push(name)
   assert.equal(boardUrl.searchParams.get('flow'),'1');assert.equal(boardUrl.searchParams.get('project'),'P1');assert.equal(boardUrl.searchParams.get('item'),null);assert.equal(boardUrl.searchParams.get('view'),null);assert.equal(boardUrl.searchParams.get('work_scope'),null);
   context.me={role:'admin',badge:'ADMIN'};context.FabFlow.cancelPending();
   assert.equal(posts().length,taskWrites);assert.equal(readTimeouts.size,0);assert.equal(timers.size,0);
-  console.log('PASS: My work overview and shortcuts are absent; former work options open ordinary Process flow; spool/assembly requirements stay before the chart, escape record text, preserve item/project and respect exact testing-employee restrictions without writes.');
+  console.log('PASS: My work overview and shortcuts are absent; former work options open ordinary Process flow; QA/QC review tasks and current production actions stay before the chart, escape record text, preserve item/project and respect exact testing-employee restrictions without writes.');
   const index=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
   assert.match(index,/params\.has\('flow'\)[\s\S]*FabFlow\.open/);assert.match(index,/id="itemFlowBtn"/);assert.match(index,/id="navFlow"/);assert.doesNotMatch(index,/navMyWork/);assert.match(index,/FabFlow\.cancelPending/);
   assert.equal(index,fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'));

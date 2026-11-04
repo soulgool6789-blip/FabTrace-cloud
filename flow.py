@@ -42,6 +42,7 @@ LEGACY_ROUTES = tuple({**row, 'last_step': 24} if row['id'] == 'assembly' else d
 LEGACY_ROUTE_BY_ID = {row['id']: row for row in LEGACY_ROUTES}
 LEGACY_QA_CODES = {2: 'QA-001', 11: 'QA-002', 15: 'QA-003', 18: 'QA-004', 22: 'QA-005'}
 QA_CODES = {**LEGACY_QA_CODES, 22: 'QA-006'}
+QA_REWORK_STEPS = {2: 1, 11: 10, 15: 14, 18: 17, 22: 21}
 # These persisted station meanings must not change when the public current
 # stage catalog gains a new floor visit and separate pressure/final QA.
 LEGACY_STAGE_BY_STEP = {
@@ -79,7 +80,7 @@ def _step(number, title, section, checks, *, catalog_version=LEGACY_VERSION):
         'requires_location': number == 3 or number in handoffs,
         'requires_reference': number in (1, 2, 5, 11, 15, 18, 22, ready),
         'qa': number in qa_codes,
-        'return_steps': {2: [2], 11: [10], 15: [14], 18: [17, 18], 22: [17, 18, 19, 20, 21]}.get(number, []),
+        'return_steps': [QA_REWORK_STEPS[number]] if number in QA_REWORK_STEPS else [],
         **({'handoff_location_id': 'floor' if number == 23 else 'ready_to_ship',
             'handoff_target_role': 'handler'}
            if current and number in (23, 24) else {}),
@@ -437,12 +438,13 @@ def current_step_definition(s, plan):
     state = testing_state(s, plan)
     base = step_definition(plan, plan.current_step)
     if state is None and plan.current_step == 17:
-        return {**LEGACY_STEP_17, 'catalog_version': catalog_version(plan)}
-    if plan.current_step == 22 and (state is not None or catalog_version(plan) == VERSION):
-        return {**base, 'return_steps': [17, 20, 21]}
-    return phase_definition(state, base) if state and state.phase in (
+        base = {**LEGACY_STEP_17, 'catalog_version': catalog_version(plan)}
+    current = phase_definition(state, base) if state and state.phase in (
         'decision', 'ndt', 'ndt_qa', 'ndt_rework', 'floor_before_pressure',
         'pressure_test', 'pressure_qa', 'pressure_rework', 'floor_before_paint') else base
+    if not current.get('testing_phase') and _pending_rework_at_step(s, plan):
+        current = {**current, 'requires_resolution': True, 'requires_rework': True}
+    return current
 
 
 def _exceptions(s, item_id, open_only=False):
@@ -454,6 +456,102 @@ def _exceptions(s, item_id, open_only=False):
     if open_only:
         query = query.where(FlowException.closed_at.is_(None))
     return s.scalars(query.order_by(FlowException.id)).all()
+
+
+@read_cached(lambda s, item_id: item_id)
+def _flow_events(s, item_id):
+    return list(s.scalars(select(FlowEvent).where(FlowEvent.item_id == item_id).order_by(FlowEvent.sequence)))
+
+
+@read_cached(lambda s, plan: (plan.item_id, plan.version) if plan is not None else None)
+def _rework_defects(s, plan):
+    """Project open findings and actual, linked corrective-work events.
+
+    Retained failure rows keep their original return_step. Their current
+    completion obligation is the preceding production step; no prior work or
+    acceptance is inferred from an old traveler position or free-text note.
+    """
+    if plan is None:
+        return []
+    exceptions = _exceptions(s, plan.item_id, True)
+    if not exceptions:
+        return []
+    from flow_testing import PROTOCOL, TEST_ROLES
+    events, version = _flow_events(s, plan.item_id), catalog_version(plan)
+    result = []
+    for exception in exceptions:
+        failed = next((event for event in events if event.action == 'fail' and
+                       (event.data or {}).get('exception_id') == exception.id), None)
+        context = failed.data if failed else {}
+        kind = context.get('test_kind') if context.get('testing_protocol') == PROTOCOL else None
+        testing = kind in TEST_ROLES and exception.step == 18
+        phase = context.get('testing_phase') if testing else None
+        target = 17 if testing else QA_REWORK_STEPS.get(exception.step, exception.return_step)
+        return_phase = ('ndt_rework' if kind == 'ndt' else 'pressure_rework') if testing else None
+        roles = ['admin', TEST_ROLES[kind]] if testing else list(step_definition(plan, target)['roles'])
+        completed = None
+        for event in events:
+            data = event.data or {}
+            if event.action != 'advance' or event.step != target or failed is not None and event.sequence <= failed.sequence:
+                continue
+            if _utc(event.at) < _utc(exception.opened_at):
+                continue
+            if testing:
+                correction = data.get('correction') or {}
+                valid = (failed is not None and data.get('testing_protocol') == PROTOCOL and
+                         data.get('testing_action') == 'correct' and
+                         data.get('test_kind') == kind and
+                         data.get('testing_cycle') == context.get('testing_cycle') and
+                         data.get('testing_attempt') == context.get('testing_attempt') and
+                         correction.get('exception_id') == exception.id)
+                description = correction.get('resolution', '')
+            else:
+                valid = exception.id in data.get('reworked_exception_ids', [])
+                description = data.get('resolution', '')
+            if valid and isinstance(description, str) and len(description.strip()) >= 4:
+                completed = {'event_id': event.id, 'step': event.step, 'actor': event.actor,
+                    'at': _utc(event.at).isoformat(), 'description': description, 'reference': event.reference}
+        result.append({'id': exception.id, 'step': exception.step,
+            'display_step': chart_step_number(exception.step, version, phase),
+            'return_step': target, 'return_display_step': chart_step_number(target, version, return_phase),
+            'reason': exception.reason, 'reference': exception.reference,
+            'opened_by': exception.opened_by, 'opened_at': _utc(exception.opened_at).isoformat(),
+            'responsible_roles': roles, 'testing': testing,
+            'needs_completion': completed is None, 'completion': completed})
+    return result
+
+
+def _pending_rework_at_step(s, plan):
+    if plan is None or plan.status != 'active' or plan.current_step is None:
+        return []
+    return [row for row in _rework_defects(s, plan) if not row['testing'] and
+            row['needs_completion'] and row['return_step'] == plan.current_step]
+
+
+def _missing_rework_at_qa(s, plan):
+    if plan is None or plan.status != 'active' or plan.current_step is None:
+        return []
+    return [row for row in _rework_defects(s, plan) if not row['testing'] and
+            row['needs_completion'] and row['step'] == plan.current_step]
+
+
+def rework_summary(s, item, plan, *, parent_item=None, parent_plan=None):
+    source, source_plan, inherited = item, plan, False
+    defects = _rework_defects(s, plan)
+    if not defects and parent_item is not None and parent_plan is not None and parent_plan.route == 'assembly':
+        source, source_plan, inherited = parent_item, parent_plan, True
+        defects = _rework_defects(s, parent_plan)
+    if not defects:
+        return None
+    pending = [row for row in defects if row['needs_completion']]
+    required = next((row for row in pending if row['return_step'] == source_plan.current_step),
+                    (pending or defects)[0])
+    return {'source_item_id': source.id, 'inherited': inherited,
+        'current_step': source_plan.current_step, 'required_step': required['return_step'],
+        'required_display_step': required['return_display_step'],
+        'responsible_roles': required['responsible_roles'], 'needs_completion': bool(pending),
+        'requires_return': not inherited and bool(_missing_rework_at_qa(s, source_plan)),
+        'defects': defects}
 
 
 def _component_ids(s, spool_id):
@@ -625,8 +723,12 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
     if testing and step in (20, 21):
         # NO bypasses test execution, never weld/dimensional/material readiness.
         # YES also rechecks these gates if evidence changes after test approval.
+        # A failed final review must first let the painter record corrective
+        # work. Its fresh dimensions belong to the following QA reinspection.
+        paint_rework = step == 21 and any(row['step'] == 22 for row in _pending_rework_at_step(s, plan))
         errors.extend(tracking_release_errors(s, item,
-            requirement_stages=('before_welding', 'after_welding')))
+            requirement_stages=('before_welding', 'after_welding'),
+            require_dimensions=not paint_rework))
     if testing and step in (20, 21, 22):
         from flow_testing import accepted_report_errors
         errors.extend(accepted_report_errors(s, item, plan))
@@ -658,6 +760,8 @@ def _step_errors(s, item, plan, *, allow_matching_exception=True, quality_for_up
             continue
         if step > exception.step or (step == exception.step and not allow_matching_exception):
             errors.append(f'Open exception from step {exception.step} requires passing reinspection')
+    if _missing_rework_at_qa(s, plan):
+        errors.append('Return to the preceding production step and record the completed rework before QA/QC reinspection')
     return list(dict.fromkeys(errors))
 
 
@@ -768,8 +872,8 @@ def _step_states(s, plan):
                          if number == 17 and testing is None else step_definition(plan, number)),
         'status': 'not_recorded' if number < plan.baseline_step else 'pending',
         'completed_at': None, 'last_actor': None, 'attempts': 0} for number in range(route['first_step'], route['last_step'] + 1)}
-    for event in s.scalars(select(FlowEvent).where(FlowEvent.item_id == plan.item_id).order_by(FlowEvent.sequence)):
-        if event.action in ('fail', 'reopen', 'admin_return_to_work'):
+    for event in _flow_events(s, plan.item_id):
+        if event.action in ('fail', 'rework_return', 'reopen', 'admin_return_to_work'):
             target = event.data.get('return_step', event.step)
             for number, state in states.items():
                 if target is not None and number >= target:
@@ -912,6 +1016,8 @@ def detail(s, item, user):
                 actions.append('advance')
             if step['qa']:
                 actions.append('fail')
+                if _missing_rework_at_qa(s, plan):
+                    actions.append('return-for-rework')
         if plan.route == 'component' and (plan.current_step <= 5 or not link) and user.role in HANDOFF:
             actions.append('assign-component')
         from flow_testing import assembly_editable
@@ -971,13 +1077,14 @@ def detail(s, item, user):
             'blockers': _step_errors(s, item, plan)} if plan else None,
         'work': work_projection(item, plan, user, current, display_step=display_step,
                                 testing=testing, handoff_roles=HANDOFF, active=active),
+        'rework': rework_summary(s, item, plan, parent_item=parent_item, parent_plan=parent_plan),
         'production_process': process,
         'components': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in component_ids],
         'spools': [_summary(s, family[key], stations=stations, stage_cache=stage_cache) for key in spool_ids],
         'parent': {'item_id': parent_item.id, 'description': parent_item.description,
             **item_presentation(s, parent_item, plan=parent_plan, stations=stations, stage_cache=stage_cache),
             'route': parent_plan.route if parent_plan else ('spool' if link else 'assembly')} if parent_item else None,
-        'events': [_dict(row, EVENT_KEYS) for row in s.scalars(select(FlowEvent).where(FlowEvent.item_id == item.id).order_by(FlowEvent.sequence))],
+        'events': [_dict(row, EVENT_KEYS) for row in _flow_events(s, item.id)],
         'exceptions': [_dict(row, EXCEPTION_KEYS) for row in _exceptions(s, item.id)],
         'allowed_actions': actions,
     }
@@ -1138,10 +1245,14 @@ def _verify_form(s, item, plan, data):
     if testing and testing.phase in ('ndt_qa', 'pressure_qa'):
         matching = [row for row in matching if row.id in testing.pending_exception_ids and
                     testing.pending_exception_kinds.get(str(row.id)) == testing.test_kind]
+    if _missing_rework_at_qa(s, plan):
+        raise HTTPException(409, 'Return to the preceding production step and record the completed rework before QA/QC reinspection')
     if matching and len(data.resolution) < 4:
         raise HTTPException(422, 'Record the corrective disposition / resolution for the open exception before passing reinspection')
     if step.get('requires_resolution') and len(data.resolution) < 4:
-        raise HTTPException(422, 'Record the completed corrective work before starting a fresh test attempt')
+        raise HTTPException(422, 'Describe the completed rework that corrected the recorded spool errors'
+                            if step.get('requires_rework') else
+                            'Record the completed corrective work before starting a fresh test attempt')
     return selected, matching
 
 
@@ -1169,6 +1280,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     if data.testing_phase or data.testing_attempt is not None or data.testing_action is not None or data.testing_decision is not None or data.test_result is not None:
         raise HTTPException(422, 'Testing phase fields are only accepted at the current versioned testing action')
     selected, matching = _verify_form(s, item, plan, data)
+    reworked = _pending_rework_at_step(s, plan)
     errors = _step_errors(s, item, plan, quality_for_update=True)
     if errors:
         raise HTTPException(409, {'flow_blockers': errors})
@@ -1191,7 +1303,7 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     elif step['number'] == 3:
         from transfers import record_location
         handoff_data = record_location(s, item, selected, u, now)
-    if step['number'] in (7, 17, 21):
+    if step['number'] in (7, 17, 21) or reworked:
         _fresh_dimensions_after_work(item, now)
     completed_step = step['number']
     scope = route_definition(plan)
@@ -1211,8 +1323,82 @@ def advance(item_id: str, data: AdvanceIn, u: Employee = Depends(auth), s: Sessi
     _event(s, item, plan, u.badge, 'advance', completed_step, now, data.reference, data.notes,
         {**data.model_dump(exclude={'expected_version', 'reference', 'notes'}),
          **({'handoff': handoff_data} if handoff_data else {}),
+         **({'reworked_exception_ids': [row['id'] for row in reworked]} if reworked else {}),
          'closed_exception_ids': [row.id for row in matching], 'next_step': plan.current_step})
     _sync(s, item, u.badge, plan.current_step, now, f'CLM step {completed_step} completed')
+    _commit(s)
+    return detail(s, item, u)
+
+
+def _record_qa_failure(s, item, plan, step, user, reason, reference, at=None):
+    target = QA_REWORK_STEPS[step['number']]
+    now = _utc(at or utcnow())
+    row = FlowException(item_id=item.id, step=step['number'], return_step=target,
+        reason=reason, reference=reference, opened_by=user.badge, opened_at=now)
+    s.add(row)
+    s.flush()
+    if step['number'] in (11, 15):
+        requirements = s.scalars(select(WeldRequirement).where(WeldRequirement.item_id == item.id)).all()
+        affected = [req for req in requirements if (req.stage == 'before_welding') == (step['number'] == 11)]
+        _reset_requirements(s, item, affected, user.badge, f'CLM step {step["number"]} failed: {reason}')
+        item.weld = 'Not started'
+        item.weld_at = None
+    item.reinspection_due = True
+    if step['number'] in (11, 15, 18, 22):
+        item.dimensional = 'Not started'
+        item.dimension_at = None
+    plan.current_step, plan.step_entered_at = target, now
+    _event(s, item, plan, user.badge, 'fail', step['number'], now, reference, reason,
+        {'exception_id': row.id, 'return_step': target, 'rework_required': True}, step_definition=step)
+    _sync(s, item, user.badge, target, now, f'CLM QA exception {row.id}: {reason}')
+    return row
+
+
+def record_inspection_failure(s, item, user, reason, reference, at=None):
+    """Route the item-screen inspection through its actual current QA step.
+
+    The caller owns the topology/item locks and transaction. Testing QA needs
+    its existing explicit custody return, so a legacy aggregate endpoint cannot
+    bypass that form or create a second independent rework ticket.
+    """
+    if len(reason.strip()) < 4:
+        raise HTTPException(422, 'Describe the spool errors found in the failed inspection (at least four characters)')
+    plan = s.get(FlowPlan, item.id)
+    if plan is None or plan.status != 'active' or plan.current_step is None:
+        return False
+    step = current_step_definition(s, plan)
+    if not step.get('qa'):
+        return False
+    permit(user, *step['roles'])
+    from flow_testing import is_active
+    if is_active(s, plan):
+        raise HTTPException(409, 'Record FAIL in the current testing QA/QC review to return the item to its recorded employee and station')
+    _record_qa_failure(s, item, plan, step, user, reason, reference, at)
+    return True
+
+
+@router.post('/items/{item_id}/return-for-rework')
+def return_for_rework(item_id: str, data: VersionIn, u: Employee = Depends(auth), s: Session = Depends(db)):
+    item, plan = _locked(s, item_id)
+    _version(plan, data.expected_version)
+    if plan.status != 'active' or plan.current_step is None or item.released:
+        raise HTTPException(409, 'An unreleased, active QA/QC review is required to return existing findings for rework')
+    step = current_step_definition(s, plan)
+    if not step['qa']:
+        raise HTTPException(409, 'This action returns an existing unresolved QA/QC finding to its preceding production step')
+    permit(u, *step['roles'])
+    pending = _missing_rework_at_qa(s, plan)
+    if not pending:
+        raise HTTPException(409, 'No unresolved finding needs a return for recorded rework at this QA/QC review')
+    target, now = QA_REWORK_STEPS[step['number']], _utc(utcnow())
+    plan.current_step, plan.step_entered_at = target, now
+    item.reinspection_due = True
+    _event(s, item, plan, u.badge, 'rework_return', step['number'], now,
+        pending[0]['reference'], 'Return existing QA/QC findings for documented corrective work.',
+        {'return_step': target, 'exception_ids': [row['id'] for row in pending],
+         'defects': [{'exception_id': row['id'], 'reason': row['reason'], 'reference': row['reference']}
+                     for row in pending]}, step_definition=step)
+    _sync(s, item, u.badge, target, now, 'Existing QA/QC findings returned for mandatory rework')
     _commit(s)
     return detail(s, item, u)
 
@@ -1235,38 +1421,10 @@ def fail(item_id: str, data: FailIn, u: Employee = Depends(auth), s: Session = D
         return fail_testing(s, item, plan, data, u)
     if data.testing_phase or data.testing_attempt is not None or data.testing_action is not None or data.test_result is not None:
         raise HTTPException(422, 'Testing phase fields are only accepted at the current versioned testing QA review')
-    target = data.return_step if data.return_step is not None else (21 if step['number'] == 22 else step['return_steps'][0])
-    if target not in step['return_steps']:
-        raise HTTPException(422, 'Choose one of this inspection step\'s allowed rework destinations')
-    now = _utc(utcnow())
-    row = FlowException(item_id=item.id, step=step['number'], return_step=target,
-        reason=data.reason, reference=data.reference, opened_by=u.badge, opened_at=now)
-    s.add(row)
-    s.flush()
-    if step['number'] in (11, 15):
-        requirements = s.scalars(select(WeldRequirement).where(WeldRequirement.item_id == item.id)).all()
-        affected = [req for req in requirements if (req.stage == 'before_welding') == (step['number'] == 11)]
-        _reset_requirements(s, item, affected, u.badge, f'CLM step {step["number"]} failed: {data.reason}')
-        item.reinspection_due = True
-        item.weld = 'Not started'
-        item.weld_at = None
-    if step['number'] in (11, 15, 18, 22):
-        item.dimensional = 'Not started'
-        item.dimension_at = None
-        item.reinspection_due = True
-    failed_step = step['number']
-    from flow_testing import event_context, testing_state
-    testing = testing_state(s, plan)
-    testing_context = event_context(testing, action='restart') if testing and failed_step == 22 and target == 17 else {}
-    plan.current_step = target
-    plan.step_entered_at = now
-    from flow_testing import restart_after_final_qa
-    restart_after_final_qa(s, plan, failed_step, target, now)
-    _event(s, item, plan, u.badge, 'fail', failed_step, now, data.reference, data.reason,
-        {'exception_id': row.id, 'return_step': target, **testing_context,
-         **({'next_step': target, 'next_phase': testing.phase, 'next_cycle': testing.cycle}
-            if testing_context else {})}, step_definition=step)
-    _sync(s, item, u.badge, target, now, f'CLM QA exception {row.id}: {data.reason}')
+    target = QA_REWORK_STEPS[step['number']]
+    if data.return_step is not None and data.return_step != target:
+        raise HTTPException(422, 'Failed QA/QC must return to the preceding production step for rework')
+    _record_qa_failure(s, item, plan, step, u, data.reason, data.reference)
     _commit(s)
     return detail(s, item, u)
 

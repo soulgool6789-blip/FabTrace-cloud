@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from conftest import BADGES
 from receiving_helpers import (accept_arrival, approve_materials, receiving_detail,
-    record_arrival, save_receiving_materials, upload_receiving_bom)
+    record_arrival, record_receiving_rework, save_receiving_materials, upload_receiving_bom)
 from test_order_labels import generate, labels, public_qr_url
 from test_progress import database_state
 from test_spool_receiving import create_spool, upload_mtr
@@ -108,7 +108,9 @@ def test_piece_fail_persists_after_material_entry_until_an_explicit_pass(api):
     assert failed['traceability']['materials'][0]['qa001']['status'] == 'failed'
     completed = save_receiving_materials(api, item_id)
     assert completed['traceability']['materials'][0]['qa001']['status'] == 'failed'
-    passed = ok(decide(api, item_id, completed['traceability']['materials'][0]), 201)
+    assert decide(api, item_id, completed['traceability']['materials'][0]).status_code == 409
+    corrected = ok(record_receiving_rework(api, item_id, piece_key=piece['piece_key']), 201)
+    passed = ok(decide(api, item_id, corrected['traceability']['materials'][0]), 201)
     qa = passed['traceability']['materials'][0]['qa001']
     assert qa['version'] == 2 and qa['can_proceed']
     assert [row['result'] for row in ok(api.get(qa['history_url']))['history']] == ['Pass', 'Fail']

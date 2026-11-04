@@ -13,10 +13,10 @@ class Element{
 }
 function el(id){if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id)}
 for(const match of html.matchAll(/\bid="([^"]+)"/g))el(match[1]);
-let selectedRole='misc',itemPermissionOverride=null;
+let selectedRole='misc',itemPermissionOverride=null,itemExtra={};
 const calls=[],messages=[],routes=[];
 function employee(){const p=policy(selectedRole);return {badge:'SYNTHETIC',name:'Synthetic position test',role:selectedRole,role_label:p.label,permissions:{...p}};}
-function item(){const p=policy(selectedRole),has=cap=>p.capabilities.includes(cap);return {id:'SYNTHETIC-ITEM',description:'Disposable UI fixture',kind:'Part',project:'UI-TEST',location:'Shop',handler:'SYNTHETIC',welds_done:0,welds_required:1,dimensional:'Not started',weld:'Not started',released:false,tracking_enabled:false,reworks:[{id:1,kind:'Correction',reason:'Fixture only',assigned:'SYNTHETIC',can_close:has('close_rework')}],inspections:[],permissions:itemPermissionOverride||{can_weld:has('weld_production'),can_inspect:has('inspect'),can_open_rework:has('open_rework'),can_release:has('inspect'),can_reopen:has('admin')},transfer:{status_label:'Queued',can_transfer:true},release_control:{mode:'not_released',label:'Not released'}};}
+function item(){const p=policy(selectedRole),has=cap=>p.capabilities.includes(cap);return {id:'SYNTHETIC-ITEM',description:'Disposable UI fixture',kind:'Part',project:'UI-TEST',location:'Shop',handler:'SYNTHETIC',welds_done:0,welds_required:1,dimensional:'Not started',weld:'Not started',released:false,tracking_enabled:false,reworks:[{id:1,kind:'Correction',reason:'Fixture only',assigned:'SYNTHETIC',can_close:has('close_rework')}],inspections:[],permissions:itemPermissionOverride||{can_weld:has('weld_production'),can_inspect:has('inspect'),can_open_rework:has('open_rework'),can_release:has('inspect'),can_reopen:has('admin')},transfer:{status_label:'Queued',can_transfer:true},release_control:{mode:'not_released',label:'Not released'},...itemExtra};}
 const context={console,URL,URLSearchParams,Date,Blob,location:{search:'',origin:'https://example.test',reload(){}},history:{replaceState(){}},
  document:{getElementById:el,createElement:()=>new Element('created'),body:{appendChild(){}},addEventListener(){}},setTimeout:()=>0,clearTimeout(){},confirm:()=>false,
  FormData:class{constructor(form){this.values=Object.entries(form.values||{})}[Symbol.iterator](){return this.values[Symbol.iterator]()}},
@@ -28,7 +28,7 @@ context.FabHandoff={cancelPending(){},historyHtml:()=>'<p>No custody records in 
 context.notify=message=>messages.push(message);
 context.api=async(url,options={})=>{
  calls.push({url,...options});
- if(options.method){if(url==='/api/employees')return JSON.parse(options.body);throw Error('Unexpected synthetic mutation '+url)}
+ if(options.method){if(url==='/api/employees'||url==='/api/items/SYNTHETIC-ITEM/inspect')return JSON.parse(options.body);throw Error('Unexpected synthetic mutation '+url)}
  if(url==='/api/me')return employee();
  if(url==='/api/permissions')return {version:'SYNTHETIC-JOBS',roles:allRoles,legacy_roles:legacyRoles,current:employee()};
  if(url==='/api/qr/status')return {ready:false};
@@ -46,6 +46,7 @@ async function signIn(role){selectedRole=role;const before=routes.length;await c
   await signIn(role);
   assert.equal(visible('weldBtn'),['welder','process_welder','admin'].includes(role),role+' aggregate welding control');
   assert.equal(visible('inspectBtn'),['inspector','admin'].includes(role),role+' inspection control');
+  assert.equal(el('itemFlowBtn').textContent,role==='inspector'?'QA/QC reviews':'Process flow',role+' item flow label follows review responsibility');
   assert.equal(visible('releaseBtn'),['inspector','admin'].includes(role),role+' ordinary QA release control');
   assert.equal(visible('reworkBtn'),['supervisor','inspector','admin'].includes(role),role+' rework opening control');
   assert.equal(el('reworkRecords').innerHTML.includes('class="close-rw"'),['supervisor','admin'].includes(role),role+' generic rework closure');
@@ -56,7 +57,7 @@ async function signIn(role){selectedRole=role;const before=routes.length;await c
   assert.ok(el('userTop').innerHTML.includes(policy(role).label.replace('&','&amp;')),role+' readable position label');
  }
  assert.doesNotMatch(html,/navMyWork/,'My work has no navigation button or stale shell binding');
- assert.match(html,/<h2>Item identification<\/h2><button id="itemFlowBtn" type="button" class="primary">My tasks &amp; requirements<\/button>/,'QR/item users see their requirements beside item identification');
+ assert.match(html,/<h2>Item identification<\/h2><button id="itemFlowBtn" type="button" class="primary">Process flow<\/button>/,'QR/item users retain a process entry point beside item identification');
  assert.equal((html.match(/id="itemFlowBtn"/g)||[]).length,1,'the existing item flow action remains unique');
  selectedRole='painter';
  vm.runInContext("params.set('flow','1');params.set('item','SYNTHETIC-ITEM');params.set('project','UI-TEST');params.set('view','work');params.set('work_scope','custody')",context);
@@ -67,6 +68,15 @@ async function signIn(role){selectedRole=role;const before=routes.length;await c
  await signIn('painter');const beforeDenied=writes().length;await el('weldBtn').onclick();await el('inspectBtn').onclick();await el('releaseBtn').onclick();await el('navNew').onclick();
  assert.equal(el('dlg').open,false,'unavailable controls cannot open mutation dialogs through programmatic clicks');assert.equal(writes().length,beforeDenied);
  await signIn('admin');itemPermissionOverride={};await context.openItem('SYNTHETIC-ITEM');assert.equal(visible('weldBtn'),false);assert.equal(visible('inspectBtn'),false);assert.equal(visible('releaseBtn'),false,'a privileged role cannot override a missing server item permission in the UI');itemPermissionOverride=null;
+ for(const role of ['inspector','admin']){
+  itemExtra={flow_enabled:true,flow_status:'active'};await signIn(role);el('dlg').close();const before=routes.length,written=writes().length;
+  await el('inspectBtn').onclick();assert.equal(routes.length,before+1);assert.deepEqual(routes.at(-1),{name:'Flow',item:'SYNTHETIC-ITEM'});assert.equal(el('dlg').open,false,'active travelers use the current QA review form');assert.equal(writes().length,written);
+ }
+ itemExtra={};await signIn('inspector');await el('inspectBtn').onclick();assert.equal(el('dlg').open,true);
+ const aggregateFields=el('dlgFields').innerHTML;assert.match(aggregateFields,/<select id="aggregateInspectionResult" name="result" required>/);assert.match(aggregateFields,/<option value="">Choose Pass or Fail<\/option>/);assert.doesNotMatch(aggregateFields,/<option[^>]+value="Pass"[^>]+selected/);
+ const beforeInspection=writes().length;el('dialogForm').values={kind:'Dimensional',result:'',report:'QA-REF',measurements:'Recorded measurements'};await el('dialogForm').onsubmit({preventDefault(){},target:el('dialogForm')});assert.equal(writes().length,beforeInspection);assert.match(messages.at(-1),/Choose Pass or Fail/);assert.equal(el('dlg').open,true);
+ el('dialogForm').values.result='Fail';await el('dialogForm').onsubmit({preventDefault(){},target:el('dialogForm')});assert.equal(writes().length,beforeInspection+1);assert.equal(writes().at(-1).url,'/api/items/SYNTHETIC-ITEM/inspect');assert.equal(JSON.parse(writes().at(-1).body).result,'Fail');assert.equal(el('dlg').open,false);
+ await signIn('admin');
  await el('navStaff').onclick();assert.equal(el('employeeRole').value,'','new accounts require an explicit position selection');assert.match(el('employeeRole').innerHTML,/Choose a job position/);
  for(const role of roles)assert.ok(el('employeeRole').innerHTML.includes('value="'+role.id+'"'),role.id+' must be selectable');
  assert.equal(roles.length,10);
@@ -114,5 +124,5 @@ async function signIn(role){selectedRole=role;const before=routes.length;await c
  assert.equal(context.FabPermissions.can('admin'),false,'failed authentication clears stale capability grants');
  context.api=originalApi;
  assert.equal(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),html,'both HTML entrypoints stay identical');
- console.log('PASS: controls and navigation for 10 current positions and 2 retained historical roles; all employees land on Orders; former work links retain item/project in ordinary Process flow; My work navigation is absent and per-item requirements remain prominent; server denial is authoritative; current-only employee selection; exact retained owner options; ordinary badge transfers remain available; missing capabilities fail closed.');
+ console.log('PASS: controls and navigation for 10 current positions and 2 retained historical roles; all employees land on Orders; former work links retain item/project in ordinary Process flow; My work navigation is absent; QA/QC-only review labels and canonical active-traveler inspection routing; aggregate inspections require an explicit result; server denial is authoritative; current-only employee selection; exact retained owner options; ordinary badge transfers remain available; missing capabilities fail closed.');
 })().catch(error=>{console.error(error);process.exitCode=1});
